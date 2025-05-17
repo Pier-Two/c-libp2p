@@ -22,19 +22,21 @@ option(ENABLE_COVERAGE   "Enable code‑coverage flags"    OFF)
 option(ENABLE_STRESS_TESTS "Build and run high‑load stress tests" OFF)
 
 if(ENABLE_SANITIZERS)
-    # Collect supported sanitizers
-    set(_sanitizers address undefined)
+    # Allow overriding sanitizer list via SANITIZERS environment variable
+    if(DEFINED ENV{SANITIZERS})
+        set(_sanitizers $ENV{SANITIZERS})
+    else()
+        set(_sanitizers address undefined)
+    endif()
 
     # ThreadSanitizer is available everywhere except AppleClang on macOS
     if(NOT (CMAKE_C_COMPILER_ID STREQUAL "AppleClang" AND CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
-        list(APPEND _sanitizers thread)
     endif()
 
     # MemorySanitizer is only supported on 64‑bit Linux with upstream Clang
     if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND
        CMAKE_SIZEOF_VOID_P EQUAL 8 AND
        CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        list(APPEND _sanitizers memory)
     endif()
 
     list(JOIN _sanitizers "," _san_opt)
@@ -90,7 +92,6 @@ if(ENABLE_COVERAGE)
     endif()
 endif()
 
-# Pull in pthread/C11‐threads
 find_package(Threads REQUIRED)
 
 # ------------------------------------------------
@@ -102,6 +103,7 @@ check_function_exists(explicit_bzero HAVE_EXPLICIT_BZERO)
 if(HAVE_EXPLICIT_BZERO)
   # system has it—tell the compiler to skip our fallback
   add_compile_definitions(HAVE_EXPLICIT_BZERO=1)
+add_compile_definitions(_GNU_SOURCE=1)
 endif()
 
 # Add the cmake directory to the module path

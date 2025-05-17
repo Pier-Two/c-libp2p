@@ -25,15 +25,15 @@
 #include <time.h>
 
 #include <unistd.h>
-#ifdef USE_EPOLL
-#include <sys/epoll.h>
-#endif
 
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/multicodec/multicodec_codes.h"
 #include "protocol/tcp/protocol_tcp.h"
 #include "protocol/tcp/protocol_tcp_conn.h"
 #include "protocol/tcp/protocol_tcp_poller.h"
+#ifdef USE_EPOLL
+#include <sys/epoll.h>
+#endif
 #include "protocol/tcp/protocol_tcp_queue.h"
 #include "protocol/tcp/protocol_tcp_util.h"
 #include "transport/connection.h"
