@@ -11,6 +11,8 @@ Use the host runtime to establish a stream to the remote ping service, then call
 `libp2p_ping_roundtrip_stream()`:
 
 ```c
+#include <inttypes.h>
+#include <stdio.h>
 #include "libp2p/host.h"
 #include "libp2p/host_builder.h"
 #include "libp2p/stream.h"

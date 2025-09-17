@@ -37,25 +37,29 @@ Identify is disabled—use the controller in `include/libp2p/identify.h`:
 
 ```c
 #include "libp2p/identify.h"
+#include "peer_id/peer_id.h"
 
 libp2p_identify_service_t *identify = NULL;
 libp2p_identify_new(host, NULL, &identify);
 
-peer_id_t *remote = NULL;
-libp2p_host_get_peer_id(other_host, &remote); /* example source */
+peer_id_t peer = {0};
+peer_id_create_from_string("12D3KooW...", &peer);  /* replace with the target id */
 
-if (libp2p_identify_request(identify, remote) == 0) {
+if (libp2p_identify_request(identify, &peer) == 0) {
     /* peerstore now holds the fresh metadata */
 }
 
+peer_id_destroy(&peer);
 libp2p_identify_ctrl_free(identify);
-peer_id_destroy(remote);
 ```
 
 `libp2p_identify_request()` opens a stream using the peerstore addresses, waits
 for the Identify response, decodes it, and updates the host’s peerstore with the
 remote public key, listen addresses, and protocol list. The host also publishes a
 `LIBP2P_EVT_PEER_PROTOCOLS_UPDATED` event whenever these details change.
+
+If you already have an open stream, access the authenticated remote ID via
+`libp2p_stream_remote_peer()` and reuse it in the request helper.
 
 ## Consuming Identify Push updates
 
