@@ -1,9 +1,9 @@
 #ifndef PEER_ID_PROTO_H
 #define PEER_ID_PROTO_H
 
+#include "peer_id/peer_id.h"
 #include <stddef.h>
 #include <stdint.h>
-#include "peer_id/peer_id.h"
 
 /**
  * @brief Build a protobuf-encoded PublicKey message from a raw public key.
@@ -29,10 +29,7 @@
  * @return PEER_ID_SUCCESS on success, an error code otherwise.
  * @note   The caller must free() @p out_buf.
  */
-peer_id_error_t peer_id_build_public_key_protobuf(uint64_t key_type,
-                                                  const uint8_t *raw_key_data,
-                                                  size_t raw_key_len,
-                                                  uint8_t **out_buf,
+peer_id_error_t peer_id_build_public_key_protobuf(uint64_t key_type, const uint8_t *raw_key_data, size_t raw_key_len, uint8_t **out_buf,
                                                   size_t *out_size);
 
 /**
@@ -58,11 +55,7 @@ peer_id_error_t peer_id_build_public_key_protobuf(uint64_t key_type,
  *
  * @return 0 on success, a negative error code on failure.
  */
-int parse_public_key_proto(const uint8_t *buf,
-                           size_t len,
-                           uint64_t *out_key_type,
-                           const uint8_t **out_key_data,
-                           size_t *out_key_data_len);
+int parse_public_key_proto(const uint8_t *buf, size_t len, uint64_t *out_key_type, const uint8_t **out_key_data, size_t *out_key_data_len);
 
 /**
  * @brief Parse a protobuf-encoded PrivateKey message.
@@ -87,10 +80,6 @@ int parse_public_key_proto(const uint8_t *buf,
  *
  * @return 0 on success, a negative error code on failure.
  */
-int parse_private_key_proto(const uint8_t *buf,
-                            size_t len,
-                            uint64_t *out_key_type,
-                            const uint8_t **out_key_data,
-                            size_t *out_key_data_len);
+int parse_private_key_proto(const uint8_t *buf, size_t len, uint64_t *out_key_type, const uint8_t **out_key_data, size_t *out_key_data_len);
 
 #endif /* PEER_ID_PROTO_H */

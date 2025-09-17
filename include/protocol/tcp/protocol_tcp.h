@@ -14,10 +14,9 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
-
-
 
 /**
  * @struct libp2p_tcp_config_t
@@ -27,16 +26,16 @@ extern "C" {
  */
 typedef struct
 {
-    bool nodelay;         /**< Disable Nagle (TCP_NODELAY).                 */
-    bool reuse_port;      /**< Enable SO_REUSE{ADDR,PORT}.                  */
-    bool keepalive;       /**< Enable TCP keep-alives.                      */
-    uint32_t recv_buffer; /**< SO_RCVBUF (0 → kernel default).              */
-    uint32_t send_buffer; /**< SO_SNDBUF (0 → kernel default).              */
-    int listen_backlog;   /**< Listen backlog (≤0 → OS default).            */
-    uint32_t ttl_ms;      /**< Initial IP TTL / hop-limit in ms (0 → OS default). */
-    uint32_t connect_timeout_ms;   /**< Dial timeout in milliseconds.           */
-    uint32_t accept_poll_ms; /**< accept() poll period in milliseconds (0 → library default 1000). */
-    uint32_t close_timeout_ms; /**< Listener close timeout in milliseconds (0 → immediate, UINT32_MAX → wait forever, library default 5000). */
+    bool nodelay;                /**< Disable Nagle (TCP_NODELAY).                 */
+    bool reuse_port;             /**< Enable SO_REUSE{ADDR,PORT}.                  */
+    bool keepalive;              /**< Enable TCP keep-alives.                      */
+    uint32_t recv_buffer;        /**< SO_RCVBUF (0 → kernel default).              */
+    uint32_t send_buffer;        /**< SO_SNDBUF (0 → kernel default).              */
+    int listen_backlog;          /**< Listen backlog (≤0 → OS default).            */
+    uint32_t ttl_ms;             /**< Initial IP TTL / hop-limit in ms (0 → OS default). */
+    uint32_t connect_timeout_ms; /**< Dial timeout in milliseconds.           */
+    uint32_t accept_poll_ms;     /**< accept() poll period in milliseconds (0 → library default 1000). */
+    uint32_t close_timeout_ms;   /**< Listener close timeout in milliseconds (0 → immediate, UINT32_MAX → wait forever, library default 5000). */
 } libp2p_tcp_config_t;
 
 /**
@@ -54,15 +53,15 @@ typedef struct
 static inline libp2p_tcp_config_t libp2p_tcp_config_default(void)
 {
     return (libp2p_tcp_config_t){
-        .nodelay = true, 
-        .reuse_port = true, 
-        .keepalive = true, 
+        .nodelay = true,
+        .reuse_port = true,
+        .keepalive = true,
         .recv_buffer = 0,
         .send_buffer = 0,
         .listen_backlog = 128,
         .ttl_ms = 0,
         .connect_timeout_ms = 30000,
-        .accept_poll_ms  = 1000,   /* 1 s default */
+        .accept_poll_ms = 1000,  /* 1 s default */
         .close_timeout_ms = 5000 /* 5 s default */
     };
 }

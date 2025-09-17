@@ -500,23 +500,35 @@ static int verify_handshake_payload(NoiseHandshakeState *hs, const uint8_t *payl
 }
 
 /* ───────────────────────── Helper: blocking-style read on non-blocking conn ── */
-static int read_exact(libp2p_conn_t *c, uint8_t *buf, size_t len)
+static int read_exact_deadline(libp2p_conn_t *c, uint8_t *buf, size_t len, uint64_t deadline_ms)
 {
     if (len == 0)
         return 0;
 
-    /* total wall-clock timeout (ms) */
-    const uint64_t MAX_WAIT_MS = 3000; /* 3 seconds */
+    /* Fallback budget when no overall deadline is provided. */
+    const uint64_t FALLBACK_MS = 3000; /* 3 seconds */
     uint64_t start = now_mono_ms();
-
-    /* per-syscall deadline */
-    libp2p_conn_set_deadline(c, 1000);
-
     size_t off = 0;
-    const struct timespec backoff = {.tv_sec = 0, .tv_nsec = 1000000L}; /* 1 ms */
-    int spins = 0;
+
     while (off < len)
     {
+        uint64_t now = now_mono_ms();
+        uint64_t remain;
+        if (deadline_ms)
+        {
+            if (now >= deadline_ms)
+                return -1; /* overall handshake deadline exceeded */
+            remain = deadline_ms - now;
+        }
+        else
+        {
+            uint64_t elapsed = now - start;
+            remain = (elapsed < FALLBACK_MS) ? (FALLBACK_MS - elapsed) : 0;
+            if (remain == 0)
+                return -1; /* fallback timeout */
+        }
+        libp2p_conn_set_deadline(c, remain);
+
         ssize_t r = libp2p_conn_read(c, buf + off, len - off);
         if (r > 0)
         {
@@ -526,18 +538,12 @@ static int read_exact(libp2p_conn_t *c, uint8_t *buf, size_t len)
 
         if (r == LIBP2P_CONN_ERR_AGAIN)
         {
-            uint64_t now = now_mono_ms();
-            if (now - start > MAX_WAIT_MS)
-                return -1; /* overall timeout */
-
-            if (++spins < 100)
-                sched_yield();
-            else
-                nanosleep(&backoff, NULL);
+            /* continue; deadline blocks efficiently */
             continue;
         }
 
         /* treat EOF / CLOSED / INTERNAL as failure */
+        libp2p_conn_set_deadline(c, 0);
         return -1;
     }
 
@@ -546,12 +552,15 @@ static int read_exact(libp2p_conn_t *c, uint8_t *buf, size_t len)
     return 0;
 }
 
-static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp2p_conn_t *raw, const peer_id_t *remote_hint, libp2p_conn_t **out,
-                                                   peer_id_t **remote_peer)
+static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp2p_conn_t *raw, const peer_id_t *remote_hint, uint64_t timeout_ms,
+                                                   libp2p_conn_t **out, peer_id_t **remote_peer)
 {
     (void)remote_hint;
     if (!self || !raw || !out)
         return LIBP2P_SECURITY_ERR_NULL_PTR;
+
+    /* Compute absolute monotonic handshake deadline once. */
+    uint64_t deadline_ms = timeout_ms ? (now_mono_ms() + timeout_ms) : 0;
 
     struct libp2p_noise_ctx *ctx = self->ctx;
     NoiseHandshakeState *hs = NULL;
@@ -631,18 +640,45 @@ static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
             uint16_t l = (uint16_t)mbuf.size;
-            lenbuf[0] = (uint8_t)(l >> 8);
-            lenbuf[1] = (uint8_t)l;
-            if (libp2p_conn_write(raw, lenbuf, 2) != 2 || libp2p_conn_write(raw, buf, mbuf.size) != (ssize_t)mbuf.size)
+            /* Write length prefix and message in a single atomic write to
+             * simplify testing and match expectations of corruption tests. */
+            size_t frame_len = 2u + (size_t)l;
+            uint8_t *frame = (uint8_t *)malloc(frame_len);
+            if (!frame)
+            {
+                noise_handshakestate_free(hs);
+                free(payload);
+                return LIBP2P_SECURITY_ERR_INTERNAL;
+            }
+            frame[0] = (uint8_t)(l >> 8);
+            frame[1] = (uint8_t)l;
+            memcpy(frame + 2, buf, l);
+            if (deadline_ms)
+            {
+                uint64_t now = now_mono_ms();
+                if (now >= deadline_ms)
+                {
+                    noise_handshakestate_free(hs);
+                    free(payload);
+                    free(frame);
+                    return LIBP2P_SECURITY_ERR_HANDSHAKE;
+                }
+                libp2p_conn_set_deadline(raw, deadline_ms - now);
+            }
+            ssize_t w = libp2p_conn_write(raw, frame, frame_len);
+            free(frame);
+            if (w < 0 || (size_t)w != frame_len)
             {
                 noise_handshakestate_free(hs);
                 free(payload);
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
+            if (deadline_ms)
+                libp2p_conn_set_deadline(raw, 0);
         }
         else if (action == NOISE_ACTION_READ_MESSAGE)
         {
-            if (read_exact(raw, lenbuf, 2) != 0)
+            if (read_exact_deadline(raw, lenbuf, 2, deadline_ms) != 0)
             {
                 noise_handshakestate_free(hs);
                 free(payload);
@@ -655,7 +691,7 @@ static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp
                 free(payload);
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
-            if (read_exact(raw, buf, l) != 0)
+            if (read_exact_deadline(raw, buf, l, deadline_ms) != 0)
             {
                 noise_handshakestate_free(hs);
                 free(payload);
@@ -763,10 +799,14 @@ static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp
     return LIBP2P_SECURITY_OK;
 }
 
-static libp2p_security_err_t noise_secure_inbound(libp2p_security_t *self, libp2p_conn_t *raw, libp2p_conn_t **out, peer_id_t **remote_peer)
+static libp2p_security_err_t noise_secure_inbound(libp2p_security_t *self, libp2p_conn_t *raw, uint64_t timeout_ms, libp2p_conn_t **out,
+                                                  peer_id_t **remote_peer)
 {
     if (!self || !raw || !out)
         return LIBP2P_SECURITY_ERR_NULL_PTR;
+
+    /* Compute absolute monotonic handshake deadline once. */
+    uint64_t deadline_ms = timeout_ms ? (now_mono_ms() + timeout_ms) : 0;
 
     struct libp2p_noise_ctx *ctx = self->ctx;
     NoiseHandshakeState *hs = NULL;
@@ -845,18 +885,43 @@ static libp2p_security_err_t noise_secure_inbound(libp2p_security_t *self, libp2
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
             uint16_t l = (uint16_t)mbuf.size;
-            lenbuf[0] = (uint8_t)(l >> 8);
-            lenbuf[1] = (uint8_t)l;
-            if (libp2p_conn_write(raw, lenbuf, 2) != 2 || libp2p_conn_write(raw, buf, mbuf.size) != (ssize_t)mbuf.size)
+            size_t frame_len = 2u + (size_t)l;
+            uint8_t *frame = (uint8_t *)malloc(frame_len);
+            if (!frame)
+            {
+                noise_handshakestate_free(hs);
+                free(payload);
+                return LIBP2P_SECURITY_ERR_INTERNAL;
+            }
+            frame[0] = (uint8_t)(l >> 8);
+            frame[1] = (uint8_t)l;
+            memcpy(frame + 2, buf, l);
+            if (deadline_ms)
+            {
+                uint64_t now = now_mono_ms();
+                if (now >= deadline_ms)
+                {
+                    noise_handshakestate_free(hs);
+                    free(payload);
+                    free(frame);
+                    return LIBP2P_SECURITY_ERR_HANDSHAKE;
+                }
+                libp2p_conn_set_deadline(raw, deadline_ms - now);
+            }
+            ssize_t w = libp2p_conn_write(raw, frame, frame_len);
+            free(frame);
+            if (w < 0 || (size_t)w != frame_len)
             {
                 noise_handshakestate_free(hs);
                 free(payload);
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
+            if (deadline_ms)
+                libp2p_conn_set_deadline(raw, 0);
         }
         else if (action == NOISE_ACTION_READ_MESSAGE)
         {
-            if (read_exact(raw, lenbuf, 2) != 0)
+            if (read_exact_deadline(raw, lenbuf, 2, deadline_ms) != 0)
             {
                 noise_handshakestate_free(hs);
                 free(payload);
@@ -869,7 +934,7 @@ static libp2p_security_err_t noise_secure_inbound(libp2p_security_t *self, libp2
                 free(payload);
                 return LIBP2P_SECURITY_ERR_HANDSHAKE;
             }
-            if (read_exact(raw, buf, l) != 0)
+            if (read_exact_deadline(raw, buf, l, deadline_ms) != 0)
             {
                 noise_handshakestate_free(hs);
                 free(payload);

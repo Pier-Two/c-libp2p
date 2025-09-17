@@ -37,7 +37,6 @@ extern "C"
 struct libp2p_transport;
 typedef struct libp2p_transport libp2p_transport_t;
 
-
 /**
  * @enum libp2p_transport_err_t
  * @brief Return codes for all transport operations.
@@ -148,10 +147,7 @@ static inline libp2p_transport_err_t libp2p_transport_listen(libp2p_transport_t 
  * @param t Transport instance.
  * @return LIBP2P_TRANSPORT_OK or an error code.
  */
-static inline libp2p_transport_err_t libp2p_transport_close(libp2p_transport_t *t)
-{
-    return t ? t->vt->close(t) : LIBP2P_TRANSPORT_ERR_NULL_PTR;
-}
+static inline libp2p_transport_err_t libp2p_transport_close(libp2p_transport_t *t) { return t ? t->vt->close(t) : LIBP2P_TRANSPORT_ERR_NULL_PTR; }
 
 /**
  * @brief Free a transport instance.

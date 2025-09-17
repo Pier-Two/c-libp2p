@@ -6,20 +6,21 @@
  * @brief Utility helpers shared across the TCP implementation.
  */
 
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <sys/socket.h>
-#include <pthread.h>
-#include <signal.h>
-#include <sched.h>   
-#include <stdbool.h>
 
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/multicodec/multicodec_codes.h"
-#include "transport/listener.h" 
-#include "transport/transport.h"  
+#include "transport/listener.h"
+#include "transport/transport.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /** @brief SIGPIPE helpers */
@@ -27,7 +28,7 @@ extern "C" {
 void ignore_sigpipe_once(void);
 
 /** Block SIGPIPE and store the old signal mask. Returns 0 on success. */
-int  sigpipe_block(sigset_t *oldset);
+int sigpipe_block(sigset_t *oldset);
 
 /** Restore a signal mask saved by sigpipe_block(). */
 void sigpipe_restore(const sigset_t *oldset);
@@ -72,13 +73,10 @@ unsigned listener_refcount_fetch_sub(libp2p_listener_t *l);
 
 /** @brief multiaddr ↔ sockaddr helpers */
 /** Convert a multiaddr to a sockaddr structure. */
-int multiaddr_to_sockaddr(const multiaddr_t *maddr,
-                          struct sockaddr_storage *ss,
-                          socklen_t *ss_len);
+int multiaddr_to_sockaddr(const multiaddr_t *maddr, struct sockaddr_storage *ss, socklen_t *ss_len);
 
 /** Convert a sockaddr structure to a newly allocated multiaddr. */
-multiaddr_t *sockaddr_to_multiaddr(const struct sockaddr_storage *ss,
-                                   socklen_t ss_len);
+multiaddr_t *sockaddr_to_multiaddr(const struct sockaddr_storage *ss, socklen_t ss_len);
 
 #ifdef __cplusplus
 }

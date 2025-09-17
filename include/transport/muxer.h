@@ -5,8 +5,12 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Provide a portable alias for libp2p_stream_t without forcing inclusion order */
+#ifndef LIBP2P_STREAM_TYPEDEF_DONE
 struct libp2p_stream;
 typedef struct libp2p_stream libp2p_stream_t;
+#define LIBP2P_STREAM_TYPEDEF_DONE 1
+#endif
 
 #ifdef __cplusplus
 extern "C"
@@ -33,8 +37,8 @@ typedef enum
  */
 struct libp2p_muxer_vtbl
 {
-    int (*negotiate)(libp2p_muxer_t *mx, libp2p_conn_t *c, uint64_t timeout_ms, bool inbound);
-    int (*open_stream)(libp2p_muxer_t *mx, const uint8_t *name, size_t name_len, libp2p_stream_t **out);
+    libp2p_muxer_err_t (*negotiate)(libp2p_muxer_t *mx, libp2p_conn_t *c, uint64_t timeout_ms, bool inbound);
+    libp2p_muxer_err_t (*open_stream)(libp2p_muxer_t *mx, const uint8_t *name, size_t name_len, libp2p_stream_t **out);
     ssize_t (*stream_read)(libp2p_stream_t *s, void *buf, size_t len);
     ssize_t (*stream_write)(libp2p_stream_t *s, const void *buf, size_t len);
     void (*stream_close)(libp2p_stream_t *s);

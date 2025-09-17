@@ -13,15 +13,16 @@
  * commitment.
  */
 
-#include <stddef.h>        /* size_t                  */
-#include <stdint.h>        /* uint64_t                */
-#include <stdatomic.h>     /* atomic_bool             */
+#include <stdatomic.h> /* atomic_bool             */
+#include <stddef.h>    /* size_t                  */
+#include <stdint.h>    /* uint64_t                */
 
-#include "transport/connection.h"          /* libp2p_conn_t / vtbl / err enum   */
 #include "multiformats/multiaddr/multiaddr.h"
+#include "transport/connection.h" /* libp2p_conn_t / vtbl / err enum   */
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -31,12 +32,13 @@ extern "C" {
  * Exposed so callers can fetch the raw file descriptor or cached
  * multiaddrs without additional system calls.
  */
-typedef struct tcp_conn_ctx {
-    int          fd;          /**< non-blocking, close-on-exec socket  */
-    multiaddr_t *local;       /**< cached local multiaddr              */
-    multiaddr_t *remote;      /**< cached peer multiaddr (nullable)    */
-    atomic_bool  closed;      /**< fast-path closed check              */
-    uint64_t     deadline_at; /**< 0 = none; monotonic ms              */
+typedef struct tcp_conn_ctx
+{
+    int fd;                      /**< non-blocking, close-on-exec socket  */
+    multiaddr_t *local;          /**< cached local multiaddr              */
+    multiaddr_t *remote;         /**< cached peer multiaddr (nullable)    */
+    atomic_bool closed;          /**< fast-path closed check              */
+    atomic_uint_fast64_t deadline_at; /**< 0 = none; monotonic ms          */
 } tcp_conn_ctx_t;
 
 /**
@@ -109,8 +111,8 @@ extern const libp2p_conn_vtbl_t TCP_CONN_VTBL;
  * descriptor into a libp2p connection object.
  *
  * The FD **must** be:
- *   • valid (≥ 0)  
- *   • non-blocking  
+ *   • valid (≥ 0)
+ *   • non-blocking
  *   • FD_CLOEXEC set (if platform supports it)
  *
  * On success, ownership of the FD transfers to the returned object and

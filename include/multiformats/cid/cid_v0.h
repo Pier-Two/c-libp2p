@@ -11,7 +11,6 @@ extern "C"
 
 /**
  * @file cid_v0.h
- *
  * @brief CIDv0 public API.
  *
  * CIDv0:

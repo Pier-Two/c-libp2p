@@ -84,6 +84,13 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
 libp2p_multiselect_err_t libp2p_multiselect_listen(libp2p_conn_t *conn, const char *const supported[], const libp2p_multiselect_config_t *cfg,
                                                    const char **accepted_out);
 
+/* Generic I/O adapter variants used to negotiate on streams/substreams. */
+struct libp2p_io; /* fwd */
+libp2p_multiselect_err_t libp2p_multiselect_dial_io(struct libp2p_io *io, const char *const proposals[], uint64_t timeout_ms,
+                                                    const char **accepted_out);
+libp2p_multiselect_err_t libp2p_multiselect_listen_io(struct libp2p_io *io, const char *const supported[], const libp2p_multiselect_config_t *cfg,
+                                                      const char **accepted_out);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

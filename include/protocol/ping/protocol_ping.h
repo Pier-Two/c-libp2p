@@ -6,6 +6,9 @@ extern "C"
 {
 #endif
 
+#include "libp2p/host.h"
+#include "libp2p/protocol_listen.h"
+#include "libp2p/stream.h"
 #include "transport/connection.h"
 #include <stdint.h>
 
@@ -23,6 +26,14 @@ typedef enum
 libp2p_ping_err_t libp2p_ping_roundtrip(libp2p_conn_t *conn, uint64_t timeout_ms, uint64_t *rtt_ms);
 
 libp2p_ping_err_t libp2p_ping_serve(libp2p_conn_t *conn);
+
+/* Stream-based helpers */
+libp2p_ping_err_t libp2p_ping_roundtrip_stream(struct libp2p_stream *s, uint64_t timeout_ms, uint64_t *rtt_ms);
+libp2p_ping_err_t libp2p_ping_serve_stream(struct libp2p_stream *s);
+
+/* Convenience service registration */
+int libp2p_ping_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server);
+int libp2p_ping_service_stop(struct libp2p_host *host, libp2p_protocol_server_t *server);
 
 #ifdef __cplusplus
 }

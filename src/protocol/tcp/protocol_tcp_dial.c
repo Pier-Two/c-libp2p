@@ -17,8 +17,8 @@
 #include <ws2tcpip.h>
 #endif
 
-#include "protocol/tcp/protocol_tcp_poller.h"
 #include "protocol/tcp/protocol_tcp_conn.h"
+#include "protocol/tcp/protocol_tcp_poller.h"
 #include "protocol/tcp/protocol_tcp_util.h"
 #include "transport/transport.h"
 
@@ -94,7 +94,7 @@ static libp2p_transport_err_t configure_socket_options(int fd, tcp_transport_ctx
  */
 static libp2p_transport_err_t wait_for_connect(int fd, tcp_transport_ctx_t *transport_ctx, libp2p_conn_t **out)
 {
-    struct pollfd pfd = { .fd = fd, .events = POLLOUT | POLLIN };
+    struct pollfd pfd = {.fd = fd, .events = POLLOUT | POLLIN};
 
     int64_t cfg_to = transport_ctx->cfg.connect_timeout_ms;
     if (cfg_to > INT_MAX)
@@ -112,9 +112,7 @@ static libp2p_transport_err_t wait_for_connect(int fd, tcp_transport_ctx_t *tran
         timeout_ms_duration = (uint64_t)cfg_to;
 
     uint64_t now_ms = now_mono_ms();
-    uint64_t deadline_ms = (timeout_ms_duration > UINT64_MAX - now_ms)
-                                ? UINT64_MAX
-                                : now_ms + timeout_ms_duration;
+    uint64_t deadline_ms = (timeout_ms_duration > UINT64_MAX - now_ms) ? UINT64_MAX : now_ms + timeout_ms_duration;
 
     while (1)
     {
@@ -165,8 +163,9 @@ static libp2p_transport_err_t wait_for_connect(int fd, tcp_transport_ctx_t *tran
 #endif
         if (ret == 0)
         {
+            /* Timed out waiting for connect to complete */
             close(fd);
-            return LIBP2P_TRANSPORT_ERR_DIAL_FAIL;
+            return LIBP2P_TRANSPORT_ERR_TIMEOUT;
         }
 #ifdef POLLNVAL
         const short fatal_mask = POLLNVAL;

@@ -1,52 +1,99 @@
 # Ping Protocol
 
-The ping protocol verifies connectivity between two libp2p nodes and measures the round-trip latency. It runs over an existing libp2p connection that has already been upgraded to use security and multiplexing as described in [upgrading.md](upgrading.md).
+The ping protocol (`/ipfs/ping/1.0.0`) is a lightweight way to check whether a
+peer is reachable and to measure round-trip latency. c-libp2p provides helpers
+that operate on negotiated streams and optional services that reply to pings
+without extra wiring.
 
-## Pinging a Remote Peer
+## Dialling and measuring RTT
 
-After obtaining a `libp2p_uconn_t` from the upgrader you can initiate a ping. The helper opens a new stream using the configured multiplexer, performs a single ping exchange and returns the measured RTT in milliseconds.
+Use the host runtime to establish a stream to the remote ping service, then call
+`libp2p_ping_roundtrip_stream()`:
 
 ```c
-#include "protocol/noise/protocol_noise.h"
-#include "protocol/mplex/protocol_mplex.h"
+#include "libp2p/host.h"
+#include "libp2p/host_builder.h"
+#include "libp2p/stream.h"
 #include "protocol/ping/protocol_ping.h"
-#include "transport/upgrader.h"
 
-/* upgrade a raw connection using Noise and mplex */
-libp2p_noise_config_t ncfg = libp2p_noise_config_default();
-libp2p_security_t *noise = libp2p_noise_security_new(&ncfg);
-libp2p_muxer_t *mux = libp2p_mplex_new();
-const libp2p_security_t *sec[] = { noise, NULL };
-const libp2p_muxer_t *muxers[] = { mux, NULL };
-libp2p_upgrader_config_t ucfg = libp2p_upgrader_config_default();
-ucfg.security = sec; ucfg.n_security = 1;
-ucfg.muxers = muxers; ucfg.n_muxers = 1;
-libp2p_upgrader_t *up = libp2p_upgrader_new(&ucfg);
+libp2p_host_builder_t *b = libp2p_host_builder_new();
+libp2p_host_builder_transport(b, "tcp");
+libp2p_host_builder_security(b, "noise");
+libp2p_host_builder_muxer(b, "yamux");
 
-libp2p_uconn_t *uconn = NULL;
-libp2p_upgrader_upgrade_outbound(up, conn, my_id, &uconn);
+libp2p_host_t *host = NULL;
+libp2p_host_builder_build(b, &host);
+libp2p_host_builder_free(b);
 
-uint64_t rtt = 0;
-libp2p_ping_roundtrip(uconn->conn, 1000, &rtt);
+libp2p_stream_t *stream = NULL;
+if (libp2p_host_dial_protocol_blocking(host, "/ip4/127.0.0.1/tcp/4001",
+                                       LIBP2P_PING_PROTO_ID,
+                                       5000 /* ms timeout */, &stream) == 0) {
+    uint64_t rtt_ms = 0;
+    if (libp2p_ping_roundtrip_stream(stream, 2000 /* ms */, &rtt_ms) == LIBP2P_PING_OK) {
+        printf("ping RTT: %" PRIu64 " ms\n", rtt_ms);
+    }
+    libp2p_stream_close(stream);
+}
+
+libp2p_host_free(host);
 ```
 
-The ping call blocks until either the round-trip completes or the timeout elapses. On success `rtt` contains the latency in milliseconds.
+`libp2p_ping_roundtrip_stream()` writes a 32-byte payload, waits for it to be
+echoed back, and reports the latency. It is safe to call multiple times on the
+same stream.
 
-## Serving Ping Requests
+For asynchronous code paths, use `libp2p_host_dial_protocol()` and issue the
+round-trip once the callback receives the stream handle.
 
-Servers should dedicate a thread to handle incoming ping streams. The `libp2p_ping_serve` function expects the multiplexed connection obtained from the upgrader. It reads ping messages in a loop and echoes them back to the remote peer.
+## Serving ping requests
+
+Register a responder so other peers can measure your availability:
 
 ```c
-void *ping_worker(void *arg)
-{
-    libp2p_uconn_t *u = arg;
-    libp2p_ping_serve(u->conn);
-    return NULL;
+#include "libp2p/host.h"
+#include "libp2p/protocol_listen.h"
+#include "protocol/ping/protocol_ping.h"
+
+libp2p_protocol_server_t *ping_server = NULL;
+if (libp2p_ping_service_start(host, &ping_server) != 0) {
+    /* fallback: register your own handler */
 }
 ```
 
-Launch the worker after upgrading an inbound connection so that peers can probe your node's reachability.
+The helper registers `libp2p_ping_serve_stream()` for inbound streams and keeps
+running until you call `libp2p_ping_service_stop(host, ping_server)`.
 
-## Protocol Details
+If you prefer to manage the lifecycle yourself, listen on the ping protocol
+manually and forward incoming streams to `libp2p_ping_serve_stream()`:
 
-A ping message consists of 32 random bytes sent on the stream identified by `"/ipfs/ping/1.0.0"`. The responder echoes the payload verbatim. Multiple ping exchanges may occur sequentially on the same stream. For complete semantics refer to the [ping specification](../specs/ping/ping.md).
+```c
+static void on_ping_stream(libp2p_stream_t *s, void *ud) {
+    (void)ud;
+    (void)libp2p_ping_serve_stream(s);
+    libp2p_stream_close(s);
+}
+
+libp2p_protocol_def_t def = {
+    .protocol_id = LIBP2P_PING_PROTO_ID,
+    .read_mode = LIBP2P_READ_PULL,
+    .on_open = on_ping_stream,
+};
+libp2p_host_listen_protocol(host, &def, NULL);
+```
+
+## Working at the connection layer
+
+Legacy utilities still exist if you have a raw upgraded connection rather than a
+`libp2p_stream_t`:
+
+```c
+libp2p_ping_roundtrip(conn, 2000 /* ms */, &rtt_ms);
+libp2p_ping_serve(conn);
+```
+
+Streams are preferred in new code because they automatically carry the protocol
+ID, peer metadata, and deadline helpers.
+
+Combine ping with the event bus (see [overview.md](overview.md)) to surface
+reachability information in your application or to drive reconnection logic.

@@ -35,8 +35,9 @@ static ssize_t pipe_read(libp2p_conn_t *c, void *buf, size_t len)
         return n;
     if (n == 0)
         return LIBP2P_CONN_ERR_EOF;
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return LIBP2P_CONN_ERR_AGAIN;
+    fprintf(stdout, "pipe_read: unexpected errno=%d (rfd=%d)\n", errno, p->rfd);
     return LIBP2P_CONN_ERR_INTERNAL;
 }
 
@@ -46,8 +47,9 @@ static ssize_t pipe_write(libp2p_conn_t *c, const void *buf, size_t len)
     ssize_t n = write_func(p->wfd, buf, len);
     if (n >= 0)
         return n;
-    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return LIBP2P_CONN_ERR_AGAIN;
+    fprintf(stdout, "pipe_write: unexpected errno=%d (wfd=%d)\n", errno, p->wfd);
     return LIBP2P_CONN_ERR_INTERNAL;
 }
 
@@ -91,7 +93,9 @@ static void make_pipe_pair(libp2p_conn_t *a, libp2p_conn_t *b)
 {
     int ab[2];
     int ba[2];
-    assert(pipe(ab) == 0 && pipe(ba) == 0);
+    int rc1 = pipe(ab);
+    int rc2 = pipe(ba);
+    assert(rc1 == 0 && rc2 == 0);
 #ifndef _WIN32
     fcntl(ab[0], F_SETFL, O_NONBLOCK);
     fcntl(ab[1], F_SETFL, O_NONBLOCK);
@@ -105,6 +109,7 @@ static void make_pipe_pair(libp2p_conn_t *a, libp2p_conn_t *b)
     actx->wfd = ab[1];
     bctx->rfd = ab[0];
     bctx->wfd = ba[1];
+    // Pipes created; assign vtables/contexts
     a->vt = &PIPE_VTBL;
     a->ctx = actx;
     b->vt = &PIPE_VTBL;
@@ -130,6 +135,7 @@ int main(void)
 {
     libp2p_conn_t c = {0}, s = {0};
     make_pipe_pair(&c, &s);
+    // Start a serving thread on one end
     pthread_t th;
     pthread_create(&th, NULL, serve_thread, &s);
 
@@ -137,7 +143,6 @@ int main(void)
     libp2p_ping_err_t rc = libp2p_ping_roundtrip(&c, 1000, &rtt);
     libp2p_conn_close(&c);
     pthread_join(th, NULL);
-
     int ok = (rc == LIBP2P_PING_OK);
     print_standard("ping roundtrip", ok ? "" : "failed", ok);
 

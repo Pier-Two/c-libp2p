@@ -37,7 +37,7 @@ typedef enum peer_id_error
     PEER_ID_SUCCESS = 0,        /**< Operation completed successfully. */
     PEER_ID_E_NULL_PTR,         /**< A null pointer was passed where it is not allowed. */
     PEER_ID_E_INVALID_PROTOBUF, /**< Could not parse or handle the given protobuf data. */
-    PEER_ID_E_INVALID_RANGE,     /**< Value outside allowed range / overflow risk */
+    PEER_ID_E_INVALID_RANGE,    /**< Value outside allowed range / overflow risk */
     PEER_ID_E_UNSUPPORTED_KEY,  /**< Unsupported key type in the protobuf. */
     PEER_ID_E_CRYPTO_FAILED,    /**< Underlying crypto library failed. */
     PEER_ID_E_ENCODING_FAILED,  /**< Could not encode or decode. */
@@ -95,8 +95,7 @@ typedef struct peer_id
  * @note The caller is responsible for calling peer_id_destroy() on @p pid
  *       to free allocated resources.
  */
-peer_id_error_t peer_id_create_from_public_key(const uint8_t *pubkey_buf, size_t pubkey_len,
-                                               peer_id_t *pid);
+peer_id_error_t peer_id_create_from_public_key(const uint8_t *pubkey_buf, size_t pubkey_len, peer_id_t *pid);
 
 /**
  * @brief Derive a Peer ID from a deterministically serialized (protobuf) private key.
@@ -119,8 +118,7 @@ peer_id_error_t peer_id_create_from_public_key(const uint8_t *pubkey_buf, size_t
  * @note The caller is responsible for calling peer_id_destroy() on @p pid
  *       to free allocated resources.
  */
-peer_id_error_t peer_id_create_from_private_key(const uint8_t *privkey_buf, size_t privkey_len,
-                                                peer_id_t *pid);
+peer_id_error_t peer_id_create_from_private_key(const uint8_t *privkey_buf, size_t privkey_len, peer_id_t *pid);
 
 /**
  * @brief Parse a human-readable Peer ID string (either legacy base58btc multihash

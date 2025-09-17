@@ -1,222 +1,93 @@
 # Identify Protocol
 
-The identify protocol exchanges peer metadata over an upgraded libp2p connection. After dialing or accepting a peer you can request their addresses, public key and supported protocols using the modern protocol handler API.
+libp2p nodes exchange metadata such as supported protocols, listen addresses,
+and public keys through the **Identify** protocol (`/ipfs/id/1.0.0`). The modern
+c-libp2p host wires a responder automatically and integrates Identify Push
+updates so the peerstore always reflects the latest information. This guide
+shows how to work with those pieces from application code.
 
-## Overview
+## Local identity and automatic behaviour
 
-The modern identify protocol implementation uses:
-
-- **Protocol Handler Registry**: Centralized registration of identify handlers
-- **Protocol Handler Context**: Manages identify protocol instances and stream handling  
-- **High-level API Functions**: `libp2p_identify_send_request_with_context()` and `libp2p_identify_register_handler()`
-- **Callback-based Design**: Response and request handlers are registered as callbacks
-
-## Requesting Identification
-
-First upgrade a raw connection as outlined in [upgrading.md](upgrading.md). Once you have a `libp2p_uconn_t`, create a protocol handler registry, register handlers, and use the high-level API to send identify requests:
+Install your node identity before calling `libp2p_host_start()`:
 
 ```c
-#include "protocol/identify/protocol_identify.h"
-#include "protocol/protocol_handler.h"
+#include "libp2p/host.h"
 
-// Context structure to hold state
-typedef struct {
-    uint8_t identity_key[32];
-    int response_received;
-} identify_context_t;
-
-// Response handler callback
-static int handle_identify_response(const peer_id_t *remote_peer_id,
-                                  const libp2p_identify_t *response,
-                                  void *user_data) {
-    identify_context_t *ctx = (identify_context_t *)user_data;
-    
-    printf("Received identify response:\n");
-    printf("  Protocol Version: %s\n", response->protocol_version);
-    printf("  Agent Version: %s\n", response->agent_version);
-    printf("  Number of protocols: %zu\n", response->num_protocols);
-    
-    // Process protocols
-    for (size_t i = 0; i < response->num_protocols; i++) {
-        printf("  Protocol[%zu]: %s\n", i, response->protocols[i]);
-    }
-    
-    // Process listen addresses
-    for (size_t i = 0; i < response->num_listen_addrs; i++) {
-        char *addr_str = multiaddr_string(response->listen_addrs[i]);
-        printf("  Listen Address[%zu]: %s\n", i, addr_str);
-        free(addr_str);
-    }
-    
-    ctx->response_received = 1;
-    return 0;
-}
-
-// Request handler callback (for serving incoming requests)
-static int handle_identify_request(const peer_id_t *local_peer_id,
-                                 libp2p_identify_t *response,
-                                 void *user_data) {
-    identify_context_t *ctx = (identify_context_t *)user_data;
-    
-    // Generate public key from private key
-    uint8_t *pubkey_buf = NULL;
-    size_t pubkey_len = 0;
-    peer_id_error_t err = peer_id_create_from_private_key_secp256k1(
-        ctx->identity_key, sizeof(ctx->identity_key), &pubkey_buf, &pubkey_len);
-    if (err != PEER_ID_SUCCESS) {
-        return -1;
-    }
-    
-    // Fill in response
-    response->protocol_version = strdup("libp2p/1.0.0");
-    response->agent_version = strdup("c-libp2p/0.1.0");
-    response->public_key = pubkey_buf;
-    response->public_key_len = pubkey_len;
-    
-    // Add supported protocols
-    response->protocols = malloc(2 * sizeof(char *));
-    response->protocols[0] = strdup("/ipfs/id/1.0.0");
-    response->protocols[1] = strdup("/ipfs/ping/1.0.0");
-    response->num_protocols = 2;
-    
-    return 0;
-}
-
-// Main function showing modern identify usage
-int use_identify_protocol(libp2p_uconn_t *uconn) {
-    // Create protocol handler registry
-    libp2p_protocol_handler_registry_t *registry = libp2p_protocol_handler_registry_new();
-    if (!registry) {
-        return -1;
-    }
-    
-    // Set up context
-    identify_context_t ctx;
-    // ... initialize identity_key ...
-    ctx.response_received = 0;
-    
-    // Register identify protocol handler
-    if (libp2p_identify_register_handler(registry, handle_identify_request, &ctx) != 0) {
-        libp2p_protocol_handler_registry_free(registry);
-        return -1;
-    }
-    
-    // Create protocol handler context
-    libp2p_protocol_handler_ctx_t *handler_ctx = libp2p_protocol_handler_ctx_new(registry, uconn);
-    if (!handler_ctx) {
-        libp2p_protocol_handler_registry_free(registry);
-        return -1;
-    }
-    
-    // Start protocol handler to listen for incoming streams
-    if (libp2p_protocol_handler_start(handler_ctx) != 0) {
-        libp2p_protocol_handler_ctx_free(handler_ctx);
-        libp2p_protocol_handler_registry_free(registry);
-        return -1;
-    }
-    
-    // Send identify request using high-level API
-    int result = libp2p_identify_send_request_with_context(handler_ctx, handle_identify_response, &ctx);
-    if (result != 0) {
-        printf("Failed to send identify request\n");
-        goto cleanup;
-    }
-    
-    // Wait for response (with timeout)
-    for (int i = 0; i < 500; i++) {  // 5 second timeout
-        usleep(10000); // 10ms
-        if (ctx.response_received) break;
-    }
-    
-    if (!ctx.response_received) {
-        printf("No identify response received within timeout\n");
-    }
-    
-cleanup:
-    libp2p_protocol_handler_stop(handler_ctx);
-    libp2p_protocol_handler_ctx_free(handler_ctx);
-    libp2p_protocol_handler_registry_free(registry);
-    return ctx.response_received ? 0 : -1;
+/* protobuf-encoded PrivateKey message */
+if (libp2p_host_set_private_key(host, privkey_pb, privkey_len) != 0) {
+    /* handle error */
 }
 ```
 
-## Listening for Identify Requests
+The host derives the local Peer ID, configures Noise to authenticate with this
+identity, and responds to `/ipfs/id/1.0.0` automatically. Two host flags control
+additional behaviour:
 
-The modern API automatically handles incoming identify requests through the registered handler. When you register an identify handler using `libp2p_identify_register_handler()`, it will automatically:
+- `LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND` (default) issues an Identify request
+after a successful outbound dial.
+- `LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND` triggers a request when an inbound
+connection completes its handshake.
 
-1. Listen for incoming streams on the `/ipfs/id/1.0.0` protocol
-2. Call your handler callback when requests arrive
-3. Send the response back to the requesting peer
-4. Handle stream cleanup
+Set the flags via `libp2p_host_builder_flags()` or by filling `libp2p_host_options_t`.
 
-Your handler callback just needs to populate the `libp2p_identify_t` response structure:
+## Requesting metadata on demand
 
-```c
-static int my_identify_handler(const peer_id_t *local_peer_id,
-                             libp2p_identify_t *response,
-                             void *user_data) {
-    // Fill in response fields
-    response->protocol_version = strdup("libp2p/1.0.0");
-    response->agent_version = strdup("my-app/1.0.0");
-    
-    // Add your public key, listen addresses, supported protocols etc.
-    // The library handles encoding and sending the response
-    
-    return 0; // Success
-}
-```
-
-## Using Identify Push
-
-The identify push protocol (`/ipfs/id/push/1.0.0`) allows you to notify connected peers about changes to your peer information without them requesting it. This is useful when your listen addresses or supported protocols change.
+For explicit Identify requests—e.g. to refresh cached information or when auto
+Identify is disabled—use the controller in `include/libp2p/identify.h`:
 
 ```c
-// Send an identify push notification
-int send_identify_push(libp2p_protocol_handler_ctx_t *handler_ctx) {
-    // The push functionality is typically integrated into the main identify handler
-    // Check the current API for push-specific functions or use the general
-    // identify request mechanism with appropriate protocol negotiation
-    
-    // Implementation depends on current API - check include/protocol/identify/protocol_identify.h
-    return 0;
+#include "libp2p/identify.h"
+
+libp2p_identify_service_t *identify = NULL;
+libp2p_identify_new(host, NULL, &identify);
+
+peer_id_t *remote = NULL;
+libp2p_host_get_peer_id(other_host, &remote); /* example source */
+
+if (libp2p_identify_request(identify, remote) == 0) {
+    /* peerstore now holds the fresh metadata */
 }
+
+libp2p_identify_ctrl_free(identify);
+peer_id_destroy(remote);
 ```
 
-## Protocol Handler Lifecycle
+`libp2p_identify_request()` opens a stream using the peerstore addresses, waits
+for the Identify response, decodes it, and updates the host’s peerstore with the
+remote public key, listen addresses, and protocol list. The host also publishes a
+`LIBP2P_EVT_PEER_PROTOCOLS_UPDATED` event whenever these details change.
 
-The modern identify protocol follows this lifecycle:
+## Consuming Identify Push updates
 
-1. **Create Registry**: `libp2p_protocol_handler_registry_new()`
-2. **Register Handler**: `libp2p_identify_register_handler(registry, handler_callback, user_data)`
-3. **Create Context**: `libp2p_protocol_handler_ctx_new(registry, uconn)`
-4. **Start Handler**: `libp2p_protocol_handler_start(handler_ctx)`
-5. **Send Requests**: `libp2p_identify_send_request_with_context(handler_ctx, response_callback, user_data)`
-6. **Stop Handler**: `libp2p_protocol_handler_stop(handler_ctx)`
-7. **Cleanup**: Free context and registry
+Peers that implement [Identify Push](https://github.com/libp2p/specs/tree/master/identify)
+announce changes on `/ipfs/id/push/1.0.0`. The host registers a listener for
+that protocol and handles decoding automatically. Incoming updates:
 
-## Error Handling
+- Store advertised listen addresses in the peerstore
+- Refresh the set of supported protocols
+- Surface the observed address through `LIBP2P_EVT_NEW_EXTERNAL_ADDR_OF_PEER`
+  events so applications can adjust reachability heuristics
 
-The modern API provides better error handling:
+Subscribe to events or inspect the peerstore directly to track these changes.
 
-- Functions return specific error codes
-- Callback functions can return error status
-- Timeouts are handled automatically
-- Resource cleanup is more predictable
+## Customising responses (advanced)
 
-```c
-// Check return values
-if (libp2p_identify_register_handler(registry, handler, ctx) != 0) {
-    fprintf(stderr, "Failed to register identify handler\n");
-    // Handle error
-}
+`libp2p_identify_encode_local()` prepares the protobuf payload the host uses to
+answer Identify requests. You can call it yourself when implementing a custom
+response handler or when you need to inspect the exact bytes sent on the wire.
+To replace the default responder entirely, unregister the built-in server with
+`libp2p_identify_service_stop()` and register your own protocol handler via
+`libp2p_host_listen_protocol()`.
 
-// Handle callback errors  
-static int my_handler(const peer_id_t *peer_id, libp2p_identify_t *response, void *ctx) {
-    if (some_error_condition) {
-        return -1; // Signal error to the library
-    }
-    return 0; // Success
-}
-```
+## Related tooling
 
-For a complete working example, see `examples/example_identify_dial.c` in the source tree. Consult the [identify specification](../specs/identify/README.md) for detailed message format and semantics.
+- `libp2p_host_peer_protocols()` returns the cached list of protocol IDs for a
+  peer (as populated by Identify).
+- `libp2p_host_supported_protocols()` exposes local protocol registrations so
+  you can include them in Identify responses or diagnostics.
+- `LIBP2P_EVT_LOCAL_PROTOCOLS_UPDATED` announces when the set of local
+  protocols changes, making it easy to trigger Identify Push announcements.
+
+Combine Identify with the [event bus](overview.md) and peerstore to build a
+complete view of the network, and see [examples.md](examples.md) for end-to-end
+usage inside a host application.

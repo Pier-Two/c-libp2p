@@ -19,12 +19,12 @@
 #include "multiformats/multiaddr/multiaddr.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 struct libp2p_connection;
 typedef struct libp2p_connection libp2p_conn_t;
-
 
 /**
  * @enum libp2p_conn_err_t
@@ -34,13 +34,13 @@ typedef struct libp2p_connection libp2p_conn_t;
  */
 typedef enum
 {
-    LIBP2P_CONN_OK = 0,               /**< No error (unused—success is byte count). */
-    LIBP2P_CONN_ERR_NULL_PTR = -1,    /**< Required pointer was NULL.               */
-    LIBP2P_CONN_ERR_AGAIN = -2,       /**< Would block (EAGAIN / EWOULDBLOCK).      */
-    LIBP2P_CONN_ERR_EOF = -3,         /**< Remote closed the connection.            */
-    LIBP2P_CONN_ERR_CLOSED = -4,      /**< Operation after libp2p_conn_close().     */
-    LIBP2P_CONN_ERR_TIMEOUT = -5,     /**< Deadline expired.                        */
-    LIBP2P_CONN_ERR_INTERNAL = -6     /**< Unspecified internal failure.            */
+    LIBP2P_CONN_OK = 0,            /**< No error (unused—success is byte count). */
+    LIBP2P_CONN_ERR_NULL_PTR = -1, /**< Required pointer was NULL.               */
+    LIBP2P_CONN_ERR_AGAIN = -2,    /**< Would block (EAGAIN / EWOULDBLOCK).      */
+    LIBP2P_CONN_ERR_EOF = -3,      /**< Remote closed the connection.            */
+    LIBP2P_CONN_ERR_CLOSED = -4,   /**< Operation after libp2p_conn_close().     */
+    LIBP2P_CONN_ERR_TIMEOUT = -5,  /**< Deadline expired.                        */
+    LIBP2P_CONN_ERR_INTERNAL = -6  /**< Unspecified internal failure.            */
 } libp2p_conn_err_t;
 
 /**
@@ -80,6 +80,13 @@ typedef struct
     libp2p_conn_err_t (*close)(libp2p_conn_t *self);
     void (*free)(libp2p_conn_t *self);
 
+    /**
+     * @brief Get the underlying file descriptor for the connection.
+     *        This is intended for use with event loops (epoll, kqueue, etc.).
+     * @return The file descriptor, or -1 on error.
+     */
+    int (*get_fd)(libp2p_conn_t *self);
+
 } libp2p_conn_vtbl_t;
 
 /**
@@ -89,7 +96,7 @@ typedef struct
 struct libp2p_connection
 {
     const libp2p_conn_vtbl_t *vt;
-    void                     *ctx;  /**< Transport-specific state. */
+    void *ctx; /**< Transport-specific state. */
 };
 
 /* Convenience inline wrappers */
@@ -140,10 +147,7 @@ static inline libp2p_conn_err_t libp2p_conn_set_deadline(libp2p_conn_t *c, uint6
  * @param c Connection handle.
  * @return Pointer to the local multiaddress or NULL on error.
  */
-static inline const multiaddr_t *libp2p_conn_local_addr(libp2p_conn_t *c)
-{
-    return c && c->vt ? c->vt->local_addr(c) : NULL;
-}
+static inline const multiaddr_t *libp2p_conn_local_addr(libp2p_conn_t *c) { return c && c->vt ? c->vt->local_addr(c) : NULL; }
 
 /**
  * @brief Get the remote endpoint address.
@@ -151,10 +155,7 @@ static inline const multiaddr_t *libp2p_conn_local_addr(libp2p_conn_t *c)
  * @param c Connection handle.
  * @return Pointer to the remote multiaddress or NULL on error.
  */
-static inline const multiaddr_t *libp2p_conn_remote_addr(libp2p_conn_t *c)
-{
-    return c && c->vt ? c->vt->remote_addr(c) : NULL;
-}
+static inline const multiaddr_t *libp2p_conn_remote_addr(libp2p_conn_t *c) { return c && c->vt ? c->vt->remote_addr(c) : NULL; }
 
 /**
  * @brief Close the connection.
@@ -162,10 +163,7 @@ static inline const multiaddr_t *libp2p_conn_remote_addr(libp2p_conn_t *c)
  * @param c Connection handle.
  * @return LIBP2P_CONN_OK on success or a negative error code.
  */
-static inline libp2p_conn_err_t libp2p_conn_close(libp2p_conn_t *c)
-{
-    return c && c->vt ? c->vt->close(c) : LIBP2P_CONN_ERR_NULL_PTR;
-}
+static inline libp2p_conn_err_t libp2p_conn_close(libp2p_conn_t *c) { return c && c->vt ? c->vt->close(c) : LIBP2P_CONN_ERR_NULL_PTR; }
 
 /**
  * @brief Free a connection and its resources.
@@ -179,6 +177,14 @@ static inline void libp2p_conn_free(libp2p_conn_t *c)
     if (c && c->vt && c->vt->free)
         c->vt->free(c);
 }
+
+/**
+ * @brief Get the underlying file descriptor, if available.
+ *
+ * This is intended for integration with event loops (epoll, kqueue, etc.).
+ * Implementations that do not expose an fd should return -1.
+ */
+static inline int libp2p_conn_get_fd(libp2p_conn_t *c) { return c && c->vt && c->vt->get_fd ? c->vt->get_fd(c) : -1; }
 
 #ifdef __cplusplus
 } /* extern "C" */

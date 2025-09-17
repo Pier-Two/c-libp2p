@@ -22,6 +22,7 @@
 #include "protocol/tcp/protocol_tcp_util.h"
 #include "transport/listener.h"
 #include "transport/transport.h"
+#include "libp2p/log.h"
 
 /* Listener helpers implemented in protocol_tcp.c */
 libp2p_listener_err_t tcp_listener_accept(libp2p_listener_t *l, libp2p_conn_t **out);
@@ -49,6 +50,7 @@ static int prepare_socket(const struct sockaddr_storage *ss, socklen_t ss_len, t
 #endif
     if (set_nonblocking(fd) == -1)
     {
+        perror("[TCP] prepare_socket: set_nonblocking failed");
         close(fd);
         return -1;
     }
@@ -61,12 +63,14 @@ static int prepare_socket(const struct sockaddr_storage *ss, socklen_t ss_len, t
 #endif
         )
         {
+            perror("[TCP] prepare_socket: setsockopt(SO_REUSE*) failed");
             close(fd);
             return -1;
         }
     }
     if (bind(fd, (const struct sockaddr *)ss, ss_len) != 0)
     {
+        perror("[TCP] prepare_socket: bind failed");
         close(fd);
         return -1;
     }
@@ -75,6 +79,7 @@ static int prepare_socket(const struct sockaddr_storage *ss, socklen_t ss_len, t
     int backlog = (clamped_size > (size_t)INT_MAX) ? INT_MAX : (int)clamped_size;
     if (listen(fd, backlog) != 0)
     {
+        perror("[TCP] prepare_socket: listen failed");
         close(fd);
         return -1;
     }
@@ -129,6 +134,45 @@ static libp2p_transport_err_t build_listener(int fd, tcp_transport_ctx_t *transp
         listener_ctx->local = sockaddr_to_multiaddr(&actual, actual_len);
     else
         listener_ctx->local = multiaddr_copy(addr, NULL);
+
+    {
+        int __se = 0;
+        char *__ls = listener_ctx->local ? multiaddr_to_str(listener_ctx->local, &__se) : NULL;
+        LP_LOGD("TCP", "build_listener: initial local=%s (err=%d)", __ls ? __ls : "(null)", __se);
+        free(__ls);
+    }
+
+    /* If caller requested an ephemeral port (/tcp/0), ensure the stored
+       local multiaddr reflects the kernel-assigned port by re-reading
+       via getsockname. This avoids returning a useless "/tcp/0" to callers
+       of libp2p_listener_local_addr(). */
+    if (listener_ctx->local)
+    {
+        int serr = 0;
+        char *s = multiaddr_to_str(listener_ctx->local, &serr);
+        if (s)
+        {
+            /* naive check: "/tcp/0" substring indicates ephemeral request */
+            if (strstr(s, "/tcp/0") != NULL)
+            {
+                multiaddr_free(listener_ctx->local);
+                if (getsockname(fd, (struct sockaddr *)&actual, &actual_len) == 0)
+                {
+                    listener_ctx->local = sockaddr_to_multiaddr(&actual, actual_len);
+                }
+                else
+                {
+                    listener_ctx->local = multiaddr_copy(addr, NULL);
+                }
+
+                int __se2 = 0;
+                char *__ls2 = listener_ctx->local ? multiaddr_to_str(listener_ctx->local, &__se2) : NULL;
+                LP_LOGD("TCP", "build_listener: corrected local=%s (err=%d)", __ls2 ? __ls2 : "(null)", __se2);
+                free(__ls2);
+            }
+            free(s);
+        }
+    }
     if (!listener_ctx->local)
     {
         pthread_cond_destroy(&listener_ctx->q.cond);
@@ -235,11 +279,17 @@ libp2p_transport_err_t tcp_listen(libp2p_transport_t *self, const multiaddr_t *a
     struct sockaddr_storage ss;
     socklen_t ss_len;
     if (multiaddr_to_sockaddr(addr, &ss, &ss_len) != 0)
+    {
+        LP_LOGW("TCP", "tcp_listen: multiaddr_to_sockaddr failed for addr; unsupported");
         return LIBP2P_TRANSPORT_ERR_UNSUPPORTED;
+    }
 
     int fd = prepare_socket(&ss, ss_len, transport_ctx);
     if (fd < 0)
+    {
+        LP_LOGW("TCP", "tcp_listen: prepare_socket failed (errno=%d: %s)", errno, strerror(errno));
         return LIBP2P_TRANSPORT_ERR_LISTEN_FAIL;
+    }
 
     return build_listener(fd, transport_ctx, addr, out);
 }

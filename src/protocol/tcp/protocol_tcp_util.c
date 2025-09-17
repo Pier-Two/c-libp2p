@@ -9,6 +9,35 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
+#include "libp2p/log.h"
+
+/*
+ * Provide a weak fallback for libp2p_logf so protocol_tcp can link
+ * independently of libp2p_unified. When the unified library is linked, its
+ * strong definition in src/util/log.c overrides this weak one.
+ */
+#if defined(__APPLE__) || defined(__GNUC__)
+__attribute__((weak)) void libp2p_logf(libp2p_log_level_t lvl, const char *fmt, ...)
+{
+    const char *prefix = "";
+    switch (lvl)
+    {
+        case LIBP2P_LOG_ERROR: prefix = "[ERROR] "; break;
+        case LIBP2P_LOG_WARN:  prefix = "[WARN ] "; break;
+        case LIBP2P_LOG_INFO:  prefix = "[INFO ] "; break;
+        case LIBP2P_LOG_DEBUG: prefix = "[DEBUG] "; break;
+        case LIBP2P_LOG_TRACE: prefix = "[TRACE] "; break;
+        default: break;
+    }
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "%s%s\n", prefix, buf);
+}
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -355,7 +384,7 @@ int safe_mutex_lock(pthread_mutex_t *mtx)
                 detail = "unknown reason";
                 break;
         }
-        fprintf(stderr, "[fatal] safe_mutex_lock(%p): %s (pthread_mutex_lock: %s)\n", (void *)mtx, detail, strerror(rc));
+        LP_LOGE("TCP", "safe_mutex_lock(%p): %s (pthread_mutex_lock: %s)", (void *)mtx, detail, strerror(rc));
         abort();
     }
     return 0;
@@ -398,7 +427,7 @@ int safe_mutex_unlock(pthread_mutex_t *mtx)
                 break;
         }
 
-        fprintf(stderr, "[fatal] safe_mutex_unlock(%p): %s (pthread_mutex_unlock: %s)\n", (void *)mtx, detail, strerror(rc));
+        LP_LOGE("TCP", "safe_mutex_unlock(%p): %s (pthread_mutex_unlock: %s)", (void *)mtx, detail, strerror(rc));
         abort(); /* cannot continue with a locked mutex */
     }
     return 0;

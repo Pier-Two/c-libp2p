@@ -1,8 +1,10 @@
+#include <errno.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <time.h>
 
 #include "protocol/tcp/protocol_tcp_queue.h"
+#include "protocol/tcp/protocol_tcp_util.h" /* now_mono_ms */
 
 /**
  * @brief Initialize a connection queue.
@@ -70,6 +72,7 @@ void cq_push(conn_queue_t *q, libp2p_conn_t *c)
     }
     n->c = c;
     n->next = NULL;
+    n->accepted_at_ms = now_mono_ms();
 
     pthread_mutex_lock(&q->mtx);
 

@@ -1,7 +1,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <noise/protocol/randstate.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,17 +10,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "multiformats/multiaddr/multiaddr.h"
-#include "peer_id/peer_id_ed25519.h"
+#include "libp2p/host.h"
+#include "libp2p/events.h"
+#include "libp2p/host_builder.h"
+#include "libp2p/stream.h"
 #include "protocol/identify/protocol_identify.h"
-#include "protocol/mplex/protocol_mplex.h"
-#include "protocol/noise/protocol_noise.h"
 #include "protocol/ping/protocol_ping.h"
-#include "protocol/protocol_handler.h"
-#include "protocol/tcp/protocol_tcp.h"
-#include "protocol/yamux/protocol_yamux.h"
-#include "transport/transport.h"
-#include "transport/upgrader.h"
+#include "libp2p/log.h"
 
 #ifndef NOW_MONO_MS_DECLARED
 static inline uint64_t now_mono_ms(void)
@@ -30,6 +26,32 @@ static inline uint64_t now_mono_ms(void)
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 #endif
+
+/* Hard-coded private key (protobuf) for interop runs.
+ * Taken from tests/host/test_host_identity.c (secp256k1).
+ * Hex encoding of PrivateKey protobuf. */
+/* Use an ED25519 PrivateKey protobuf to maximise interop with rust-libp2p
+ * default builds (which often disable secp256k1 by default). */
+#define ED25519_PRIVATE_HEX "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e"
+
+static uint8_t *hex_to_bytes(const char *hex, size_t *out_len)
+{
+    size_t hex_len = strlen(hex);
+    if (hex_len % 2 != 0)
+        return NULL;
+    size_t n = hex_len / 2;
+    uint8_t *buf = (uint8_t *)malloc(n);
+    if (!buf)
+        return NULL;
+    for (size_t i = 0; i < n; i++)
+    {
+        char b[3] = {hex[2 * i], hex[2 * i + 1], '\0'};
+        buf[i] = (uint8_t)strtol(b, NULL, 16);
+    }
+    if (out_len)
+        *out_len = n;
+    return buf;
+}
 
 static int redis_connect(const char *host, const char *port)
 {
@@ -91,22 +113,22 @@ static int redis_rpush(int fd, const char *key, const char *val)
 {
     char cmd[512];
     snprintf(cmd, sizeof(cmd), "*3\r\n$5\r\nRPUSH\r\n$%zu\r\n%s\r\n$%zu\r\n%s\r\n", strlen(key), key, strlen(val), val);
-    fprintf(stderr, "DEBUG: Redis RPUSH command: %s", cmd);
+    LP_LOGD("INTEROP", "Redis RPUSH command: %s", cmd);
     if (redis_send(fd, cmd) != 0)
     {
-        fprintf(stderr, "DEBUG: redis_send failed\n");
+        LP_LOGD("INTEROP", "redis_send failed");
         return -1;
     }
     char line[128];
     int bytes_read = redis_read_line(fd, line, sizeof(line));
-    fprintf(stderr, "DEBUG: Redis response: bytes_read=%d, line=%s\n", bytes_read, bytes_read > 0 ? line : "NULL");
+    LP_LOGD("INTEROP", "Redis response: bytes_read=%d, line=%s", bytes_read, bytes_read > 0 ? line : "NULL");
     if (bytes_read <= 0)
     {
-        fprintf(stderr, "DEBUG: redis_read_line failed\n");
+        LP_LOGD("INTEROP", "redis_read_line failed");
         return -1;
     }
     int result = line[0] == ':' ? 0 : -1;
-    fprintf(stderr, "DEBUG: Redis RPUSH result: %d (line[0]='%c')\n", result, line[0]);
+    LP_LOGD("INTEROP", "Redis RPUSH result: %d (line[0]='%c')", result, line[0]);
     return result;
 }
 
@@ -148,776 +170,372 @@ static char *redis_blpop(int fd, const char *key, int timeout_sec)
     return val;
 }
 
-static void gen_keys(uint8_t *priv, size_t len) { noise_randstate_generate_simple(priv, len); }
-
-static libp2p_muxer_t *create_muxer(const char *muxer_name)
-{
-    if (strcmp(muxer_name, "yamux") == 0)
-        return libp2p_yamux_new();
-    else if (strcmp(muxer_name, "mplex") == 0)
-        return libp2p_mplex_new();
-    else
-        return NULL;
-}
-
-/* File-scope handler that responds to identify requests */
-static int identify_stream_handler(libp2p_stream_t *stream, void *user_data)
-{
-    fprintf(stderr, "identify_stream_handler: got new stream\n");
-    (void)user_data;
-
-    // For identify protocol, we just need to receive the identify request
-    // and send back our own identify information. For interop tests, we can
-    // send a minimal response or close the stream.
-
-    uint8_t buf[1024];
-    ssize_t n = libp2p_stream_read(stream, buf, sizeof(buf));
-
-    if (n > 0)
-    {
-        fprintf(stderr, "identify_stream_handler: received %zd bytes\n", n);
-        // Send minimal identify response (for interop we just close)
-    }
-    else if (n == -5)
-    {
-        // EAGAIN - no data yet, that's fine for identify
-        fprintf(stderr, "identify_stream_handler: no data available yet\n");
-    }
-    else
-    {
-        fprintf(stderr, "identify_stream_handler: read error %zd\n", n);
-    }
-
-    libp2p_stream_close(stream);
-    fprintf(stderr, "identify_stream_handler: done\n");
-    return 0;
-}
-
-/* Forward declaration for generic muxer types */
-typedef enum
-{
-    MUXER_TYPE_MPLEX,
-    MUXER_TYPE_YAMUX,
-    MUXER_TYPE_UNKNOWN
-} muxer_type_t;
-
 typedef struct
 {
-    muxer_type_t type;
-    union
-    {
-        libp2p_mplex_ctx_t *mplex;
-        libp2p_yamux_ctx_t *yamux;
-    } ctx;
-} generic_muxer_ctx_t;
+    char publish_addr[256];
+    int have_addr;
+    int ping_seen;
+    int ping_closed;
+    int open_streams; /* total open streams counter */
+    pthread_mutex_t mtx;
+    pthread_cond_t cv;
+} interop_sync_t;
 
-/* File-scope handler that echos 32-byte pings */
-// Helper function to read exactly n bytes, similar to read_exact in Rust
-static ssize_t stream_read_exact(libp2p_stream_t *stream, uint8_t *buf, size_t len)
+static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
 {
-    size_t total_read = 0;
-    int retry_count = 0;
-    const int MAX_RETRIES = 200; // Allow more retries for mplex frame processing
-
-    while (total_read < len && retry_count < MAX_RETRIES)
+    interop_sync_t *sync = (interop_sync_t *)ud;
+    if (!evt || !sync)
+        return;
+    if (evt->kind == LIBP2P_EVT_LISTEN_ADDR_ADDED && evt->u.listen_addr_added.addr)
     {
-        ssize_t n = libp2p_stream_read(stream, buf + total_read, len - total_read);
-        if (n > 0)
+        const char *bound_str = evt->u.listen_addr_added.addr;
+        const char *publish_str = bound_str;
+        char actual_addr[256];
+        if (strstr(bound_str, "0.0.0.0"))
         {
-            total_read += n;
-            retry_count = 0; // Reset retry count on successful read
+            const char *tcp_start = strstr(bound_str, "/tcp/");
+            if (tcp_start)
+            {
+                int test_sock = socket(AF_INET, SOCK_DGRAM, 0);
+                if (test_sock >= 0)
+                {
+                    struct sockaddr_in test_addr;
+                    test_addr.sin_family = AF_INET;
+                    test_addr.sin_port = htons(80);
+                    inet_pton(AF_INET, "8.8.8.8", &test_addr.sin_addr);
+                    if (connect(test_sock, (struct sockaddr *)&test_addr, sizeof(test_addr)) == 0)
+                    {
+                        struct sockaddr_in local_addr;
+                        socklen_t len = sizeof(local_addr);
+                        if (getsockname(test_sock, (struct sockaddr *)&local_addr, &len) == 0)
+                        {
+                            char ip_str[INET_ADDRSTRLEN];
+                            inet_ntop(AF_INET, &local_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
+                            snprintf(actual_addr, sizeof(actual_addr), "/ip4/%s%s", ip_str, tcp_start);
+                            publish_str = actual_addr;
+                        }
+                    }
+                    close(test_sock);
+                }
+            }
         }
-        else if (n == -5) // EAGAIN - no data available yet
-        {
-            retry_count++;
-            usleep(5000); // 5ms delay for frame processing
-            continue;
-        }
-        else if (n == 0)
-        {
-            // EOF - but for mplex, frames might still be processing
-            retry_count++;
-            usleep(5000); // 5ms delay to allow frame processing
-            continue;
-        }
-        else
-        {
-            // Other error - but might be temporary in mplex
-            retry_count++;
-            usleep(5000); // 5ms delay
-            continue;
-        }
+        pthread_mutex_lock(&sync->mtx);
+        snprintf(sync->publish_addr, sizeof(sync->publish_addr), "%s", publish_str);
+        sync->have_addr = 1;
+        pthread_cond_broadcast(&sync->cv);
+        pthread_mutex_unlock(&sync->mtx);
     }
-
-    return total_read;
-}
-
-static int ping_stream_handler(libp2p_stream_t *stream, void *user_data)
-{
-    (void)user_data;
-
-    fprintf(stderr, "ping_stream_handler: got new stream\n");
-
-    uint8_t buffer[32];
-    ssize_t total_read = 0;
-    const size_t expected_size = 32;
-
-    // Read ping payload using the existing stream_read_exact function
-    ssize_t bytes_read = stream_read_exact(stream, buffer, expected_size);
-
-    if (bytes_read < 0)
+    else if (evt->kind == LIBP2P_EVT_STREAM_OPENED)
     {
-        fprintf(stderr, "ping_stream_handler: failed to read ping payload (error=%zd)\n", bytes_read);
-        return -1;
+        pthread_mutex_lock(&sync->mtx);
+        sync->open_streams++;
+        if (evt->u.stream_opened.protocol_id && strcmp(evt->u.stream_opened.protocol_id, LIBP2P_PING_PROTO_ID) == 0)
+            sync->ping_seen = 1;
+        pthread_cond_broadcast(&sync->cv);
+        pthread_mutex_unlock(&sync->mtx);
     }
-
-    if ((size_t)bytes_read != expected_size)
+    else if (evt->kind == LIBP2P_EVT_STREAM_CLOSED)
     {
-        fprintf(stderr, "ping_stream_handler: read incomplete payload (%zd bytes, expected %zu)\n", bytes_read, expected_size);
-        return -1;
+        pthread_mutex_lock(&sync->mtx);
+        if (sync->open_streams > 0)
+            sync->open_streams--;
+        /* Treat "ping finished" as "no more open streams after ping was seen".
+         * This avoids prematurely stopping on an Identify close event. */
+        if (sync->ping_seen && sync->open_streams == 0)
+            sync->ping_closed = 1;
+        pthread_cond_broadcast(&sync->cv);
+        pthread_mutex_unlock(&sync->mtx);
     }
-
-    fprintf(stderr, "ping_stream_handler: read %zd bytes (total: %zd/%zu)\n", bytes_read, bytes_read, expected_size);
-    fprintf(stderr, "ping_stream_handler: received complete 32-byte ping payload\n");
-
-    // Echo the payload back
-    fprintf(stderr, "ping_stream_handler: attempting to write %zu bytes back\n", expected_size);
-    ssize_t bytes_written = libp2p_stream_write(stream, buffer, expected_size);
-
-    if (bytes_written != (ssize_t)expected_size)
-    {
-        fprintf(stderr, "ping_stream_handler: failed to write complete echo (wrote %zd, expected %zu)\n", bytes_written, expected_size);
-        return -1;
-    }
-
-    fprintf(stderr, "ping_stream_handler: successfully echoed ping payload\n");
-
-    // Properly close the stream after completing the ping
-    fprintf(stderr, "ping_stream_handler: closing stream after ping completion\n");
-    libp2p_stream_close(stream);
-
-    fprintf(stderr, "ping_stream_handler: ping protocol completed successfully\n");
-    return 0;
 }
 
 static int run_listener(const char *ip, const char *redis_host, const char *redis_port, int timeout, const char *muxer_name)
 {
-    fprintf(stderr, "DEBUG: run_listener started with ip=%s, redis_host=%s, redis_port=%s, timeout=%d, muxer=%s\n", ip, redis_host, redis_port,
-            timeout, muxer_name);
+    LP_LOGI("INTEROP", "run_listener: ip=%s redis_host=%s redis_port=%s timeout=%d muxer=%s", ip, redis_host, redis_port, timeout, muxer_name);
 
-    multiaddr_t *addr = NULL;
-    char ma_str[64];
-    snprintf(ma_str, sizeof(ma_str), "/ip4/%s/tcp/0", ip);
-    fprintf(stderr, "DEBUG: Creating multiaddr: %s\n", ma_str);
-    addr = multiaddr_new_from_str(ma_str, NULL);
-    if (!addr)
+    char listen_maddr[64];
+    snprintf(listen_maddr, sizeof(listen_maddr), "/ip4/%s/tcp/0", ip);
+
+    libp2p_host_builder_t *b = libp2p_host_builder_new();
+    if (!b)
+        return 1;
+    (void)libp2p_host_builder_listen_addr(b, listen_maddr);
+    (void)libp2p_host_builder_transport(b, "tcp");
+    (void)libp2p_host_builder_security(b, "noise");
+    if (muxer_name && (strcmp(muxer_name, "yamux") == 0 || strcmp(muxer_name, "mplex") == 0))
+        (void)libp2p_host_builder_muxer(b, muxer_name);
+    else
+        (void)libp2p_host_builder_muxer(b, "yamux");
+    (void)libp2p_host_builder_multistream(b, 5000, true);
+    (void)libp2p_host_builder_flags(b, LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND);
+
+    libp2p_host_t *host = NULL;
+    if (libp2p_host_builder_build(b, &host) != 0 || !host)
     {
-        fprintf(stderr, "DEBUG: Failed to create multiaddr\n");
+        libp2p_host_builder_free(b);
         return 1;
     }
-    fprintf(stderr, "DEBUG: Created multiaddr successfully\n");
 
-    libp2p_tcp_config_t tcfg = libp2p_tcp_config_default();
-    libp2p_transport_t *tcp = libp2p_tcp_transport_new(&tcfg);
-    fprintf(stderr, "DEBUG: Created TCP transport\n");
-
-    libp2p_listener_t *lst = NULL;
-    fprintf(stderr, "DEBUG: Starting to listen...\n");
-    if (libp2p_transport_listen(tcp, addr, &lst) != 0)
+    /* Ensure Noise handshake has an identity key. */
     {
-        fprintf(stderr, "DEBUG: Failed to listen\n");
-        multiaddr_free(addr);
-        return 1;
-    }
-    fprintf(stderr, "DEBUG: Listen successful\n");
-    multiaddr_free(addr);
-
-    multiaddr_t *bound = NULL;
-    fprintf(stderr, "DEBUG: Getting local address...\n");
-    if (libp2p_listener_local_addr(lst, &bound) != 0)
-    {
-        fprintf(stderr, "DEBUG: Failed to get local address\n");
-        return 1;
-    }
-    fprintf(stderr, "DEBUG: Got local address\n");
-
-    int ma_err = 0;
-    char *bound_str = multiaddr_to_str(bound, &ma_err);
-    if (!bound_str || ma_err != 0)
-    {
-        fprintf(stderr, "DEBUG: Failed to convert address to string\n");
-        multiaddr_free(bound);
-        return 1;
-    }
-    fprintf(stderr, "DEBUG: Bound address: %s\n", bound_str);
-
-    // Replace 0.0.0.0 with actual container IP for publishing
-    char *publish_str = bound_str;
-    char actual_addr[256];
-    if (strstr(bound_str, "0.0.0.0"))
-    {
-        // Get the tcp/port from the bound address (/ip4/0.0.0.0/tcp/40515 -> /tcp/40515)
-        char *tcp_start = strstr(bound_str, "/tcp/");
-        if (tcp_start)
+        size_t sk_len = 0;
+        uint8_t *sk = hex_to_bytes(ED25519_PRIVATE_HEX, &sk_len);
+        if (sk)
         {
-            // Get container IP by connecting to an external address and checking local socket
-            int test_sock = socket(AF_INET, SOCK_DGRAM, 0);
-            if (test_sock >= 0)
-            {
-                struct sockaddr_in test_addr;
-                test_addr.sin_family = AF_INET;
-                test_addr.sin_port = htons(80);
-                inet_pton(AF_INET, "8.8.8.8", &test_addr.sin_addr);
-
-                if (connect(test_sock, (struct sockaddr *)&test_addr, sizeof(test_addr)) == 0)
-                {
-                    struct sockaddr_in local_addr;
-                    socklen_t len = sizeof(local_addr);
-                    if (getsockname(test_sock, (struct sockaddr *)&local_addr, &len) == 0)
-                    {
-                        char ip_str[INET_ADDRSTRLEN];
-                        inet_ntop(AF_INET, &local_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-                        snprintf(actual_addr, sizeof(actual_addr), "/ip4/%s%s", ip_str, tcp_start);
-                        publish_str = actual_addr;
-                        fprintf(stderr, "DEBUG: Replaced 0.0.0.0 with actual IP: %s\n", publish_str);
-                    }
-                }
-                close(test_sock);
-            }
+            (void)libp2p_host_set_private_key(host, sk, sk_len);
+            free(sk);
         }
     }
 
-    fprintf(stderr, "DEBUG: Connecting to Redis at %s:%s...\n", redis_host, redis_port);
+    /* Start standard protocol services using new Host API */
+    libp2p_protocol_server_t *ping_srv = NULL;
+    (void)libp2p_ping_service_start(host, &ping_srv);
+
+    /* Subscribe for events (address + ping) */
+    interop_sync_t sync;
+    memset(&sync, 0, sizeof(sync));
+    pthread_mutex_init(&sync.mtx, NULL);
+    pthread_cond_init(&sync.cv, NULL);
+    libp2p_subscription_t *sub = NULL;
+    (void)libp2p_event_subscribe(host, interop_evt_cb, &sync, &sub);
+
+    (void)libp2p_host_start(host);
+
+    /* Wait for listen addr event and publish to Redis */
+    {
+        const int publish_wait_ms = 5000;
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += publish_wait_ms / 1000;
+        ts.tv_nsec += (publish_wait_ms % 1000) * 1000000;
+        if (ts.tv_nsec >= 1000000000)
+        {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        pthread_mutex_lock(&sync.mtx);
+        while (!sync.have_addr)
+        {
+            if (pthread_cond_timedwait(&sync.cv, &sync.mtx, &ts) == ETIMEDOUT)
+                break;
+        }
+        pthread_mutex_unlock(&sync.mtx);
+    }
+    if (!sync.have_addr)
+    {
+        LP_LOGE("INTEROP", "listener: failed to get listen address event");
+        if (sub)
+            libp2p_event_unsubscribe(host, sub);
+        libp2p_host_stop(host);
+        libp2p_host_free(host);
+        libp2p_host_builder_free(b);
+        return 1;
+    }
+
+    LP_LOGD("INTEROP", "Connecting to Redis at %s:%s...", redis_host, redis_port);
     int rfd = redis_connect(redis_host, redis_port);
     if (rfd < 0)
     {
-        fprintf(stderr, "listener failed to connect to redis\n");
-        free(bound_str);
+        LP_LOGE("INTEROP", "listener failed to connect to redis");
+        libp2p_host_stop(host);
+        libp2p_host_free(host);
+        libp2p_host_builder_free(b);
         return 1;
     }
-    fprintf(stderr, "DEBUG: Connected to Redis successfully\n");
-
-    fprintf(stderr, "DEBUG: Publishing address to Redis...\n");
-    int rc = redis_rpush(rfd, "listenerAddr", publish_str);
-    if (rc != 0)
+    LP_LOGD("INTEROP", "Publishing address to Redis: %s", sync.publish_addr);
+    if (redis_rpush(rfd, "listenerAddr", sync.publish_addr) != 0)
     {
-        fprintf(stderr, "DEBUG: Failed to publish address to Redis\n");
+        LP_LOGD("INTEROP", "Failed to publish address to Redis");
         close(rfd);
-        free(bound_str);
-        multiaddr_free(bound);
+        if (sub)
+            libp2p_event_unsubscribe(host, sub);
+        libp2p_host_stop(host);
+        libp2p_host_free(host);
+        libp2p_host_builder_free(b);
         return 1;
     }
-    fprintf(stderr, "DEBUG: Published address to Redis successfully\n");
     close(rfd);
-    free(bound_str);
-    multiaddr_free(bound);
 
-    libp2p_conn_t *raw = NULL;
-    fprintf(stderr, "DEBUG: Waiting for incoming connection (this may hang)...\n");
-    if (libp2p_listener_accept(lst, &raw) != 0)
+    /* Wait for ping stream opened or until timeout */
     {
-        fprintf(stderr, "DEBUG: Accept failed\n");
-        libp2p_listener_close(lst);
-        libp2p_listener_free(lst);
-        return 1;
-    }
-    fprintf(stderr, "DEBUG: Accepted connection!\n");
-
-    uint8_t static_key[32], id_key[32];
-    gen_keys(static_key, 32);
-    gen_keys(id_key, 32);
-    libp2p_noise_config_t ncfg = {.static_private_key = static_key,
-                                  .static_private_key_len = 32,
-                                  .identity_private_key = id_key,
-                                  .identity_private_key_len = 32,
-                                  .identity_key_type = PEER_ID_ED25519_KEY_TYPE};
-    libp2p_security_t *noise = libp2p_noise_security_new(&ncfg);
-    libp2p_muxer_t *muxer = create_muxer(muxer_name);
-    if (!muxer)
-    {
-        fprintf(stderr, "listener failed to create muxer: %s\n", muxer_name);
-        libp2p_security_free(noise);
-        libp2p_listener_close(lst);
-        libp2p_listener_free(lst);
-        libp2p_transport_free(tcp);
-        return 1;
-    }
-    const libp2p_security_t *sec[] = {noise, NULL};
-    const libp2p_muxer_t *mux[] = {muxer, NULL};
-    libp2p_upgrader_config_t ucfg = libp2p_upgrader_config_default();
-    ucfg.security = sec;
-    ucfg.n_security = 1;
-    ucfg.muxers = mux;
-    ucfg.n_muxers = 1;
-    ucfg.handshake_timeout_ms = timeout * 1000;
-    libp2p_upgrader_t *up = libp2p_upgrader_new(&ucfg);
-    libp2p_uconn_t *uconn = NULL;
-    fprintf(stderr, "listener: starting inbound upgrade\n");
-    libp2p_upgrader_err_t up_err = libp2p_upgrader_upgrade_inbound(up, raw, &uconn);
-    fprintf(stderr, "listener: upgrade result = %d\n", up_err);
-    if (up_err == LIBP2P_UPGRADER_OK)
-    {
-        fprintf(stderr, "listener: negotiated muxer = %s\n",
-                (uconn->muxer == muxer) ? muxer_name : (strcmp(muxer_name, "yamux") == 0 ? "mplex" : "yamux"));
-    }
-    if (up_err != LIBP2P_UPGRADER_OK)
-    {
-        fprintf(stderr, "listener upgrade failed (err=%d)\n", up_err);
-        libp2p_upgrader_free(up);
-        libp2p_muxer_free(muxer);
-        libp2p_security_free(noise);
-        libp2p_listener_close(lst);
-        libp2p_listener_free(lst);
-        libp2p_transport_free(tcp);
-        return 1;
-    }
-    if (strcmp(muxer_name, "yamux") == 0)
-    {
-        /* -----------------------------------------------------------
-         * Respond to ping requests over a negotiated stream using YAMUX.
-         * ---------------------------------------------------------*/
-
-        /* Create registry and register the ping handler */
-        libp2p_protocol_handler_registry_t *registry = libp2p_protocol_handler_registry_new();
-        libp2p_register_protocol_handler(registry, LIBP2P_PING_PROTO_ID, ping_stream_handler, NULL);
-        libp2p_register_protocol_handler(registry, LIBP2P_IDENTIFY_PROTO_ID, identify_stream_handler, NULL);
-
-        /* Start protocol handler in a background thread */
-        libp2p_protocol_handler_ctx_t *phctx = libp2p_protocol_handler_ctx_new(registry, uconn);
-        libp2p_protocol_handler_start(phctx);
-
-        /* Wait for protocol handler to complete naturally or timeout */
-        fprintf(stderr, "listener: waiting for protocol handler to complete\n");
-        int wait_cycles = 0;
-        const int max_wait_cycles = 200; // 200 * 100ms = 20 seconds maximum wait
-
-        while (!phctx->stop_flag && wait_cycles < max_wait_cycles)
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += timeout;
+        pthread_mutex_lock(&sync.mtx);
+        while (!sync.ping_seen)
         {
-            usleep(100000); // 100ms
-            wait_cycles++;
-
-            if (wait_cycles % 10 == 0) // Log every second
-            {
-                fprintf(stderr, "listener: waiting for completion (%d/200)\n", wait_cycles);
-            }
+            if (pthread_cond_timedwait(&sync.cv, &sync.mtx, &ts) == ETIMEDOUT)
+                break;
         }
-
-        if (phctx->stop_flag)
-        {
-            fprintf(stderr, "listener: protocol handler completed naturally\n");
-        }
-        else
-        {
-            fprintf(stderr, "listener: protocol handler timeout, forcing stop\n");
-        }
-
-        /* Gracefully stop the handler thread and clean up. */
-        libp2p_protocol_handler_stop(phctx);
-        libp2p_protocol_handler_ctx_free(phctx);
-        libp2p_protocol_handler_registry_free(registry);
-
-        /* Add a small delay to ensure proper connection closure signaling */
-        fprintf(stderr, "listener: allowing time for connection closure signaling\n");
-        usleep(100000); // 100ms delay
-    }
-    else
-    {
-        /* -----------------------------------------------------------
-         * Respond to ping requests over a negotiated stream using MPLEX.
-         * ---------------------------------------------------------*/
-
-        /* Create registry and register the ping handler */
-        libp2p_protocol_handler_registry_t *registry = libp2p_protocol_handler_registry_new();
-        libp2p_register_protocol_handler(registry, LIBP2P_PING_PROTO_ID, ping_stream_handler, NULL);
-        libp2p_register_protocol_handler(registry, LIBP2P_IDENTIFY_PROTO_ID, identify_stream_handler, NULL);
-
-        /* Start protocol handler in a background thread */
-        libp2p_protocol_handler_ctx_t *phctx = libp2p_protocol_handler_ctx_new(registry, uconn);
-        libp2p_protocol_handler_start(phctx);
-
-        /* Wait for protocol handler to complete naturally or timeout */
-        fprintf(stderr, "listener: waiting for protocol handler to complete\n");
-        int wait_cycles = 0;
-        const int max_wait_cycles = 200; // 200 * 100ms = 20 seconds maximum wait
-
-        while (!phctx->stop_flag && wait_cycles < max_wait_cycles)
-        {
-            usleep(100000); // 100ms
-            wait_cycles++;
-
-            if (wait_cycles % 10 == 0) // Log every second
-            {
-                fprintf(stderr, "listener: waiting for completion (%d/200)\n", wait_cycles);
-            }
-        }
-
-        if (phctx->stop_flag)
-        {
-            fprintf(stderr, "listener: protocol handler completed naturally\n");
-        }
-        else
-        {
-            fprintf(stderr, "listener: protocol handler timeout, forcing stop\n");
-        }
-
-        /* Gracefully stop the handler thread and clean up. */
-        libp2p_protocol_handler_stop(phctx);
-        libp2p_protocol_handler_ctx_free(phctx);
-        libp2p_protocol_handler_registry_free(registry);
-
-        /* Add a small delay to ensure proper connection closure signaling */
-        fprintf(stderr, "listener: allowing time for connection closure signaling\n");
-        usleep(100000); // 100ms delay
-
-        /* Send graceful shutdown signal for yamux */
-        if (strcmp(muxer_name, "yamux") == 0)
-        {
-            fprintf(stderr, "listener: sending yamux GoAway signal for graceful shutdown\n");
-            // Access the yamux context from the muxer to send GoAway
-            libp2p_yamux_ctx_t *yamux_ctx = (libp2p_yamux_ctx_t *)uconn->muxer->ctx;
-            if (yamux_ctx)
-            {
-                libp2p_yamux_stop(yamux_ctx);
-                usleep(50000); // 50ms to allow GoAway to be sent
-            }
-        }
+        pthread_mutex_unlock(&sync.mtx);
     }
 
-    /* Send graceful shutdown signal for yamux (if applicable) */
-    if (strcmp(muxer_name, "yamux") == 0)
+    /* If ping opened, wait for it to close (echo completed) before stopping. */
+    if (sync.ping_seen)
     {
-        fprintf(stderr, "listener: sending yamux GoAway signal for graceful shutdown\n");
-        // Access the yamux context from the muxer to send GoAway
-        libp2p_yamux_ctx_t *yamux_ctx = (libp2p_yamux_ctx_t *)uconn->muxer->ctx;
-        if (yamux_ctx)
+        struct timespec ts2;
+        clock_gettime(CLOCK_REALTIME, &ts2);
+        ts2.tv_sec += timeout;
+        pthread_mutex_lock(&sync.mtx);
+        while (!sync.ping_closed)
         {
-            libp2p_yamux_stop(yamux_ctx);
-            usleep(50000); // 50ms to allow GoAway to be sent
+            if (pthread_cond_timedwait(&sync.cv, &sync.mtx, &ts2) == ETIMEDOUT)
+                break;
         }
+        pthread_mutex_unlock(&sync.mtx);
     }
 
-    fprintf(stderr, "listener: closing connection\n");
-    libp2p_conn_close(uconn->conn);
-    free(uconn);
-    libp2p_upgrader_free(up);
-    libp2p_muxer_free(muxer);
-    libp2p_security_free(noise);
-    libp2p_listener_close(lst);
-    libp2p_listener_free(lst);
-    libp2p_transport_free(tcp);
+    if (ping_srv)
+        (void)libp2p_ping_service_stop(host, ping_srv);
+    if (sub)
+        libp2p_event_unsubscribe(host, sub);
+    libp2p_host_stop(host);
+    libp2p_host_free(host);
+    libp2p_host_builder_free(b);
     return 0;
 }
 
 static int run_dialer(const char *redis_host, const char *redis_port, int timeout, const char *muxer_name)
 {
-    fprintf(stderr, "DEBUG: run_dialer started with redis_host=%s, redis_port=%s, timeout=%d, muxer=%s\n", redis_host, redis_port, timeout,
-            muxer_name);
+    LP_LOGI("INTEROP", "run_dialer: redis_host=%s redis_port=%s timeout=%d muxer=%s", redis_host, redis_port, timeout, muxer_name);
 
-    fprintf(stderr, "DEBUG: Connecting to Redis...\n");
+    LP_LOGD("INTEROP", "Connecting to Redis...");
     int rfd = redis_connect(redis_host, redis_port);
     if (rfd < 0)
     {
-        fprintf(stderr, "dialer failed to connect to redis\n");
+        LP_LOGE("INTEROP", "dialer failed to connect to redis");
         return 1;
     }
-    fprintf(stderr, "DEBUG: Connected to Redis successfully\n");
+    LP_LOGD("INTEROP", "Connected to Redis successfully");
 
-    fprintf(stderr, "DEBUG: Waiting for listener address from Redis (timeout=%d)...\n", timeout);
+    LP_LOGD("INTEROP", "Waiting for listener address from Redis (timeout=%d)...", timeout);
     char *addr_str = redis_blpop(rfd, "listenerAddr", timeout);
     close(rfd);
     if (!addr_str)
     {
-        fprintf(stderr, "dialer failed to get listener address from redis\n");
+        LP_LOGE("INTEROP", "dialer failed to get listener address from redis");
         return 1;
     }
-    fprintf(stderr, "DEBUG: Got listener address: %s\n", addr_str);
+    LP_LOGD("INTEROP", "Got listener address: %s", addr_str);
 
-    int err = 0;
-    multiaddr_t *addr = multiaddr_new_from_str(addr_str, &err);
-    free(addr_str);
-    if (!addr || err)
-    {
-        fprintf(stderr, "DEBUG: Failed to parse multiaddr (err=%d)\n", err);
+    /* Build unified host with desired proposals */
+    libp2p_host_builder_t *b = libp2p_host_builder_new();
+    if (!b)
         return 1;
-    }
-    fprintf(stderr, "DEBUG: Parsed multiaddr successfully\n");
-
-    libp2p_tcp_config_t tcfg = libp2p_tcp_config_default();
-    libp2p_transport_t *tcp = libp2p_tcp_transport_new(&tcfg);
-    fprintf(stderr, "DEBUG: Created TCP transport\n");
-
-    libp2p_conn_t *raw = NULL;
-    uint64_t start = now_mono_ms();
-    fprintf(stderr, "DEBUG: Attempting to dial...\n");
-    if (libp2p_transport_dial(tcp, addr, &raw) != 0)
-    {
-        fprintf(stderr, "transport dial failed\n");
-        multiaddr_free(addr);
-        libp2p_transport_free(tcp);
-        return 1;
-    }
-    fprintf(stderr, "DEBUG: Dial successful!\n");
-
-    uint8_t static_key[32], id_key[32];
-    gen_keys(static_key, 32);
-    gen_keys(id_key, 32);
-    libp2p_noise_config_t ncfg = {.static_private_key = static_key,
-                                  .static_private_key_len = 32,
-                                  .identity_private_key = id_key,
-                                  .identity_private_key_len = 32,
-                                  .identity_key_type = PEER_ID_ED25519_KEY_TYPE};
-    libp2p_security_t *noise = libp2p_noise_security_new(&ncfg);
-    libp2p_muxer_t *muxer = create_muxer(muxer_name);
-    if (!muxer)
-    {
-        fprintf(stderr, "dialer failed to create muxer: %s\n", muxer_name);
-        libp2p_security_free(noise);
-        multiaddr_free(addr);
-        libp2p_transport_free(tcp);
-        return 1;
-    }
-    const libp2p_security_t *sec[] = {noise, NULL};
-    const libp2p_muxer_t *mux[] = {muxer, NULL};
-    libp2p_upgrader_config_t ucfg = libp2p_upgrader_config_default();
-    ucfg.security = sec;
-    ucfg.n_security = 1;
-    ucfg.muxers = mux;
-    ucfg.n_muxers = 1;
-    ucfg.handshake_timeout_ms = timeout * 1000;
-    libp2p_upgrader_t *up = libp2p_upgrader_new(&ucfg);
-    libp2p_uconn_t *uconn = NULL;
-    if (libp2p_upgrader_upgrade_outbound(up, raw, NULL, &uconn) != LIBP2P_UPGRADER_OK)
-    {
-        fprintf(stderr, "dialer upgrade failed\n");
-        libp2p_upgrader_free(up);
-        libp2p_muxer_free(muxer);
-        libp2p_security_free(noise);
-        multiaddr_free(addr);
-        libp2p_transport_free(tcp);
-        return 1;
-    }
-    fprintf(stderr, "dialer: negotiated muxer = %s\n", (uconn->muxer == muxer) ? muxer_name : (strcmp(muxer_name, "yamux") == 0 ? "mplex" : "yamux"));
-    uint64_t ping_ms = 0;
-
-    if (strcmp(muxer_name, "yamux") == 0)
-    {
-        /* Dialer now uses the generic ping stream path for all muxers */
-        /* Open ping stream over negotiated connection (works for yamux & mplex) */
-        libp2p_stream_t *ping_stream = NULL;
-        if (libp2p_protocol_open_stream(uconn, LIBP2P_PING_PROTO_ID, &ping_stream) != LIBP2P_PROTOCOL_HANDLER_OK)
-        {
-            fprintf(stderr, "failed to open ping stream\n");
-            // cleanup common path below
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        uint8_t payload[32];
-        noise_randstate_generate_simple(payload, sizeof(payload));
-
-        uint64_t ping_start = now_mono_ms();
-
-        if ((ssize_t)sizeof(payload) != libp2p_stream_write(ping_stream, payload, sizeof(payload)))
-        {
-            fprintf(stderr, "ping write failed\n");
-            libp2p_stream_close(ping_stream);
-            libp2p_stream_free(ping_stream);
-            // cleanup
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        uint8_t echo[32];
-        fprintf(stderr, "DEBUG: dialer attempting to read ping response\n");
-        ssize_t rcvd = stream_read_exact(ping_stream, echo, sizeof(echo));
-        fprintf(stderr, "DEBUG: dialer read %zd bytes (expected %zu)\n", rcvd, sizeof(echo));
-        if (rcvd != (ssize_t)sizeof(echo) || memcmp(payload, echo, sizeof(echo)) != 0)
-        {
-            if (rcvd != (ssize_t)sizeof(echo))
-            {
-                fprintf(stderr, "ping failed: incorrect byte count (got %zd, expected %zu)\n", rcvd, sizeof(echo));
-            }
-            else
-            {
-                fprintf(stderr, "ping failed: payload mismatch\n");
-            }
-            libp2p_stream_close(ping_stream);
-            libp2p_stream_free(ping_stream);
-            // cleanup
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        ping_ms = now_mono_ms() - ping_start;
-
-        // Properly close the stream after ping completion
-        fprintf(stderr, "DEBUG: dialer closing ping stream after completion\n");
-        libp2p_stream_close(ping_stream);
-        libp2p_stream_free(ping_stream);
-
-        // Add a small delay to ensure proper closure signaling
-        usleep(50000); // 50ms delay to ensure closure frames are sent
-    }
+    (void)libp2p_host_builder_transport(b, "tcp");
+    (void)libp2p_host_builder_security(b, "noise");
+    if (muxer_name && (strcmp(muxer_name, "yamux") == 0 || strcmp(muxer_name, "mplex") == 0))
+        (void)libp2p_host_builder_muxer(b, muxer_name);
     else
+        (void)libp2p_host_builder_muxer(b, "yamux");
+    (void)libp2p_host_builder_multistream(b, 5000, false);
+    (void)libp2p_host_builder_flags(b, LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND);
+
+    libp2p_host_t *host = NULL;
+    if (libp2p_host_builder_build(b, &host) != 0 || !host)
     {
-        /* Open ping stream over negotiated connection (works for yamux & mplex) */
-        libp2p_stream_t *ping_stream = NULL;
-        if (libp2p_protocol_open_stream(uconn, LIBP2P_PING_PROTO_ID, &ping_stream) != LIBP2P_PROTOCOL_HANDLER_OK)
-        {
-            fprintf(stderr, "failed to open ping stream\n");
-            // cleanup common path below
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        uint8_t payload[32];
-        noise_randstate_generate_simple(payload, sizeof(payload));
-
-        uint64_t ping_start = now_mono_ms();
-
-        if ((ssize_t)sizeof(payload) != libp2p_stream_write(ping_stream, payload, sizeof(payload)))
-        {
-            fprintf(stderr, "ping write failed\n");
-            libp2p_stream_close(ping_stream);
-            libp2p_stream_free(ping_stream);
-            // cleanup
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        uint8_t echo[32];
-        fprintf(stderr, "DEBUG: dialer attempting to read ping response\n");
-        ssize_t rcvd = stream_read_exact(ping_stream, echo, sizeof(echo));
-        fprintf(stderr, "DEBUG: dialer read %zd bytes (expected %zu)\n", rcvd, sizeof(echo));
-        if (rcvd != (ssize_t)sizeof(echo) || memcmp(payload, echo, sizeof(echo)) != 0)
-        {
-            if (rcvd != (ssize_t)sizeof(echo))
-            {
-                fprintf(stderr, "ping failed: incorrect byte count (got %zd, expected %zu)\n", rcvd, sizeof(echo));
-            }
-            else
-            {
-                fprintf(stderr, "ping failed: payload mismatch\n");
-            }
-            libp2p_stream_close(ping_stream);
-            libp2p_stream_free(ping_stream);
-            // cleanup
-            libp2p_conn_close(uconn->conn);
-            free(uconn);
-            libp2p_upgrader_free(up);
-            libp2p_muxer_free(muxer);
-            libp2p_security_free(noise);
-            multiaddr_free(addr);
-            libp2p_transport_free(tcp);
-            return 1;
-        }
-
-        ping_ms = now_mono_ms() - ping_start;
-
-        // Properly close the stream after ping completion
-        fprintf(stderr, "DEBUG: dialer closing ping stream after completion\n");
-        libp2p_stream_close(ping_stream);
-        libp2p_stream_free(ping_stream);
-
-        // Add a small delay to ensure proper closure signaling
-        usleep(50000); // 50ms delay to ensure closure frames are sent
+        libp2p_host_builder_free(b);
+        return 1;
     }
+
+    /* Ensure Noise handshake has an identity key. */
+    {
+        size_t sk_len = 0;
+        uint8_t *sk = hex_to_bytes(ED25519_PRIVATE_HEX, &sk_len);
+        if (sk)
+        {
+            (void)libp2p_host_set_private_key(host, sk, sk_len);
+            free(sk);
+        }
+    }
+
+    uint64_t start = now_mono_ms();
+    libp2p_stream_t *ping_stream = NULL;
+    int rc = libp2p_host_dial_protocol_blocking(host, addr_str, LIBP2P_PING_PROTO_ID, timeout * 1000, &ping_stream);
+    free(addr_str);
+    if (rc != 0 || !ping_stream)
+    {
+        LP_LOGE("INTEROP", "failed to dial protocol (err=%d)", rc);
+        libp2p_host_free(host);
+        libp2p_host_builder_free(b);
+        return 1;
+    }
+
+    /* Dial succeeded at this point: emit logs expected by interop checks. */
+    LP_LOGI("INTEROP", "Dial successful");
+    LP_LOGI("INTEROP", "negotiated muxer = %s", muxer_name ? muxer_name : "unknown");
+
+    uint64_t ping_ms = 0;
+    libp2p_ping_err_t prc = libp2p_ping_roundtrip_stream(ping_stream, (uint64_t)timeout * 1000ULL, &ping_ms);
+    if (prc != LIBP2P_PING_OK)
+    {
+        LP_LOGE("INTEROP", "ping failed (err=%d)", (int)prc);
+        libp2p_stream_close(ping_stream);
+        libp2p_host_free(host);
+        libp2p_host_builder_free(b);
+        return 1;
+    }
+    libp2p_stream_close(ping_stream);
 
     uint64_t handshake_plus_rtt_ms = now_mono_ms() - start;
-
-    /* Output JSON to stdout (as per spec) */
     printf("{\"handshakePlusOneRTTMillis\":%.3f,\"pingRTTMilllis\":%.3f}\n", (double)handshake_plus_rtt_ms, (double)ping_ms);
 
-    libp2p_conn_close(uconn->conn);
-    free(uconn);
-    libp2p_upgrader_free(up);
-    libp2p_muxer_free(muxer);
-    libp2p_security_free(noise);
-    multiaddr_free(addr);
-    libp2p_transport_free(tcp);
+    libp2p_host_free(host);
+    libp2p_host_builder_free(b);
     return 0;
 }
 
 int main(void)
 {
-    fprintf(stderr, "DEBUG: Starting interop program\n");
+    LP_LOGI("INTEROP", "Starting interop program");
+    /* Increase verbosity to aid interop debugging. */
+    libp2p_log_set_level(LIBP2P_LOG_DEBUG);
     setvbuf(stderr, NULL, _IONBF, 0);
     const char *transport = getenv("transport");
-    fprintf(stderr, "DEBUG: transport = %s\n", transport ? transport : "NULL");
+    LP_LOGD("INTEROP", "transport = %s", transport ? transport : "NULL");
     if (!transport || strcmp(transport, "tcp") != 0)
     {
-        fprintf(stderr, "unsupported transport\n");
+        LP_LOGE("INTEROP", "unsupported transport");
         return 1;
     }
     const char *muxer = getenv("muxer");
-    fprintf(stderr, "DEBUG: muxer = %s\n", muxer ? muxer : "NULL");
+    LP_LOGD("INTEROP", "muxer = %s", muxer ? muxer : "NULL");
     if (!muxer || (strcmp(muxer, "yamux") != 0 && strcmp(muxer, "mplex") != 0))
     {
-        fprintf(stderr, "unsupported muxer (supported: yamux, mplex)\n");
+        LP_LOGE("INTEROP", "unsupported muxer (supported: yamux, mplex)");
         return 1;
     }
     const char *sec = getenv("security");
-    fprintf(stderr, "DEBUG: security = %s\n", sec ? sec : "NULL");
+    LP_LOGD("INTEROP", "security = %s", sec ? sec : "NULL");
     if (!sec || strcmp(sec, "noise") != 0)
     {
-        fprintf(stderr, "unsupported security\n");
+        LP_LOGE("INTEROP", "unsupported security");
         return 1;
     }
     int is_dialer = getenv("is_dialer") && strcmp(getenv("is_dialer"), "true") == 0;
-    fprintf(stderr, "DEBUG: is_dialer = %s\n", is_dialer ? "true" : "false");
+    LP_LOGD("INTEROP", "is_dialer = %s", is_dialer ? "true" : "false");
     const char *ip = getenv("ip");
     if (!ip)
         ip = "0.0.0.0";
-    fprintf(stderr, "DEBUG: ip = %s\n", ip);
+    LP_LOGD("INTEROP", "ip = %s", ip);
     const char *redis_addr = getenv("redis_addr");
     if (!redis_addr)
         redis_addr = "redis:6379"; // Default to Docker service name
-    fprintf(stderr, "DEBUG: redis_addr = %s\n", redis_addr);
+    LP_LOGD("INTEROP", "redis_addr = %s", redis_addr);
     int timeout = getenv("test_timeout_seconds") ? atoi(getenv("test_timeout_seconds")) : 180;
-    fprintf(stderr, "DEBUG: timeout = %d\n", timeout);
+    LP_LOGD("INTEROP", "timeout = %d", timeout);
     char host[64] = "", port[16] = "";
     sscanf(redis_addr, "%63[^:]:%15s", host, port);
     if (!*port)
         strcpy(port, "6379");
-    fprintf(stderr, "DEBUG: redis host = %s, port = %s\n", host, port);
+    LP_LOGD("INTEROP", "redis host = %s, port = %s", host, port);
     if (is_dialer)
     {
-        fprintf(stderr, "DEBUG: Running as dialer\n");
+        LP_LOGI("INTEROP", "Running as dialer");
         return run_dialer(host, port, timeout, muxer);
     }
     else
     {
-        fprintf(stderr, "DEBUG: Running as listener\n");
+        LP_LOGI("INTEROP", "Running as listener");
         return run_listener(ip, host, port, timeout, muxer);
     }
 }

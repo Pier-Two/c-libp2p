@@ -15,12 +15,12 @@ extern "C"
  */
 typedef enum
 {
-    UNSIGNED_VARINT_OK = 0,               /**< No error. */
-    UNSIGNED_VARINT_ERR_NULL_PTR = -1,    /**< A required pointer argument was NULL. */
-    UNSIGNED_VARINT_ERR_BUFFER_OVER = -2, /**< The output buffer is not large enough. */
-    UNSIGNED_VARINT_ERR_EMPTY_INPUT = -3, /**< The input buffer is empty. */
-    UNSIGNED_VARINT_ERR_TOO_LONG = -4,    /**< Exceeded 9-byte (63-bit) practical maximum or incomplete varint. */
-    UNSIGNED_VARINT_ERR_NOT_MINIMAL = -5, /**< The encoding was not minimal. */
+    UNSIGNED_VARINT_OK = 0,                 /**< No error. */
+    UNSIGNED_VARINT_ERR_NULL_PTR = -1,      /**< A required pointer argument was NULL. */
+    UNSIGNED_VARINT_ERR_BUFFER_OVER = -2,   /**< The output buffer is not large enough. */
+    UNSIGNED_VARINT_ERR_EMPTY_INPUT = -3,   /**< The input buffer is empty. */
+    UNSIGNED_VARINT_ERR_TOO_LONG = -4,      /**< Exceeded 9-byte (63-bit) practical maximum or incomplete varint. */
+    UNSIGNED_VARINT_ERR_NOT_MINIMAL = -5,   /**< The encoding was not minimal. */
     UNSIGNED_VARINT_ERR_VALUE_OVERFLOW = -6 /**< The decoded value does not fit in 63 bits. */
 } unsigned_varint_err_t;
 
@@ -37,12 +37,7 @@ typedef enum
  *         UNSIGNED_VARINT_ERR_BUFFER_OVER if @p out_size is too small.
  *         UNSIGNED_VARINT_ERR_VALUE_OVERFLOW if @p value > 2^63-1.
  */
-unsigned_varint_err_t unsigned_varint_encode(
-    uint64_t value,
-    uint8_t *out,
-    size_t out_size,
-    size_t *written
-);
+unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_t out_size, size_t *written);
 
 /**
  * @brief Decodes a varint from the given buffer into a 64-bit unsigned integer.
@@ -59,12 +54,7 @@ unsigned_varint_err_t unsigned_varint_encode(
  *         UNSIGNED_VARINT_ERR_NOT_MINIMAL if the varint is not minimally encoded.
  *         UNSIGNED_VARINT_ERR_VALUE_OVERFLOW if the decoded value > 2^63-1.
  */
-unsigned_varint_err_t unsigned_varint_decode(
-    const uint8_t *in,
-    size_t in_size,
-    uint64_t *value,
-    size_t *read
-);
+unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, uint64_t *value, size_t *read);
 
 /**
  * @brief Returns how many bytes are needed to encode the given value as a varint.

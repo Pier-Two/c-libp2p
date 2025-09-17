@@ -25,8 +25,7 @@ extern "C"
  * @param out_len The size of the output buffer.
  * @return The number of characters written to the output buffer, or an error code.
  */
-int multibase_base64_url_pad_encode(const uint8_t *data, size_t data_len, char *out,
-                                    size_t out_len);
+int multibase_base64_url_pad_encode(const uint8_t *data, size_t data_len, char *out, size_t out_len);
 
 /**
  * @brief Decode a Base64 URL padded encoded string (RFC4648) with padding.

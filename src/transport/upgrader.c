@@ -5,7 +5,8 @@
 
 /* Context for the upgrader.  Currently very small and only stores the
  * configuration pointers provided at construction time. */
-struct libp2p_upgrader_ctx {
+struct libp2p_upgrader_ctx
+{
     const peer_id_t *local_peer;
     const struct libp2p_security *const *security;
     size_t n_security;
@@ -28,11 +29,8 @@ static void uconn_free(libp2p_uconn_t *uc)
 /* Upgrader methods                                                          */
 /* ------------------------------------------------------------------------- */
 
-static libp2p_upgrader_err_t
-upgrader_upgrade_outbound(libp2p_upgrader_t *self,
-                          libp2p_conn_t *raw,
-                          const peer_id_t *remote_hint,
-                          libp2p_uconn_t **out)
+static libp2p_upgrader_err_t upgrader_upgrade_outbound(libp2p_upgrader_t *self, libp2p_conn_t *raw, const peer_id_t *remote_hint,
+                                                       libp2p_uconn_t **out)
 {
     if (!self || !raw || !out)
         return LIBP2P_UPGRADER_ERR_NULL_PTR;
@@ -46,35 +44,36 @@ upgrader_upgrade_outbound(libp2p_upgrader_t *self,
     libp2p_conn_t *secured = NULL;
     peer_id_t *remote_peer = NULL;
     libp2p_security_err_t rc =
-        libp2p_noise_negotiate_outbound((libp2p_security_t *)ctx->security[0],
-                                        raw, remote_hint,
-                                        ctx->handshake_timeout_ms,
-                                        &secured, &remote_peer);
+        libp2p_noise_negotiate_outbound((libp2p_security_t *)ctx->security[0], raw, remote_hint, ctx->handshake_timeout_ms, &secured, &remote_peer);
     if (rc != LIBP2P_SECURITY_OK)
         return LIBP2P_UPGRADER_ERR_HANDSHAKE;
 
     const libp2p_muxer_t *selected = NULL;
-    if (ctx->muxers && ctx->n_muxers > 0) {
-        for (size_t i = 0; i < ctx->n_muxers; i++) {
-            libp2p_muxer_err_t mrc =
-                libp2p_muxer_negotiate_outbound((libp2p_muxer_t *)ctx->muxers[i],
-                                                secured,
-                                                ctx->handshake_timeout_ms);
-            if (mrc == LIBP2P_MUXER_OK) {
+    if (ctx->muxers && ctx->n_muxers > 0)
+    {
+        for (size_t i = 0; i < ctx->n_muxers; i++)
+        {
+            libp2p_muxer_err_t mrc = libp2p_muxer_negotiate_outbound((libp2p_muxer_t *)ctx->muxers[i], secured, ctx->handshake_timeout_ms);
+            if (mrc == LIBP2P_MUXER_OK)
+            {
                 selected = ctx->muxers[i];
                 break;
             }
         }
-        if (!selected) {
+        if (!selected)
+        {
             libp2p_conn_free(secured);
             peer_id_destroy(remote_peer);
             return LIBP2P_UPGRADER_ERR_MUXER;
         }
-    } else {
+    }
+    else
+    {
     }
 
     libp2p_uconn_t *uc = calloc(1, sizeof(*uc));
-    if (!uc) {
+    if (!uc)
+    {
         libp2p_conn_free(secured);
         peer_id_destroy(remote_peer);
         return LIBP2P_UPGRADER_ERR_INTERNAL;
@@ -86,10 +85,7 @@ upgrader_upgrade_outbound(libp2p_upgrader_t *self,
     return LIBP2P_UPGRADER_OK;
 }
 
-static libp2p_upgrader_err_t
-upgrader_upgrade_inbound(libp2p_upgrader_t *self,
-                         libp2p_conn_t *raw,
-                         libp2p_uconn_t **out)
+static libp2p_upgrader_err_t upgrader_upgrade_inbound(libp2p_upgrader_t *self, libp2p_conn_t *raw, libp2p_uconn_t **out)
 {
     if (!self || !raw || !out)
         return LIBP2P_UPGRADER_ERR_NULL_PTR;
@@ -101,34 +97,36 @@ upgrader_upgrade_inbound(libp2p_upgrader_t *self,
     libp2p_conn_t *secured = NULL;
     peer_id_t *remote_peer = NULL;
     libp2p_security_err_t rc =
-        libp2p_noise_negotiate_inbound((libp2p_security_t *)ctx->security[0],
-                                       raw, ctx->handshake_timeout_ms,
-                                       &secured, &remote_peer);
+        libp2p_noise_negotiate_inbound((libp2p_security_t *)ctx->security[0], raw, ctx->handshake_timeout_ms, &secured, &remote_peer);
     if (rc != LIBP2P_SECURITY_OK)
         return LIBP2P_UPGRADER_ERR_HANDSHAKE;
 
     const libp2p_muxer_t *selected = NULL;
-    if (ctx->muxers && ctx->n_muxers > 0) {
-        for (size_t i = 0; i < ctx->n_muxers; i++) {
-            libp2p_muxer_err_t mrc =
-                libp2p_muxer_negotiate_inbound((libp2p_muxer_t *)ctx->muxers[i],
-                                               secured,
-                                               ctx->handshake_timeout_ms);
-            if (mrc == LIBP2P_MUXER_OK) {
+    if (ctx->muxers && ctx->n_muxers > 0)
+    {
+        for (size_t i = 0; i < ctx->n_muxers; i++)
+        {
+            libp2p_muxer_err_t mrc = libp2p_muxer_negotiate_inbound((libp2p_muxer_t *)ctx->muxers[i], secured, ctx->handshake_timeout_ms);
+            if (mrc == LIBP2P_MUXER_OK)
+            {
                 selected = ctx->muxers[i];
                 break;
             }
         }
-        if (!selected) {
+        if (!selected)
+        {
             libp2p_conn_free(secured);
             peer_id_destroy(remote_peer);
             return LIBP2P_UPGRADER_ERR_MUXER;
         }
-    } else {
+    }
+    else
+    {
     }
 
     libp2p_uconn_t *uc = calloc(1, sizeof(*uc));
-    if (!uc) {
+    if (!uc)
+    {
         libp2p_conn_free(secured);
         peer_id_destroy(remote_peer);
         return LIBP2P_UPGRADER_ERR_INTERNAL;
@@ -165,7 +163,8 @@ libp2p_upgrader_t *libp2p_upgrader_new(const libp2p_upgrader_config_t *cfg)
         return NULL;
     libp2p_upgrader_t *u = calloc(1, sizeof(*u));
     struct libp2p_upgrader_ctx *ctx = calloc(1, sizeof(*ctx));
-    if (!u || !ctx) {
+    if (!u || !ctx)
+    {
         free(u);
         free(ctx);
         return NULL;

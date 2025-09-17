@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -23,24 +24,28 @@ ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     }
 
     /* deadline handling */
-    if (ctx->deadline_at > 0)
+    uint64_t deadline = atomic_load_explicit(&ctx->deadline_at, memory_order_relaxed);
+    if (deadline > 0)
     {
         uint64_t now = now_mono_ms();
-        if (now < ctx->deadline_at)
+        if (now < deadline)
         {
-            int timeout = (int)(ctx->deadline_at - now);
+            int timeout = (int)(deadline - now);
             struct pollfd pfd = {.fd = ctx->fd, .events = POLLIN};
             int r = poll(&pfd, 1, timeout);
             if (r <= 0)
             {
-                if (r == 0 || errno == EINTR)
-                    return LIBP2P_CONN_ERR_AGAIN;
+                if (r == 0)
+                    return LIBP2P_CONN_ERR_TIMEOUT; /* poll timed out */
+                if (errno == EINTR)
+                    return LIBP2P_CONN_ERR_AGAIN; /* try again      */
+                fprintf(stderr, "[TCP_ERR] poll(POLLIN) failed errno=%d\n", errno);
                 return LIBP2P_CONN_ERR_INTERNAL;
             }
         }
         else
         {
-            return LIBP2P_CONN_ERR_AGAIN; /* past deadline */
+            return LIBP2P_CONN_ERR_TIMEOUT; /* past deadline */
         }
     }
 
@@ -60,6 +65,7 @@ ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return LIBP2P_CONN_ERR_AGAIN;
+        fprintf(stderr, "[TCP_ERR] read failed errno=%d\n", errno);
         return LIBP2P_CONN_ERR_INTERNAL;
     }
 #endif
@@ -74,30 +80,36 @@ ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
 ssize_t tcp_conn_write(libp2p_conn_t *c, const void *buf, size_t len)
 {
     tcp_conn_ctx_t *ctx = c->ctx;
+    /* Ensure SIGPIPE is ignored process-wide so writes to a closed socket
+     * do not terminate the test process. This is cheap thanks to pthread_once. */
+    ignore_sigpipe_once();
     if (atomic_load(&ctx->closed))
     {
         return LIBP2P_CONN_ERR_CLOSED;
     }
 
     /* deadline handling */
-    if (ctx->deadline_at > 0)
+    uint64_t deadline = atomic_load_explicit(&ctx->deadline_at, memory_order_relaxed);
+    if (deadline > 0)
     {
         uint64_t now = now_mono_ms();
-        if (now < ctx->deadline_at)
+        if (now < deadline)
         {
-            int timeout = (int)(ctx->deadline_at - now);
+            int timeout = (int)(deadline - now);
             struct pollfd pfd = {.fd = ctx->fd, .events = POLLOUT};
             int r = poll(&pfd, 1, timeout);
             if (r <= 0)
             {
-                if (r == 0 || errno == EINTR)
-                    return LIBP2P_CONN_ERR_AGAIN;
+                if (r == 0)
+                    return LIBP2P_CONN_ERR_TIMEOUT; /* poll timed out */
+                if (errno == EINTR)
+                    return LIBP2P_CONN_ERR_AGAIN; /* try again      */
                 return LIBP2P_CONN_ERR_INTERNAL;
             }
         }
         else
         {
-            return LIBP2P_CONN_ERR_AGAIN; /* past deadline */
+            return LIBP2P_CONN_ERR_TIMEOUT; /* past deadline */
         }
     }
 
@@ -117,6 +129,11 @@ ssize_t tcp_conn_write(libp2p_conn_t *c, const void *buf, size_t len)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return LIBP2P_CONN_ERR_AGAIN;
+        if (errno == EPIPE)
+        {
+            /* peer closed connection */
+            return LIBP2P_CONN_ERR_CLOSED;
+        }
         return LIBP2P_CONN_ERR_INTERNAL;
     }
 #endif
@@ -126,7 +143,8 @@ ssize_t tcp_conn_write(libp2p_conn_t *c, const void *buf, size_t len)
 libp2p_conn_err_t tcp_conn_set_deadline(libp2p_conn_t *c, uint64_t ms)
 {
     tcp_conn_ctx_t *ctx = c->ctx;
-    ctx->deadline_at = (ms == 0) ? 0 : now_mono_ms() + ms;
+    uint64_t new_deadline = (ms == 0) ? 0 : now_mono_ms() + ms;
+    atomic_store_explicit(&ctx->deadline_at, new_deadline, memory_order_relaxed);
     return LIBP2P_CONN_OK;
 }
 
@@ -176,8 +194,17 @@ libp2p_conn_err_t tcp_conn_close(libp2p_conn_t *c)
 
     atomic_store(&ctx->closed, true);
     shutdown(ctx->fd, SHUT_RDWR);
-    close(ctx->fd);
     return LIBP2P_CONN_OK;
+}
+
+int tcp_conn_get_fd(libp2p_conn_t *c)
+{
+    if (!c || !c->ctx)
+    {
+        return -1;
+    }
+    tcp_conn_ctx_t *ctx = c->ctx;
+    return ctx->fd;
 }
 
 void tcp_conn_free(libp2p_conn_t *c)
@@ -190,9 +217,17 @@ void tcp_conn_free(libp2p_conn_t *c)
     tcp_conn_ctx_t *ctx = c->ctx;
     if (ctx)
     {
-        if (!atomic_load(&ctx->closed))
+        int fd = ctx->fd;
+        ctx->fd = -1;
+        if (fd >= 0)
         {
-            close(ctx->fd);
+            shutdown(fd, SHUT_RDWR);
+            int fl = fcntl(fd, F_GETFL, 0);
+            if (fl != -1)
+            {
+                (void)fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+            }
+            close(fd);
         }
 
         multiaddr_free(ctx->local);
@@ -210,6 +245,7 @@ const libp2p_conn_vtbl_t TCP_CONN_VTBL = {
     .remote_addr = tcp_conn_remote,
     .close = tcp_conn_close,
     .free = tcp_conn_free,
+    .get_fd = tcp_conn_get_fd,
 };
 
 libp2p_conn_t *make_tcp_conn(int fd)

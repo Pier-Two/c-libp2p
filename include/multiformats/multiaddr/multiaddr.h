@@ -138,8 +138,7 @@ int multiaddr_get_protocol_code(const multiaddr_t *addr, size_t index, uint64_t 
  *
  * @return 0 on success, or a negative multiaddr_error_t code on error.
  */
-int multiaddr_get_address_bytes(const multiaddr_t *addr, size_t index, uint8_t *buf,
-                                size_t *buf_len);
+int multiaddr_get_address_bytes(const multiaddr_t *addr, size_t index, uint8_t *buf, size_t *buf_len);
 
 /**
  * @brief Create a new multiaddr that is `addr` encapsulated with another (sub) multiaddr.

@@ -359,7 +359,7 @@ static void test_handshake_success(void)
     TEST_OK("dial", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept", rc == 0 && srv, "rc=%d", rc);
 
     /* use blocking mode for handshake */
@@ -390,7 +390,7 @@ static void test_handshake_success(void)
     {
         n = libp2p_conn_read(srv, buf, sizeof(buf));
         if (n == LIBP2P_CONN_ERR_AGAIN)
-            usleep(2000);
+            usleep(100);
     }
     // printf("read bytes:");
     // for (int i = 0; i < n && i < 16; i++)
@@ -472,7 +472,7 @@ static void test_identity_handshake_success(void)
     TEST_OK("dial (id)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (id)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -505,7 +505,7 @@ static void test_identity_handshake_success(void)
     {
         n = libp2p_conn_read(srv, buf, sizeof(buf));
         if (n == LIBP2P_CONN_ERR_AGAIN)
-            usleep(2000);
+            usleep(100);
     }
     // printf("read bytes:");
     // for (int i = 0; i < n && i < 16; i++)
@@ -576,7 +576,7 @@ static void test_identity_hint_mismatch(void)
     TEST_OK("dial (mm)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (mm)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -659,7 +659,7 @@ static void test_secp256k1_identity_handshake_success(void)
     TEST_OK("dial (secp256k1)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (secp256k1)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -688,7 +688,7 @@ static void test_secp256k1_identity_handshake_success(void)
     {
         n = libp2p_conn_read(srv, buf, sizeof(buf));
         if (n == LIBP2P_CONN_ERR_AGAIN)
-            usleep(2000);
+            usleep(100);
     }
     // printf("read bytes:");
     // for (int i = 0; i < n && i < 16; i++)
@@ -762,7 +762,7 @@ static void test_rsa_identity_handshake_success(void)
     TEST_OK("dial (rsa)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (rsa)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -855,7 +855,7 @@ static void test_ecdsa_identity_handshake_success(void)
     TEST_OK("dial (ecdsa)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (ecdsa)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -955,7 +955,7 @@ static void test_early_data_extensions(void)
     TEST_OK("dial (ed)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (ed)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -1045,7 +1045,7 @@ static void test_missing_static_key(void)
     TEST_OK("dial (msk)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (msk)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -1368,7 +1368,7 @@ static void test_corrupt_payload(void)
     TEST_OK("dial (corrupt)", rc == 0 && cli_raw, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (corrupt)", rc == 0 && srv, "rc=%d", rc);
 
     libp2p_conn_t *cli = make_corrupt_conn(cli_raw, 3);
@@ -1470,7 +1470,7 @@ static void test_oversized_payload(void)
     TEST_OK("dial (oversize)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (oversize)", rc == 0 && srv, "rc=%d", rc);
 
     libp2p_conn_set_deadline(cli, 1000);
@@ -1554,7 +1554,7 @@ static void test_initiator_payload_msg1(void)
     TEST_OK("dial (msg1)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (msg1)", rc == 0 && srv, "rc=%d", rc);
 
     libp2p_conn_set_deadline(cli, 1000);
@@ -1636,7 +1636,7 @@ static void test_max_plaintext_limit(void)
     TEST_OK("dial (maxpt)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (maxpt)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -1656,25 +1656,8 @@ static void test_max_plaintext_limit(void)
 
     TEST_OK("handshake (maxpt)", cli_args.rc == LIBP2P_SECURITY_OK && srv_args.rc == LIBP2P_SECURITY_OK, "cli=%d srv=%d", cli_args.rc, srv_args.rc);
 
-    typedef struct noise_conn_ctx_chk
-    {
-        libp2p_conn_t *raw;
-        NoiseCipherState *send;
-        NoiseCipherState *recv;
-        uint8_t *buf;
-        size_t buf_len;
-        size_t buf_pos;
-        uint8_t *early_data;
-        size_t early_data_len;
-        uint8_t *extensions;
-        size_t extensions_len;
-        noise_extensions_t *parsed_ext;
-        size_t max_plaintext;
-        uint64_t send_count;
-        uint64_t recv_count;
-    } noise_conn_ctx_chk;
-    noise_conn_ctx_chk *chk = cli_args.out->ctx;
-    TEST_OK("maxpt stored", chk->max_plaintext == 8, "max=%zu", chk->max_plaintext);
+    size_t max_plaintext = noise_conn_debug_get_max_plaintext(cli_args.out);
+    TEST_OK("maxpt stored", max_plaintext == 8, "max=%zu", max_plaintext);
 
     libp2p_conn_t *sc = cli_args.out;
     libp2p_conn_t *ss = srv_args.out;
@@ -1748,7 +1731,7 @@ static void test_message_counter_limit(void)
     TEST_OK("dial (msgcnt)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (msgcnt)", rc == 0 && srv, "rc=%d", rc);
 
     tcp_conn_ctx_t *cctx = cli->ctx;
@@ -1768,31 +1751,12 @@ static void test_message_counter_limit(void)
 
     TEST_OK("handshake (msgcnt)", cli_args.rc == LIBP2P_SECURITY_OK && srv_args.rc == LIBP2P_SECURITY_OK, "cli=%d srv=%d", cli_args.rc, srv_args.rc);
 
-    typedef struct noise_conn_ctx_chk2
-    {
-        libp2p_conn_t *raw;
-        NoiseCipherState *send;
-        NoiseCipherState *recv;
-        uint8_t *buf;
-        size_t buf_len;
-        size_t buf_pos;
-        uint8_t *early_data;
-        size_t early_data_len;
-        uint8_t *extensions;
-        size_t extensions_len;
-        noise_extensions_t *parsed_ext;
-        size_t max_plaintext;
-        uint64_t send_count;
-        uint64_t recv_count;
-    } noise_conn_ctx_chk2;
-    noise_conn_ctx_chk2 *chk_cli = cli_args.out->ctx;
-
-    chk_cli->send_count = UINT64_MAX;
+    noise_conn_debug_set_send_count(cli_args.out, UINT64_MAX);
     ssize_t w = libp2p_conn_write(cli_args.out, "x", 1);
     TEST_OK("send limit", w == LIBP2P_CONN_ERR_CLOSED, "w=%zd", w);
 
-    chk_cli->send_count = 0;
-    chk_cli->recv_count = UINT64_MAX;
+    noise_conn_debug_set_send_count(cli_args.out, 0);
+    noise_conn_debug_set_recv_count(cli_args.out, UINT64_MAX);
     char tmp[1];
     ssize_t r = libp2p_conn_read(cli_args.out, tmp, sizeof(tmp));
     TEST_OK("recv limit", r == LIBP2P_CONN_ERR_CLOSED, "r=%zd", r);
@@ -1861,7 +1825,7 @@ static void test_unregistered_extension(void)
     TEST_OK("dial (ureg)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (ureg)", rc == 0 && srv, "rc=%d", rc);
 
     libp2p_conn_set_deadline(cli, 1000);
@@ -1949,7 +1913,7 @@ static void test_experimental_extension(void)
     TEST_OK("dial (exp)", rc == 0 && cli, "rc=%d", rc);
 
     libp2p_conn_t *srv = NULL;
-    rc = accept_with_timeout(lst, &srv, 100, 2000);
+    rc = accept_with_timeout(lst, &srv, 20, 100);
     TEST_OK("accept (exp)", rc == 0 && srv, "rc=%d", rc);
 
     libp2p_conn_set_deadline(cli, 1000);

@@ -2,15 +2,16 @@
 #define PEER_ID_RSA_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
-#include "peer_id/peer_id_proto.h"
 #include "peer_id/peer_id.h"
+#include "peer_id/peer_id_proto.h"
 
 #define PEER_ID_RSA_KEY_TYPE 0
 
@@ -27,10 +28,7 @@ extern "C" {
  *
  * @return PEER_ID_SUCCESS on success, or an appropriate error code on failure.
  */
-peer_id_error_t peer_id_create_from_private_key_rsa(const uint8_t *key_data,
-                                                    size_t key_data_len,
-                                                    uint8_t **pubkey_buf,
-                                                    size_t *pubkey_len);
+peer_id_error_t peer_id_create_from_private_key_rsa(const uint8_t *key_data, size_t key_data_len, uint8_t **pubkey_buf, size_t *pubkey_len);
 
 #ifdef __cplusplus
 }

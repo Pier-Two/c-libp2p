@@ -26,12 +26,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "transport/connection.h"  /* raw conn            */
-#include "peer_id/peer_id.h"       /* peer identity       */
-#include "transport/muxer.h"       /* muxer definitions    */
+#include "peer_id/peer_id.h"      /* peer identity       */
+#include "transport/connection.h" /* raw conn            */
+#include "transport/muxer.h"      /* muxer definitions    */
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 struct libp2p_security; /* Noise, TLS, etc. (defined elsewhere) */
@@ -40,10 +41,11 @@ struct libp2p_muxer;    /* Yamux, MPLEX, … (defined elsewhere)  */
 /**
  * @brief Secured + multiplexed connection produced by the upgrader.
  */
-struct libp2p_upgraded_conn {
-    libp2p_conn_t           *conn;
-    peer_id_t               *remote_peer;
-    const libp2p_muxer_t    *muxer;
+struct libp2p_upgraded_conn
+{
+    libp2p_conn_t *conn;
+    peer_id_t *remote_peer;
+    const libp2p_muxer_t *muxer;
 };
 typedef struct libp2p_upgraded_conn libp2p_uconn_t;
 
@@ -51,16 +53,15 @@ typedef struct libp2p_upgraded_conn libp2p_uconn_t;
 struct libp2p_upgrader;
 typedef struct libp2p_upgrader libp2p_upgrader_t;
 
-
 typedef enum
 {
-    LIBP2P_UPGRADER_OK = 0,               /**< Success.                                */
-    LIBP2P_UPGRADER_ERR_NULL_PTR   = -1,  /**< Required pointer was NULL.              */
-    LIBP2P_UPGRADER_ERR_TIMEOUT    = -2,  /**< Handshake deadline expired.             */
-    LIBP2P_UPGRADER_ERR_SECURITY   = -3,  /**< No mutually supported security proto.   */
-    LIBP2P_UPGRADER_ERR_MUXER      = -4,  /**< No mutually supported muxer proto.      */
-    LIBP2P_UPGRADER_ERR_HANDSHAKE  = -5,  /**< Security handshake failed.             */
-    LIBP2P_UPGRADER_ERR_INTERNAL   = -6   /**< Unexpected internal failure.            */
+    LIBP2P_UPGRADER_OK = 0,             /**< Success.                                */
+    LIBP2P_UPGRADER_ERR_NULL_PTR = -1,  /**< Required pointer was NULL.              */
+    LIBP2P_UPGRADER_ERR_TIMEOUT = -2,   /**< Handshake deadline expired.             */
+    LIBP2P_UPGRADER_ERR_SECURITY = -3,  /**< No mutually supported security proto.   */
+    LIBP2P_UPGRADER_ERR_MUXER = -4,     /**< No mutually supported muxer proto.      */
+    LIBP2P_UPGRADER_ERR_HANDSHAKE = -5, /**< Security handshake failed.             */
+    LIBP2P_UPGRADER_ERR_INTERNAL = -6   /**< Unexpected internal failure.            */
 } libp2p_upgrader_err_t;
 
 /**
@@ -81,11 +82,11 @@ typedef struct
 
     /* Security transports */
     const struct libp2p_security *const *security; /**< NULL-terminated array. */
-    size_t                        n_security;      /**< Number of entries.     */
+    size_t n_security;                             /**< Number of entries.     */
 
     /* Stream multiplexers */
-    const struct libp2p_muxer *const *muxers;      /**< NULL-terminated array. */
-    size_t                     n_muxers;           /**< Number of entries.     */
+    const struct libp2p_muxer *const *muxers; /**< NULL-terminated array. */
+    size_t n_muxers;                          /**< Number of entries.     */
 
     /* Handshake deadline (0 → no timeout) */
     uint64_t handshake_timeout_ms;
@@ -101,12 +102,7 @@ typedef struct
 static inline libp2p_upgrader_config_t libp2p_upgrader_config_default(void)
 {
     return (libp2p_upgrader_config_t){
-        .local_peer           = NULL,
-        .security             = NULL,
-        .n_security           = 0,
-        .muxers               = NULL,
-        .n_muxers             = 0,
-        .handshake_timeout_ms = 0};
+        .local_peer = NULL, .security = NULL, .n_security = 0, .muxers = NULL, .n_muxers = 0, .handshake_timeout_ms = 0};
 }
 
 /**
@@ -123,10 +119,7 @@ typedef struct
      * @param remote_hint   Optional expected remote peer (may be NULL).
      * @param out           On success, new upgraded connection.
      */
-    libp2p_upgrader_err_t (*upgrade_outbound)(libp2p_upgrader_t       *self,
-                                              libp2p_conn_t           *raw,
-                                              const peer_id_t         *remote_hint,
-                                              libp2p_uconn_t         **out);
+    libp2p_upgrader_err_t (*upgrade_outbound)(libp2p_upgrader_t *self, libp2p_conn_t *raw, const peer_id_t *remote_hint, libp2p_uconn_t **out);
 
     /**
      * @brief Upgrade an *inbound* (acceptor) raw connection.
@@ -135,9 +128,7 @@ typedef struct
      * @param raw    Consumed raw transport connection.
      * @param out    On success, new upgraded connection.
      */
-    libp2p_upgrader_err_t (*upgrade_inbound)(libp2p_upgrader_t *self,
-                                             libp2p_conn_t     *raw,
-                                             libp2p_uconn_t   **out);
+    libp2p_upgrader_err_t (*upgrade_inbound)(libp2p_upgrader_t *self, libp2p_conn_t *raw, libp2p_uconn_t **out);
 
     /* Lifecycle management */
 
@@ -153,7 +144,7 @@ typedef struct
 struct libp2p_upgrader
 {
     const libp2p_upgrader_vtbl_t *vt;
-    void                         *ctx;   /**< Implementation private data. */
+    void *ctx; /**< Implementation private data. */
 };
 
 /* Constructor / destructor */
@@ -179,13 +170,11 @@ libp2p_upgrader_t *libp2p_upgrader_new(const libp2p_upgrader_config_t *cfg);
  * @param out    Receives the upgraded connection.
  * @return LIBP2P_UPGRADER_OK or an error code.
  */
-static inline libp2p_upgrader_err_t
-libp2p_upgrader_upgrade_outbound(libp2p_upgrader_t *u,
-                                 libp2p_conn_t     *raw,
-                                 const peer_id_t   *remote,
-                                 libp2p_uconn_t   **out)
+static inline libp2p_upgrader_err_t libp2p_upgrader_upgrade_outbound(libp2p_upgrader_t *u, libp2p_conn_t *raw, const peer_id_t *remote,
+                                                                     libp2p_uconn_t **out)
 {
-    if (!u || !raw || !out) return LIBP2P_UPGRADER_ERR_NULL_PTR;
+    if (!u || !raw || !out)
+        return LIBP2P_UPGRADER_ERR_NULL_PTR;
     return u->vt->upgrade_outbound(u, raw, remote, out);
 }
 
@@ -197,12 +186,10 @@ libp2p_upgrader_upgrade_outbound(libp2p_upgrader_t *u,
  * @param out Receives the upgraded connection.
  * @return LIBP2P_UPGRADER_OK or an error code.
  */
-static inline libp2p_upgrader_err_t
-libp2p_upgrader_upgrade_inbound(libp2p_upgrader_t *u,
-                                libp2p_conn_t     *raw,
-                                libp2p_uconn_t   **out)
+static inline libp2p_upgrader_err_t libp2p_upgrader_upgrade_inbound(libp2p_upgrader_t *u, libp2p_conn_t *raw, libp2p_uconn_t **out)
 {
-    if (!u || !raw || !out) return LIBP2P_UPGRADER_ERR_NULL_PTR;
+    if (!u || !raw || !out)
+        return LIBP2P_UPGRADER_ERR_NULL_PTR;
     return u->vt->upgrade_inbound(u, raw, out);
 }
 
@@ -212,8 +199,7 @@ libp2p_upgrader_upgrade_inbound(libp2p_upgrader_t *u,
  * @param u Upgrader instance.
  * @return LIBP2P_UPGRADER_OK or an error code.
  */
-static inline libp2p_upgrader_err_t
-libp2p_upgrader_close(libp2p_upgrader_t *u)
+static inline libp2p_upgrader_err_t libp2p_upgrader_close(libp2p_upgrader_t *u)
 {
     return u && u->vt ? u->vt->close(u) : LIBP2P_UPGRADER_ERR_NULL_PTR;
 }
@@ -223,8 +209,7 @@ libp2p_upgrader_close(libp2p_upgrader_t *u)
  *
  * @param u Upgrader instance (may be NULL).
  */
-static inline void
-libp2p_upgrader_free(libp2p_upgrader_t *u)
+static inline void libp2p_upgrader_free(libp2p_upgrader_t *u)
 {
     if (u && u->vt && u->vt->free)
         u->vt->free(u);

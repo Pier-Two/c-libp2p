@@ -1,486 +1,184 @@
-# Example Dialer and Listener
+# Example Host, Listener, and Dialer
 
-The following example shows a small but complete program that establishes a TCP
-connection to a remote peer and upgrades it with Noise security. Both the **yamux**
-and **mplex** multiplexers are configured so that either can be negotiated. Once
-upgraded, the dialer uses the modern protocol handler API to perform a ping round trip
-and request the peer's identification information.
+The unified API wires transports, security, multiplexing, and protocol
+negotiation through a single `libp2p_host_t`. This guide walks through two small
+programs that use the public headers only: a listener that echoes any payload it
+receives, and a dialer that connects to it.
 
-For an introduction to creating transports see
-[transports.md](transports.md). The code below ties those pieces together using
-the current high-level API.
+Both snippets are intentionally compact; consult `examples/unified_echo.c` and
+the tests under `tests/host/` for production-style patterns with fuller error
+handling.
 
-## Dialer
+## Listener with a custom protocol
 
 ```c
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-#include <noise/protocol.h>
-#include "multiformats/multiaddr/multiaddr.h"
-#include "protocol/tcp/protocol_tcp.h"
-#include "protocol/noise/protocol_noise.h"
-#include "protocol/mplex/protocol_mplex.h"
-#include "protocol/yamux/protocol_yamux.h"
-#include "protocol/ping/protocol_ping.h"
-#include "protocol/identify/protocol_identify.h"
-#include "protocol/protocol_handler.h"
-#include "transport/upgrader.h"
-#include "peer_id/peer_id_secp256k1.h"
 
-// Structure to hold context for protocol handlers
-typedef struct {
-    uint8_t identity_key[32];
-    int completed;
-    int dial_completed;
-} test_context_t;
+#include "libp2p/events.h"
+#include "libp2p/host.h"
+#include "libp2p/host_builder.h"
+#include "libp2p/protocol_listen.h"
+#include "libp2p/stream.h"
 
-// Identify response handler
-static int handle_identify_response(const peer_id_t *remote_peer_id, 
-                                  const libp2p_identify_t *response, 
-                                  void *user_data) {
-    test_context_t *ctx = (test_context_t *)user_data;
-    
-    printf("✅ Received identify response:\n");
-    printf("   Protocol Version: %s\n", response->protocol_version);
-    printf("   Agent Version: %s\n", response->agent_version);
-    printf("   Number of protocols: %zu\n", response->num_protocols);
-    
-    ctx->dial_completed = 1;
-    return 0;
+#define ECHO_PROTO "/example/echo/1.0.0"
+
+static volatile int keep_running = 1;
+static void handle_sigint(int sig) { (void)sig; keep_running = 0; }
+
+static void echo_on_open(libp2p_stream_t *s, void *user_data)
+{
+    (void)user_data;
+    printf("stream opened by %s\n", libp2p_stream_protocol_id(s));
 }
 
-// Identify request handler (for serving incoming requests)
-static int handle_identify_request(const peer_id_t *local_peer_id,
-                                 libp2p_identify_t *response,
-                                 void *user_data) {
-    test_context_t *ctx = (test_context_t *)user_data;
-    
-    // Generate public key from private key
-    uint8_t *pubkey_buf = NULL;
-    size_t pubkey_len = 0;
-    peer_id_error_t err = peer_id_create_from_private_key_secp256k1(
-        ctx->identity_key, sizeof(ctx->identity_key), &pubkey_buf, &pubkey_len);
-    if (err != PEER_ID_SUCCESS) {
-        return -1;
-    }
-    
-    // Fill in response
-    response->protocol_version = strdup("libp2p/1.0.0");
-    response->agent_version = strdup("c-libp2p/0.1.0");
-    response->public_key = pubkey_buf;
-    response->public_key_len = pubkey_len;
-    
-    // Add supported protocols
-    response->protocols = malloc(2 * sizeof(char *));
-    response->protocols[0] = strdup("/ipfs/id/1.0.0");
-    response->protocols[1] = strdup("/ipfs/ping/1.0.0");
-    response->num_protocols = 2;
-    
-    return 0;
+static void echo_on_data(libp2p_stream_t *s, const uint8_t *data, size_t len, void *user_data)
+{
+    (void)user_data;
+    (void)libp2p_stream_write(s, data, len);  /* echo back */
+}
+
+static void echo_on_close(libp2p_stream_t *s, void *user_data)
+{
+    (void)user_data;
+    printf("stream closed for protocol %s\n", libp2p_stream_protocol_id(s));
+    libp2p_stream_close(s);
 }
 
 int main(void)
 {
-    // Variable declarations for proper cleanup
-    libp2p_security_t *noise = NULL;
-    libp2p_muxer_t *yamux = NULL;
-    libp2p_muxer_t *mplex = NULL;
-    libp2p_upgrader_t *upgrader = NULL;
-    libp2p_protocol_handler_registry_t *registry = NULL;
-    libp2p_protocol_handler_ctx_t *handler_ctx = NULL;
-    libp2p_conn_t *raw_conn = NULL;
-    libp2p_uconn_t *uconn = NULL;
-    
-    // Parse multiaddr
-    int err = 0;
-    multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/4001", &err);
-    if (!addr || err != 0) {
-        fprintf(stderr, "failed to parse address\n");
+    signal(SIGINT, handle_sigint);
+
+    libp2p_host_builder_t *builder = libp2p_host_builder_new();
+    libp2p_host_builder_listen_addr(builder, "/ip4/127.0.0.1/tcp/4001");
+    libp2p_host_builder_transport(builder, "tcp");
+    libp2p_host_builder_security(builder, "noise");
+    libp2p_host_builder_muxer(builder, "yamux");
+
+    libp2p_host_t *host = NULL;
+    if (libp2p_host_builder_build(builder, &host) != 0) {
+        fprintf(stderr, "failed to build host\n");
+        return 1;
+    }
+    libp2p_host_builder_free(builder);
+
+    libp2p_protocol_def_t echo_def = {
+        .protocol_id = ECHO_PROTO,
+        .read_mode = LIBP2P_READ_PUSH,
+        .on_open = echo_on_open,
+        .on_data = echo_on_data,
+        .on_close = echo_on_close,
+    };
+    libp2p_protocol_server_t *echo_server = NULL;
+    if (libp2p_host_listen_protocol(host, &echo_def, &echo_server) != 0) {
+        fprintf(stderr, "failed to register echo handler\n");
+        libp2p_host_free(host);
         return 1;
     }
 
-    // Create TCP transport and dial
-    libp2p_tcp_config_t tcfg = libp2p_tcp_config_default();
-    libp2p_transport_t *tcp = libp2p_tcp_transport_new(&tcfg);
-    if (!tcp) {
-        fprintf(stderr, "failed to create TCP transport\n");
-        goto cleanup;
+    if (libp2p_host_start(host) != 0) {
+        fprintf(stderr, "failed to start host\n");
+        libp2p_host_free(host);
+        return 1;
     }
 
-    if (libp2p_transport_dial(tcp, addr, &raw_conn) != 0) {
-        fprintf(stderr, "dial failed\n");
-        libp2p_transport_free(tcp);
-        goto cleanup;
-    }
-    libp2p_transport_free(tcp); // Can free after dialing
+    printf("listening on /ip4/127.0.0.1/tcp/4001\n");
+    printf("press Ctrl+C to stop...\n");
 
-    // Generate identity keys
-    static uint8_t static_key[32];
-    static uint8_t identity_key[32];
-    noise_randstate_generate_simple(static_key, sizeof(static_key));
-    noise_randstate_generate_simple(identity_key, sizeof(identity_key));
-
-    // Configure Noise security
-    libp2p_noise_config_t ncfg = {
-        .static_private_key = static_key,
-        .static_private_key_len = sizeof(static_key),
-        .identity_private_key = identity_key,
-        .identity_private_key_len = sizeof(identity_key),
-        .identity_key_type = PEER_ID_SECP256K1_KEY_TYPE,
-        .max_plaintext = 0
-    };
-    noise = libp2p_noise_security_new(&ncfg);
-
-    // Create multiplexers
-    yamux = libp2p_yamux_new();
-    mplex = libp2p_mplex_new();
-
-    // Configure upgrader
-    const libp2p_security_t *security[] = { noise, NULL };
-    const libp2p_muxer_t *muxers[] = { yamux, mplex, NULL };
-
-    libp2p_upgrader_config_t ucfg = libp2p_upgrader_config_default();
-    ucfg.security = security;
-    ucfg.n_security = 1;
-    ucfg.muxers = muxers;
-    ucfg.n_muxers = 2;
-    ucfg.handshake_timeout_ms = 30000;
-
-    upgrader = libp2p_upgrader_new(&ucfg);
-    if (!upgrader) {
-        fprintf(stderr, "failed to create upgrader\n");
-        goto cleanup;
+    while (keep_running) {
+        libp2p_event_t evt = {0};
+        if (libp2p_host_next_event(host, 500 /* ms */, &evt) == 0) {
+            if (evt.kind == LIBP2P_EVT_CONN_OPENED) {
+                printf("connection opened from %s\n", evt.u.conn_opened.addr);
+            }
+            libp2p_event_free(&evt);
+        }
     }
 
-    // Upgrade the connection
-    libp2p_upgrader_err_t upgrade_err = libp2p_upgrader_upgrade_outbound(upgrader, raw_conn, NULL, &uconn);
-    if (upgrade_err != LIBP2P_UPGRADER_OK) {
-        fprintf(stderr, "upgrade failed\n");
-        goto cleanup;
-    }
-
-    printf("connection upgraded successfully\n");
-
-    // Create protocol handler registry
-    registry = libp2p_protocol_handler_registry_new();
-    if (!registry) {
-        fprintf(stderr, "failed to create protocol handler registry\n");
-        goto cleanup;
-    }
-
-    // Set up context and register identify protocol handler
-    test_context_t ctx;
-    memcpy(ctx.identity_key, identity_key, sizeof(identity_key));
-    ctx.completed = 0;
-    ctx.dial_completed = 0;
-
-    if (libp2p_identify_register_handler(registry, handle_identify_request, &ctx) != 0) {
-        fprintf(stderr, "failed to register identify handler\n");
-        goto cleanup;
-    }
-
-    // Create protocol handler context
-    handler_ctx = libp2p_protocol_handler_ctx_new(registry, uconn);
-    if (!handler_ctx) {
-        fprintf(stderr, "failed to create protocol handler context\n");
-        goto cleanup;
-    }
-
-    // Start protocol handler
-    if (libp2p_protocol_handler_start(handler_ctx) != 0) {
-        fprintf(stderr, "failed to start protocol handler\n");
-        goto cleanup;
-    }
-
-    // Send identify request using high-level API
-    printf("Sending identify request...\n");
-    int dial_result = libp2p_identify_send_request_with_context(handler_ctx, handle_identify_response, &ctx);
-    if (dial_result != 0) {
-        printf("Failed to send identify request\n");
-        goto cleanup;
-    }
-
-    // Wait for response (up to 5 seconds)
-    for (int i = 0; i < 500; i++) {
-        usleep(10000); // 10ms
-        if (ctx.dial_completed) break;
-    }
-
-    if (!ctx.dial_completed) {
-        printf("Identify response not received within timeout\n");
-    }
-
-cleanup:
-    // Cleanup in reverse order
-    if (handler_ctx) {
-        libp2p_protocol_handler_stop(handler_ctx);
-        libp2p_protocol_handler_ctx_free(handler_ctx);
-    }
-    if (registry) {
-        libp2p_protocol_handler_registry_free(registry);
-    }
-    if (uconn) {
-        libp2p_conn_close(((struct libp2p_upgraded_conn *)uconn)->conn);
-        free(uconn);
-    }
-    if (upgrader) {
-        libp2p_upgrader_free(upgrader);
-    }
-    if (noise) {
-        libp2p_security_free(noise);
-    }
-    if (yamux) {
-        libp2p_muxer_free(yamux);
-    }
-    if (mplex) {
-        libp2p_muxer_free(mplex);
-    }
-    multiaddr_free(addr);
+    libp2p_host_stop(host);
+    libp2p_host_unlisten(host, echo_server);
+    libp2p_host_free(host);
     return 0;
 }
 ```
 
-## Listener
+Highlights:
 
-The listening side accepts TCP connections, upgrades them in the same way and
-then serves ping and identify requests using the protocol handler system.
-For clarity the example handles a single inbound connection.
+- The listener is configured entirely through the host builder.
+- The protocol definition uses `LIBP2P_READ_PUSH`, so the host invokes
+  `echo_on_data()` whenever bytes arrive. For pull-style processing, set the
+  `read_mode` to `LIBP2P_READ_PULL` and call `libp2p_stream_read()` manually.
+- Events are polled with a timeout to keep the example simple. Real projects can
+  subscribe for asynchronous delivery via `libp2p_event_subscribe()`.
+
+## Dialer targeting the echo service
 
 ```c
-#include <pthread.h>
-#include <noise/protocol.h>
-#include "multiformats/multiaddr/multiaddr.h"
-#include "protocol/tcp/protocol_tcp.h"
-#include "protocol/noise/protocol_noise.h"
-#include "protocol/mplex/protocol_mplex.h"
-#include "protocol/yamux/protocol_yamux.h"
-#include "protocol/ping/protocol_ping.h"
-#include "protocol/identify/protocol_identify.h"
-#include "protocol/protocol_handler.h"
-#include "transport/upgrader.h"
-#include "peer_id/peer_id_secp256k1.h"
+#include <inttypes.h>
+#include <stdio.h>
+#include <string.h>
 
-typedef struct {
-    uint8_t identity_key[32];
-    multiaddr_t **listen_addrs;
-    size_t num_listen_addrs;
-    char **protocols;
-    size_t num_protocols;
-} listener_context_t;
+#include "libp2p/host.h"
+#include "libp2p/host_builder.h"
+#include "libp2p/stream.h"
 
-// Identify request handler for the listener
-static int listener_handle_identify_request(const peer_id_t *local_peer_id,
-                                           libp2p_identify_t *response,
-                                           void *user_data) {
-    listener_context_t *ctx = (listener_context_t *)user_data;
-    
-    printf("📥 Received identify request from peer\n");
-    
-    // Generate public key from private key
-    uint8_t *pubkey_buf = NULL;
-    size_t pubkey_len = 0;
-    peer_id_error_t err = peer_id_create_from_private_key_secp256k1(
-        ctx->identity_key, sizeof(ctx->identity_key), &pubkey_buf, &pubkey_len);
-    if (err != PEER_ID_SUCCESS) {
-        return -1;
-    }
-    
-    // Fill in response
-    response->protocol_version = strdup("libp2p/1.0.0");
-    response->agent_version = strdup("c-libp2p/0.1.0");
-    response->public_key = pubkey_buf;
-    response->public_key_len = pubkey_len;
-    
-    // Copy protocols
-    response->protocols = malloc(ctx->num_protocols * sizeof(char *));
-    for (size_t i = 0; i < ctx->num_protocols; i++) {
-        response->protocols[i] = strdup(ctx->protocols[i]);
-    }
-    response->num_protocols = ctx->num_protocols;
-    
-    // Copy listen addresses
-    response->listen_addrs = malloc(ctx->num_listen_addrs * sizeof(multiaddr_t *));
-    for (size_t i = 0; i < ctx->num_listen_addrs; i++) {
-        response->listen_addrs[i] = multiaddr_copy(ctx->listen_addrs[i]);
-    }
-    response->num_listen_addrs = ctx->num_listen_addrs;
-    
-    return 0;
-}
+#define ECHO_PROTO "/example/echo/1.0.0"
 
-int main(void)
+int main(int argc, char **argv)
 {
-    // Variable declarations
-    libp2p_security_t *noise = NULL;
-    libp2p_muxer_t *yamux = NULL;
-    libp2p_muxer_t *mplex = NULL;
-    libp2p_upgrader_t *upgrader = NULL;
-    libp2p_protocol_handler_registry_t *registry = NULL;
-    libp2p_protocol_handler_ctx_t *handler_ctx = NULL;
-    libp2p_listener_t *listener = NULL;
-    libp2p_conn_t *incoming = NULL;
-    libp2p_uconn_t *client = NULL;
-    
-    int err;
-    multiaddr_t *listen_addr = multiaddr_new_from_str("/ip4/0.0.0.0/tcp/4001", &err);
-    if (!listen_addr || err != 0) {
-        fprintf(stderr, "failed to parse listen address\n");
+    const char *target = (argc > 1) ? argv[1] : "/ip4/127.0.0.1/tcp/4001";
+
+    libp2p_host_builder_t *builder = libp2p_host_builder_new();
+    libp2p_host_builder_transport(builder, "tcp");
+    libp2p_host_builder_security(builder, "noise");
+    libp2p_host_builder_muxer(builder, "yamux");
+
+    libp2p_host_t *host = NULL;
+    if (libp2p_host_builder_build(builder, &host) != 0) {
+        fprintf(stderr, "failed to build host\n");
         return 1;
     }
-    
-    // Create TCP transport
-    libp2p_tcp_config_t tcfg = libp2p_tcp_config_default();
-    libp2p_transport_t *tcp = libp2p_tcp_transport_new(&tcfg);
-    if (!tcp) {
-        fprintf(stderr, "failed to create TCP transport\n");
-        goto cleanup;
+    libp2p_host_builder_free(builder);
+
+    libp2p_stream_t *stream = NULL;
+    if (libp2p_host_dial_protocol_blocking(host, target, ECHO_PROTO, 5000, &stream) != 0 || !stream) {
+        fprintf(stderr, "dial failed\n");
+        libp2p_host_free(host);
+        return 1;
     }
 
-    // Generate identity keys
-    static uint8_t static_key[32];
-    static uint8_t identity_key[32];
-    noise_randstate_generate_simple(static_key, sizeof(static_key));
-    noise_randstate_generate_simple(identity_key, sizeof(identity_key));
-
-    // Configure Noise security
-    libp2p_noise_config_t ncfg = {
-        .static_private_key = static_key,
-        .static_private_key_len = sizeof(static_key),
-        .identity_private_key = identity_key,
-        .identity_private_key_len = sizeof(identity_key),
-        .identity_key_type = PEER_ID_SECP256K1_KEY_TYPE,
-        .max_plaintext = 0
-    };
-    noise = libp2p_noise_security_new(&ncfg);
-
-    // Create multiplexers
-    yamux = libp2p_yamux_new();
-    mplex = libp2p_mplex_new();
-
-    // Configure upgrader
-    const libp2p_security_t *security[] = { noise, NULL };
-    const libp2p_muxer_t *muxers[] = { yamux, mplex, NULL };
-
-    libp2p_upgrader_config_t ucfg = libp2p_upgrader_config_default();
-    ucfg.security = security;
-    ucfg.n_security = 1;
-    ucfg.muxers = muxers;
-    ucfg.n_muxers = 2;
-
-    upgrader = libp2p_upgrader_new(&ucfg);
-    if (!upgrader) {
-        fprintf(stderr, "failed to create upgrader\n");
-        goto cleanup;
+    const char payload[] = "hello from c-libp2p";
+    if (libp2p_stream_write(stream, payload, sizeof(payload)) != (ssize_t)sizeof(payload)) {
+        fprintf(stderr, "write failed\n");
     }
 
-    // Start listening
-    if (libp2p_transport_listen(tcp, listen_addr, &listener) != 0) {
-        fprintf(stderr, "listen failed\n");
-        goto cleanup;
+    char buf[64] = {0};
+    ssize_t n = libp2p_stream_read(stream, buf, sizeof(buf));
+    if (n > 0) {
+        printf("received %zd bytes: %.*s\n", n, (int)n, buf);
     }
 
-    printf("Listening on %s\n", multiaddr_string(listen_addr));
-
-    // Set up listener context
-    listener_context_t ctx;
-    memcpy(ctx.identity_key, identity_key, sizeof(identity_key));
-    
-    // Set up supported protocols
-    static char *protocols[] = { "/ipfs/id/1.0.0", "/ipfs/ping/1.0.0" };
-    ctx.protocols = protocols;
-    ctx.num_protocols = 2;
-    
-    // Set up listen addresses
-    static multiaddr_t *listen_addrs[] = { NULL };
-    listen_addrs[0] = listen_addr;
-    ctx.listen_addrs = listen_addrs;
-    ctx.num_listen_addrs = 1;
-
-    // Accept incoming connection
-    if (libp2p_listener_accept(listener, &incoming) == 0) {
-        printf("Accepted incoming connection\n");
-        
-        // Upgrade the connection
-        libp2p_upgrader_err_t upgrade_err = libp2p_upgrader_upgrade_inbound(upgrader, incoming, &client);
-        if (upgrade_err != LIBP2P_UPGRADER_OK) {
-            fprintf(stderr, "failed to upgrade inbound connection\n");
-            goto cleanup;
-        }
-
-        // Create protocol handler registry and register handlers
-        registry = libp2p_protocol_handler_registry_new();
-        if (!registry) {
-            fprintf(stderr, "failed to create protocol handler registry\n");
-            goto cleanup;
-        }
-
-        if (libp2p_identify_register_handler(registry, listener_handle_identify_request, &ctx) != 0) {
-            fprintf(stderr, "failed to register identify handler\n");
-            goto cleanup;
-        }
-
-        // Create and start protocol handler
-        handler_ctx = libp2p_protocol_handler_ctx_new(registry, client);
-        if (!handler_ctx) {
-            fprintf(stderr, "failed to create protocol handler context\n");
-            goto cleanup;
-        }
-
-        if (libp2p_protocol_handler_start(handler_ctx) != 0) {
-            fprintf(stderr, "failed to start protocol handler\n");
-            goto cleanup;
-        }
-
-        printf("Protocol handler started, ready to serve requests\n");
-        
-        // Keep serving for a while (in production, you'd loop and accept multiple peers)
-        sleep(30);
-    }
-
-cleanup:
-    // Cleanup in reverse order
-    if (handler_ctx) {
-        libp2p_protocol_handler_stop(handler_ctx);
-        libp2p_protocol_handler_ctx_free(handler_ctx);
-    }
-    if (registry) {
-        libp2p_protocol_handler_registry_free(registry);
-    }
-    if (client) {
-        libp2p_conn_close(((struct libp2p_upgraded_conn *)client)->conn);
-        free(client);
-    }
-    if (listener) {
-        libp2p_listener_close(listener);
-        libp2p_listener_free(listener);
-    }
-    if (upgrader) {
-        libp2p_upgrader_free(upgrader);
-    }
-    if (noise) {
-        libp2p_security_free(noise);
-    }
-    if (yamux) {
-        libp2p_muxer_free(yamux);
-    }
-    if (mplex) {
-        libp2p_muxer_free(mplex);
-    }
-    if (tcp) {
-        libp2p_transport_free(tcp);
-    }
-    multiaddr_free(listen_addr);
+    libp2p_stream_close(stream);
+    libp2p_host_free(host);
     return 0;
 }
 ```
 
-These examples demonstrate the modern protocol handler API which provides:
+The dialer builds an outbound-only host, requests the echo protocol, writes a
+message, and reads the echoed payload. In asynchronous setups you can use
+`libp2p_host_dial_protocol()` instead of the blocking variant—your callback will
+run on the host’s single-threaded executor.
 
-- **Protocol Handler Registry**: Centralized registration of protocol handlers
-- **Protocol Handler Context**: Manages protocol instances and stream handling
-- **High-level API Functions**: Like `libp2p_identify_send_request_with_context()` and `libp2p_identify_register_handler()`
-- **Proper Resource Management**: Structured cleanup with proper error handling
-- **Modern Configuration**: Current upgrader and security configuration patterns
+## Next steps
 
-Consult the tests under `tests/` and the working example in `examples/example_identify_dial.c` for more production-like code and refer back to [transports.md](transports.md) for a deeper explanation of the transport API.
+- Add Identify support by calling `libp2p_host_set_private_key()` before
+  `libp2p_host_start()` so peers learn your identity immediately.
+- Register the ping responder with `libp2p_ping_service_start()` and monitor
+  `LIBP2P_EVT_STREAM_OPENED` events to log inbound probes.
+- Explore `libp2p_host_listen_selected()` and `libp2p_host_dial_selected()` for
+  prefix and semantic-version protocol matching when supporting a family of
+  protocol versions.
+
+Use the unit tests under `tests/host/` and the specification documents in
+`specs/` as additional references while building your own host applications.

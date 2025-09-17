@@ -136,7 +136,8 @@ void *poll_loop(void *arg)
 #else
         /* Build pollfd array from current listeners */
         pthread_mutex_lock(&transport_ctx->listeners.lock);
-        size_t n_list = (transport_ctx->listeners.count < (sizeof pfd_arr / sizeof *pfd_arr)) ? transport_ctx->listeners.count : (sizeof pfd_arr / sizeof *pfd_arr);
+        size_t n_list = (transport_ctx->listeners.count < (sizeof pfd_arr / sizeof *pfd_arr)) ? transport_ctx->listeners.count
+                                                                                              : (sizeof pfd_arr / sizeof *pfd_arr);
         size_t pidx = 0;
         tcp_listener_ctx_t *lmap[64];
         for (size_t i = 0; i < transport_ctx->listeners.count && pidx < n_list; ++i)
@@ -250,7 +251,8 @@ void *poll_loop(void *arg)
             /* grab a temporary reference *before* inspecting any fields */
             atomic_fetch_add_explicit(&listener_ctx->refcount, 1, memory_order_acq_rel);
 
-            if (atomic_load_explicit(&listener_ctx->closed, memory_order_acquire) || atomic_load_explicit(&listener_ctx->gc.pending_free, memory_order_acquire))
+            if (atomic_load_explicit(&listener_ctx->closed, memory_order_acquire) ||
+                atomic_load_explicit(&listener_ctx->gc.pending_free, memory_order_acquire))
             {
                 goto done_listener;
             }
@@ -260,8 +262,15 @@ void *poll_loop(void *arg)
             while (accept_count < MAX_ACCEPT_PER_LOOP)
             {
                 /* backpressure: stop accepting when the queue is full */
-                if (atomic_load_explicit(&listener_ctx->q.len, memory_order_relaxed) >= ACCEPT_QUEUE_MAX)
+                size_t qlen_now = atomic_load_explicit(&listener_ctx->q.len, memory_order_relaxed);
+                if (qlen_now >= ACCEPT_QUEUE_MAX)
                 {
+                    /* Metrics: record backpressure condition */
+                    if (transport_ctx->metrics)
+                    {
+                        libp2p_metrics_inc_counter(transport_ctx->metrics, "libp2p_accept_backpressure", "{\"transport\":\"tcp\",\"reason\":\"queue_full\"}", 1.0);
+                        libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_accept_queue_depth", "{\"transport\":\"tcp\"}", (double)qlen_now);
+                    }
                     break; /* defer further accepts until consumer drains the queue */
                 }
                 int fd;
@@ -297,6 +306,13 @@ void *poll_loop(void *arg)
                         if (listener_ctx->state.backoff_ms < 10 * 1000)
                         {
                             listener_ctx->state.backoff_ms <<= 1; /* exponential back‑off */
+                        }
+
+                        /* Metrics: record transient backpressure + backoff */
+                        if (transport_ctx->metrics)
+                        {
+                            libp2p_metrics_inc_counter(transport_ctx->metrics, "libp2p_accept_backpressure", "{\"transport\":\"tcp\",\"reason\":\"resource_exhaustion\"}", 1.0);
+                            libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_listener_backoff_ms", "{\"transport\":\"tcp\"}", (double)listener_ctx->state.backoff_ms);
                         }
 
                         poller_del(transport_ctx, listener_ctx); /* remove from poll set */
@@ -344,6 +360,12 @@ void *poll_loop(void *arg)
                 if (!atomic_load_explicit(&listener_ctx->closed, memory_order_acquire))
                 {
                     cq_push(&listener_ctx->q, c);
+                    /* Metrics: observe queue depth after enqueue */
+                    if (transport_ctx->metrics)
+                    {
+                        size_t qlen_after = atomic_load_explicit(&listener_ctx->q.len, memory_order_relaxed);
+                        libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_accept_queue_depth", "{\"transport\":\"tcp\"}", (double)qlen_after);
+                    }
                 }
                 else
                 {
@@ -424,7 +446,8 @@ void *poll_loop(void *arg)
                 if (!listener_ctx)
                     continue;
                 atomic_fetch_add_explicit(&listener_ctx->refcount, 1, memory_order_acq_rel);
-                if (atomic_load_explicit(&listener_ctx->closed, memory_order_acquire) || atomic_load_explicit(&listener_ctx->gc.pending_free, memory_order_acquire))
+                if (atomic_load_explicit(&listener_ctx->closed, memory_order_acquire) ||
+                    atomic_load_explicit(&listener_ctx->gc.pending_free, memory_order_acquire))
                 {
                     release_listener_ref(listener_ctx);
                     continue;
@@ -432,6 +455,18 @@ void *poll_loop(void *arg)
                 int accept_count = 0;
                 while (accept_count < MAX_ACCEPT_PER_LOOP)
                 {
+                    /* backpressure: stop accepting when the queue is full */
+                    size_t qlen_now = atomic_load_explicit(&listener_ctx->q.len, memory_order_relaxed);
+                    if (qlen_now >= ACCEPT_QUEUE_MAX)
+                    {
+                        if (transport_ctx->metrics)
+                        {
+                            libp2p_metrics_inc_counter(transport_ctx->metrics, "libp2p_accept_backpressure", "{\"transport\":\"tcp\",\"reason\":\"queue_full\"}", 1.0);
+                            libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_accept_queue_depth", "{\"transport\":\"tcp\"}", (double)qlen_now);
+                        }
+                        break;
+                    }
+
                     SOCKET s = accept(listener_ctx->fd, NULL, NULL);
                     if (s == INVALID_SOCKET)
                     {
@@ -446,6 +481,11 @@ void *poll_loop(void *arg)
                             if (listener_ctx->state.backoff_ms < 10000)
                                 listener_ctx->state.backoff_ms <<= 1;
                             poller_del(transport_ctx, listener_ctx);
+                            if (transport_ctx->metrics)
+                            {
+                                libp2p_metrics_inc_counter(transport_ctx->metrics, "libp2p_accept_backpressure", "{\"transport\":\"tcp\",\"reason\":\"resource_exhaustion\"}", 1.0);
+                                libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_listener_backoff_ms", "{\"transport\":\"tcp\"}", (double)listener_ctx->state.backoff_ms);
+                            }
                         }
                         break;
                     }
@@ -470,7 +510,14 @@ void *poll_loop(void *arg)
                     if (c)
                     {
                         if (!atomic_load_explicit(&listener_ctx->closed, memory_order_acquire))
+                        {
                             cq_push(&listener_ctx->q, c);
+                            if (transport_ctx->metrics)
+                            {
+                                size_t qlen_after = atomic_load_explicit(&listener_ctx->q.len, memory_order_relaxed);
+                                libp2p_metrics_observe_histogram(transport_ctx->metrics, "libp2p_accept_queue_depth", "{\"transport\":\"tcp\"}", (double)qlen_after);
+                            }
+                        }
                         else
                             libp2p_conn_free(c);
                     }

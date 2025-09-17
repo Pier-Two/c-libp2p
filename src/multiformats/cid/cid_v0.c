@@ -9,14 +9,6 @@
 #define CIDV0_STRING_LEN 46
 #define SHA2_256_LENGTH_BYTE 0x20
 
-/**
- * @brief Initialize a CIDv0 structure with a given digest.
- *
- * @param cid Pointer to the CIDv0 structure to initialize.
- * @param digest Pointer to the digest data.
- * @param digest_len Length of the digest data.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v0_init(cid_v0_t *cid, const uint8_t *digest, size_t digest_len)
 {
     if (cid == NULL || digest == NULL)
@@ -32,14 +24,6 @@ int cid_v0_init(cid_v0_t *cid, const uint8_t *digest, size_t digest_len)
     return CIDV0_SUCCESS;
 }
 
-/**
- * @brief Convert a CIDv0 structure to its byte representation.
- *
- * @param cid Pointer to the CIDv0 structure.
- * @param out Buffer to store the byte representation.
- * @param out_len Length of the output buffer.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v0_to_bytes(const cid_v0_t *cid, uint8_t *out, size_t out_len)
 {
     if (cid == NULL || out == NULL)
@@ -57,14 +41,6 @@ int cid_v0_to_bytes(const cid_v0_t *cid, uint8_t *out, size_t out_len)
     return CIDV0_BINARY_SIZE;
 }
 
-/**
- * @brief Initialize a CIDv0 structure from its byte representation.
- *
- * @param cid Pointer to the CIDv0 structure to initialize.
- * @param bytes Byte representation of the CIDv0.
- * @param bytes_len Length of the byte representation.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v0_from_bytes(cid_v0_t *cid, const uint8_t *bytes, size_t bytes_len)
 {
     if (cid == NULL || bytes == NULL)
@@ -86,15 +62,6 @@ int cid_v0_from_bytes(cid_v0_t *cid, const uint8_t *bytes, size_t bytes_len)
     return CIDV0_BINARY_SIZE;
 }
 
-/**
- * @brief Convert a CIDv0 structure to its string representation using base58btc
- * encoding.
- *
- * @param cid Pointer to the CIDv0 structure.
- * @param out Buffer to store the string representation.
- * @param out_len Length of the output buffer.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v0_to_string(const cid_v0_t *cid, char *out, size_t out_len)
 {
     if (cid == NULL || out == NULL)
@@ -124,14 +91,6 @@ int cid_v0_to_string(const cid_v0_t *cid, char *out, size_t out_len)
     return str_written;
 }
 
-/**
- * @brief Initialize a CIDv0 structure from its string representation using
- * base58btc decoding.
- *
- * @param cid Pointer to the CIDv0 structure to initialize.
- * @param str String representation of the CIDv0.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v0_from_string(cid_v0_t *cid, const char *str)
 {
     if (cid == NULL || str == NULL)

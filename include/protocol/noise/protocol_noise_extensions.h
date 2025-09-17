@@ -5,7 +5,8 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -18,16 +19,17 @@ extern "C" {
  */
 /* Registered Noise extension codepoints */
 #define NOISE_EXT_WEBTRANSPORT_CERTHASHES 0x0A
-#define NOISE_EXT_STREAM_MUXERS          0x12
-#define NOISE_EXT_REGISTRY_MAX           1024
+#define NOISE_EXT_STREAM_MUXERS 0x12
+#define NOISE_EXT_REGISTRY_MAX 1024
 
-typedef struct noise_extensions {
+typedef struct noise_extensions
+{
     uint8_t **webtransport_certhashes;
-    size_t  *webtransport_certhashes_lens;
-    size_t   num_webtransport_certhashes;
+    size_t *webtransport_certhashes_lens;
+    size_t num_webtransport_certhashes;
 
-    char   **stream_muxers;
-    size_t   num_stream_muxers;
+    char **stream_muxers;
+    size_t num_stream_muxers;
 } noise_extensions_t;
 
 /**
@@ -38,8 +40,7 @@ typedef struct noise_extensions {
  * @param out_ext  Output pointer receiving the parsed structure.
  * @return 0 on success, or -1 on failure.
  */
-int parse_noise_extensions(const uint8_t *buf, size_t len,
-                           noise_extensions_t **out_ext);
+int parse_noise_extensions(const uint8_t *buf, size_t len, noise_extensions_t **out_ext);
 
 /**
  * @brief Free a parsed NoiseExtensions structure.

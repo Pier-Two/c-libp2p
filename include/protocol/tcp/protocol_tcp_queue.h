@@ -24,21 +24,24 @@ extern "C"
  * @struct conn_node
  * @brief Node in the connection queue.
  */
-typedef struct conn_node {
+typedef struct conn_node
+{
     libp2p_conn_t *c;       /**< The queued connection. */
     struct conn_node *next; /**< Next node in the queue. */
+    uint64_t accepted_at_ms; /**< Monotonic timestamp when accepted/enqueued. */
 } conn_node_t;
 
 /**
  * @struct conn_queue
  * @brief Minimal queue structure for TCP connections.
  */
-typedef struct {
-    conn_node_t *head;      /**< Front of the queue.    */
-    conn_node_t *tail;      /**< Tail of the queue.     */
-    pthread_mutex_t mtx;    /**< Mutex protecting state.*/
-    pthread_cond_t cond;    /**< Waker for pop waits.   */
-    atomic_size_t len;      /**< Current length.        */
+typedef struct
+{
+    conn_node_t *head;   /**< Front of the queue.    */
+    conn_node_t *tail;   /**< Tail of the queue.     */
+    pthread_mutex_t mtx; /**< Mutex protecting state.*/
+    pthread_cond_t cond; /**< Waker for pop waits.   */
+    atomic_size_t len;   /**< Current length.        */
 } conn_queue_t;
 
 /** @brief Queue API. */

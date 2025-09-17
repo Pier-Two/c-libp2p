@@ -39,12 +39,6 @@ static inline int mul_overflow_size(size_t a, size_t b, size_t *out)
     return 0;
 }
 
-/**
- * @brief Detect the multibase encoding from the given string.
- *
- * @param str The input string to detect the multibase encoding from.
- * @return The detected multibase encoding.
- */
 static int detect_multibase(const char *str, multibase_t *base_out)
 {
     if (str == NULL || base_out == NULL || *str == '\0')
@@ -77,12 +71,6 @@ static int detect_multibase(const char *str, multibase_t *base_out)
     }
 }
 
-/**
- * @brief Get the name of the multibase encoding.
- *
- * @param base The multibase encoding.
- * @return The name of the multibase encoding.
- */
 static const char *get_multibase_name(multibase_t base)
 {
     switch (base)
@@ -108,12 +96,6 @@ static const char *get_multibase_name(multibase_t base)
     }
 }
 
-/**
- * @brief Get the name of the multicodec from its code.
- *
- * @param code The multicodec code.
- * @return The name of the multicodec.
- */
 static const char *get_multicodec_name(uint64_t code)
 {
     for (size_t i = 0; i < multicodec_table_len; i++)
@@ -126,15 +108,6 @@ static const char *get_multicodec_name(uint64_t code)
     return "unknown";
 }
 
-/**
- * @brief Convert a multihash to a human-readable string.
- *
- * @param mh The input multihash.
- * @param mh_size The size of the input multihash.
- * @param out The output buffer to store the human-readable string.
- * @param out_len The size of the output buffer.
- * @return ssize_t Number of bytes written (>=0) or negative error code.
- */
 static ssize_t multihash_to_human(const uint8_t *mh, size_t mh_size, char *out, size_t out_len)
 {
     if (mh == NULL || out == NULL)
@@ -202,14 +175,6 @@ static ssize_t multihash_to_human(const uint8_t *mh, size_t mh_size, char *out, 
     return (ssize_t)written;
 }
 
-/**
- * @brief Compute the size of the human-readable string for a multihash.
- *
- * @param mh The input multihash.
- * @param mh_size The size of the input multihash.
- * @param out_size Pointer to store the size of the human-readable string.
- * @return int Error code indicating success or type of failure.
- */
 static int compute_mh_human_size(const uint8_t *mh, size_t mh_size, size_t *out_size)
 {
     if (mh == NULL || out_size == NULL)
@@ -253,15 +218,6 @@ static int compute_mh_human_size(const uint8_t *mh, size_t mh_size, size_t *out_
     return CIDV1_SUCCESS;
 }
 
-/**
- * @brief Initialize a CIDv1 structure.
- *
- * @param cid Pointer to the CIDv1 structure to initialize.
- * @param content_codec The content codec.
- * @param mh_data The multihash data.
- * @param mh_size The size of the multihash data.
- * @return int Error code indicating success or type of failure.
- */
 int cid_v1_init(cid_v1_t *cid, uint64_t content_codec, const uint8_t *mh_data, size_t mh_size)
 {
     if (cid == NULL || (mh_data == NULL && mh_size > 0))
@@ -306,14 +262,6 @@ void cid_v1_free(cid_v1_t *cid)
     }
 }
 
-/**
- * @brief Decode a CIDv1 structure from a byte array.
- *
- * @param cid Pointer to the CIDv1 structure to decode into.
- * @param data The input byte array.
- * @param data_len The length of the input byte array.
- * @return ssize_t Number of bytes consumed (>=0) or negative error code.
- */
 ssize_t cid_v1_from_bytes(cid_v1_t *cid, const uint8_t *data, size_t data_len)
 {
     if (cid == NULL || data == NULL)
@@ -362,14 +310,6 @@ ssize_t cid_v1_from_bytes(cid_v1_t *cid, const uint8_t *data, size_t data_len)
     return (ssize_t)(offset + mh_size);
 }
 
-/**
- * @brief Encode a CIDv1 structure into a byte array.
- *
- * @param cid Pointer to the CIDv1 structure to encode.
- * @param out The output byte array.
- * @param out_len The length of the output byte array.
- * @return ssize_t Number of bytes written (>=0) or negative error code.
- */
 ssize_t cid_v1_to_bytes(const cid_v1_t *cid, uint8_t *out, size_t out_len)
 {
     if (cid == NULL || out == NULL)
@@ -414,15 +354,6 @@ ssize_t cid_v1_to_bytes(const cid_v1_t *cid, uint8_t *out, size_t out_len)
     return (ssize_t)idx;
 }
 
-/**
- * @brief Encode a CIDv1 structure into a multibase-encoded string.
- *
- * @param cid Pointer to the CIDv1 structure to encode.
- * @param base The multibase encoding to use.
- * @param out The output string buffer.
- * @param out_len The length of the output string buffer.
- * @return ssize_t Number of characters written (>=0) or negative error code.
- */
 ssize_t cid_v1_to_string(const cid_v1_t *cid, multibase_t base, char *out, size_t out_len)
 {
     if (cid == NULL || out == NULL)
@@ -462,13 +393,6 @@ ssize_t cid_v1_to_string(const cid_v1_t *cid, multibase_t base, char *out, size_
     return str_len;
 }
 
-/**
- * @brief Decode a CIDv1 structure from a multibase-encoded string.
- *
- * @param cid Pointer to the CIDv1 structure to decode into.
- * @param str The input multibase-encoded string.
- * @return ssize_t Number of bytes consumed (>=0) or negative error code.
- */
 ssize_t cid_v1_from_string(cid_v1_t *cid, const char *str)
 {
     if (cid == NULL || str == NULL)
@@ -502,15 +426,6 @@ ssize_t cid_v1_from_string(cid_v1_t *cid, const char *str)
     return ret;
 }
 
-/**
- * @brief Convert a CIDv1 structure to a human-readable string.
- *
- * @param cid Pointer to the CIDv1 structure to convert.
- * @param base The multibase encoding to use.
- * @param out The output string buffer.
- * @param out_len The length of the output string buffer.
- * @return ssize_t Number of characters written (>=0) or negative error code.
- */
 ssize_t cid_v1_to_human(const cid_v1_t *cid, multibase_t base, char *out, size_t out_len)
 {
     if (cid == NULL || out == NULL)

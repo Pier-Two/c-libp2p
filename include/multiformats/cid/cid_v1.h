@@ -17,7 +17,6 @@ extern "C"
 
 /**
  * @file cid_v1.h
- *
  * @brief CIDv1 public API.
  *
  * CIDv1 layout (binary):

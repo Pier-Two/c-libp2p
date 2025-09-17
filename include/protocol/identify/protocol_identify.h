@@ -6,8 +6,10 @@ extern "C"
 {
 #endif
 
+#include "libp2p/host.h"
+#include "libp2p/protocol_listen.h"
+#include "libp2p/stream.h"
 #include "peer_id/peer_id.h"
-#include "protocol/protocol_handler.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -65,6 +67,22 @@ int libp2p_identify_message_encode(const libp2p_identify_t *msg, uint8_t **out_b
  */
 void libp2p_identify_free(libp2p_identify_t *msg);
 
+/* Convenience service registration (unified API): register an Identify handler
+ * that immediately responds with local metadata when a peer opens
+ * "/ipfs/id/1.0.0". */
+int libp2p_identify_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server);
+int libp2p_identify_service_stop(struct libp2p_host *host, libp2p_protocol_server_t *server);
+
+/* Identify Push: accept updates on /ipfs/id/push/1.0.0 */
+int libp2p_identify_push_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server);
+int libp2p_identify_push_service_stop(struct libp2p_host *host, libp2p_protocol_server_t *server);
+
+/* Build and encode the local Identify message for sending.
+ * include_observed: if non-zero, include observedAddr as seen on `s`.
+ * On success, returns 0 and fills out_buf/out_len (caller must free out_buf).
+ */
+int libp2p_identify_encode_local(struct libp2p_host *host, libp2p_stream_t *s, int include_observed, uint8_t **out_buf, size_t *out_len);
+
 /**
  * @brief Callback function for handling identify requests.
  *
@@ -89,34 +107,7 @@ typedef int (*libp2p_identify_request_handler_t)(const peer_id_t *local_peer_id,
  */
 typedef int (*libp2p_identify_response_handler_t)(const peer_id_t *remote_peer_id, const libp2p_identify_t *response, void *user_data);
 
-/**
- * @brief Register the identify protocol handler.
- *
- * This sets up automatic handling of incoming identify requests using the
- * provided callback function. The handler will automatically perform
- * multiselect negotiation and message encoding/decoding.
- *
- * @param registry Protocol handler registry
- * @param request_handler Callback to handle identify requests
- * @param user_data User context passed to handler
- * @return 0 on success, negative on error
- */
-int libp2p_identify_register_handler(libp2p_protocol_handler_registry_t *registry, libp2p_identify_request_handler_t request_handler,
-                                     void *user_data);
-
-/**
- * @brief Send an identify request using an existing protocol handler context.
- *
- * This function uses the existing mplex context from the protocol handler
- * to open a new stream for the identify protocol.
- *
- * @param handler_ctx Protocol handler context with existing mplex session
- * @param response_handler Callback for handling the response
- * @param user_data User context passed to response handler
- * @return 0 on success, negative on error
- */
-int libp2p_identify_send_request_with_context(libp2p_protocol_handler_ctx_t *handler_ctx, libp2p_identify_response_handler_t response_handler,
-                                              void *user_data);
+/* Legacy high-level helpers that depended on protocol_handler have been removed. */
 
 #ifdef __cplusplus
 }

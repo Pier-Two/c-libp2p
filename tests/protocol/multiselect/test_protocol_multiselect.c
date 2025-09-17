@@ -5,8 +5,8 @@
 #include <string.h>
 
 #include "multiformats/multiaddr/multiaddr.h"
-#include "protocol/multiselect/protocol_multiselect.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+#include "protocol/multiselect/protocol_multiselect.h"
 #include "protocol/tcp/protocol_tcp.h"
 #include "transport/connection.h"
 #include "transport/listener.h"
@@ -83,7 +83,9 @@ static void *dial_thread(void *arg)
 {
     libp2p_conn_t *c = (libp2p_conn_t *)arg;
     const char *accepted = NULL;
+    fprintf(stderr, "[TEST_MS] dial_thread: starting libp2p_multiselect_dial()\n");
     libp2p_multiselect_err_t rc = libp2p_multiselect_dial(c, g_proposals, 5000, &accepted);
+    fprintf(stderr, "[TEST_MS] dial_thread: libp2p_multiselect_dial() rc=%d accepted=%s\n", (int)rc, accepted ? accepted : "(null)");
     assert(rc == LIBP2P_MULTISELECT_OK);
     g_dial_result = accepted; /* pointer from proposals array */
     return NULL;
@@ -97,8 +99,9 @@ static void *listen_thread(void *arg)
 {
     libp2p_conn_t *s = (libp2p_conn_t *)arg;
     const char *accepted_heap = NULL;
-    libp2p_multiselect_err_t rc =
-        libp2p_multiselect_listen(s, g_supported, NULL, &accepted_heap);
+    fprintf(stderr, "[TEST_MS] listen_thread: starting libp2p_multiselect_listen()\n");
+    libp2p_multiselect_err_t rc = libp2p_multiselect_listen(s, g_supported, NULL, &accepted_heap);
+    fprintf(stderr, "[TEST_MS] listen_thread: libp2p_multiselect_listen() rc=%d accepted=%s\n", (int)rc, accepted_heap ? accepted_heap : "(null)");
     assert(rc == LIBP2P_MULTISELECT_OK);
     strncpy(g_listen_result, accepted_heap, sizeof(g_listen_result) - 1);
     free((void *)accepted_heap);
@@ -113,23 +116,60 @@ static void test_handshake_success(void)
 {
     libp2p_transport_t *tcp = libp2p_tcp_transport_new(NULL);
     assert(tcp);
+    fprintf(stderr, "[TEST_MS] test_handshake_success: created tcp transport\n");
 
     int ma_err;
-    multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/4011", &ma_err);
-    assert(addr && ma_err == 0);
+    /* Bind to an ephemeral port to avoid collisions with other parallel tests */
+    multiaddr_t *bind_addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/0", &ma_err);
+    assert(bind_addr && ma_err == 0);
 
     libp2p_listener_t *lst = NULL;
-    assert(libp2p_transport_listen(tcp, addr, &lst) == LIBP2P_TRANSPORT_OK);
+    fprintf(stderr, "[TEST_MS] test_handshake_success: listening on /ip4/127.0.0.1/tcp/0\n");
+    {
+        int rc_listen = libp2p_transport_listen(tcp, bind_addr, &lst);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: listen rc=%d lst=%p\n", rc_listen, (void*)lst);
+        assert(rc_listen == LIBP2P_TRANSPORT_OK && lst != NULL);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: listen established\n");
+    }
+
+    /* Discover the actual bound address (with the real port) */
+    multiaddr_t *dial_addr = NULL;
+    libp2p_listener_err_t la_rc = libp2p_listener_local_addr(lst, &dial_addr);
+    fprintf(stderr, "[TEST_MS] test_handshake_success: libp2p_listener_local_addr rc=%d\n", (int)la_rc);
+    if (!dial_addr)
+    {
+        int se = 0;
+        char *bind_str = multiaddr_to_str(bind_addr, &se);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: dial_addr is NULL, bind_addr=%s (err=%d)\n", bind_str ? bind_str : "(null)", se);
+        free(bind_str);
+    }
+    assert(la_rc == LIBP2P_LISTENER_OK);
+    assert(dial_addr);
+    {
+        int se = 0;
+        char *addr_str = multiaddr_to_str(dial_addr, &se);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: listener local addr: %s (err=%d)\n", addr_str ? addr_str : "(null)", se);
+        free(addr_str);
+    }
 
     libp2p_conn_t *c = NULL;
-    assert(libp2p_transport_dial(tcp, addr, &c) == LIBP2P_TRANSPORT_OK);
+    fprintf(stderr, "[TEST_MS] test_handshake_success: dialing...\n");
+    {
+        int rc_dial = libp2p_transport_dial(tcp, dial_addr, &c);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: dial rc=%d c=%p\n", rc_dial, (void*)c);
+        assert(rc_dial == LIBP2P_TRANSPORT_OK && c != NULL);
+        fprintf(stderr, "[TEST_MS] test_handshake_success: dialed\n");
+    }
 
     libp2p_conn_t *s = NULL;
+    fprintf(stderr, "[TEST_MS] test_handshake_success: waiting accept...\n");
     while (libp2p_listener_accept(lst, &s) == LIBP2P_LISTENER_ERR_AGAIN)
         ;
     assert(s);
+    fprintf(stderr, "[TEST_MS] test_handshake_success: accepted inbound conn\n");
 
     pthread_t tid_dial, tid_listen;
+    fprintf(stderr, "[TEST_MS] test_handshake_success: starting threads\n");
     assert(pthread_create(&tid_dial, NULL, dial_thread, c) == 0);
     assert(pthread_create(&tid_listen, NULL, listen_thread, s) == 0);
 
@@ -152,7 +192,8 @@ static void test_handshake_success(void)
 
     libp2p_listener_close(lst);
     libp2p_transport_close(tcp);
-    multiaddr_free(addr);
+    multiaddr_free(bind_addr);
+    multiaddr_free(dial_addr);
     libp2p_transport_free(tcp);
 }
 
@@ -160,28 +201,63 @@ static void test_reject_missing_header(void)
 {
     libp2p_transport_t *tcp = libp2p_tcp_transport_new(NULL);
     assert(tcp);
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: created tcp transport\n");
 
     int ma_err;
-    multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/4012", &ma_err);
-    assert(addr && ma_err == 0);
+    /* Bind to an ephemeral port to avoid collisions with other parallel tests */
+    multiaddr_t *bind_addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/0", &ma_err);
+    assert(bind_addr && ma_err == 0);
 
     libp2p_listener_t *lst = NULL;
-    assert(libp2p_transport_listen(tcp, addr, &lst) == LIBP2P_TRANSPORT_OK);
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: listening on /ip4/127.0.0.1/tcp/0\n");
+    {
+        int rc_listen2 = libp2p_transport_listen(tcp, bind_addr, &lst);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: listen rc=%d lst=%p\n", rc_listen2, (void*)lst);
+        assert(rc_listen2 == LIBP2P_TRANSPORT_OK && lst != NULL);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: listen established\n");
+    }
+
+    /* Discover the actual bound address (with the real port) */
+    multiaddr_t *dial_addr = NULL;
+    libp2p_listener_err_t la2_rc = libp2p_listener_local_addr(lst, &dial_addr);
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: libp2p_listener_local_addr rc=%d\n", (int)la2_rc);
+    if (!dial_addr)
+    {
+        int se = 0;
+        char *bind_str = multiaddr_to_str(bind_addr, &se);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: dial_addr is NULL, bind_addr=%s (err=%d)\n", bind_str ? bind_str : "(null)", se);
+        free(bind_str);
+    }
+    assert(la2_rc == LIBP2P_LISTENER_OK);
+    assert(dial_addr);
+    {
+        int se = 0;
+        char *addr_str = multiaddr_to_str(dial_addr, &se);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: listener local addr: %s (err=%d)\n", addr_str ? addr_str : "(null)", se);
+        free(addr_str);
+    }
 
     libp2p_conn_t *c = NULL;
-    assert(libp2p_transport_dial(tcp, addr, &c) == LIBP2P_TRANSPORT_OK);
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: dialing...\n");
+    {
+        int rc_dial2 = libp2p_transport_dial(tcp, dial_addr, &c);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: dial rc=%d c=%p\n", rc_dial2, (void*)c);
+        assert(rc_dial2 == LIBP2P_TRANSPORT_OK && c != NULL);
+        fprintf(stderr, "[TEST_MS] test_reject_missing_header: dialed\n");
+    }
 
     libp2p_conn_t *s = NULL;
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: waiting accept...\n");
     while (libp2p_listener_accept(lst, &s) == LIBP2P_LISTENER_ERR_AGAIN)
         ;
     assert(s);
+    fprintf(stderr, "[TEST_MS] test_reject_missing_header: accepted inbound conn\n");
 
     /* Send invalid message before the multistream header */
     send_raw_msg(s, "ls");
 
     const char *accepted = NULL;
-    libp2p_multiselect_err_t rc =
-        libp2p_multiselect_dial(c, g_proposals, 1000, &accepted);
+    libp2p_multiselect_err_t rc = libp2p_multiselect_dial(c, g_proposals, 1000, &accepted);
     assert(rc == LIBP2P_MULTISELECT_ERR_PROTO_MAL);
 
     print_standard("multiselect handshake aborted on invalid header", "", 1);
@@ -193,7 +269,8 @@ static void test_reject_missing_header(void)
 
     libp2p_listener_close(lst);
     libp2p_transport_close(tcp);
-    multiaddr_free(addr);
+    multiaddr_free(bind_addr);
+    multiaddr_free(dial_addr);
     libp2p_transport_free(tcp);
 }
 

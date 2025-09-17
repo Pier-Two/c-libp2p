@@ -40,8 +40,7 @@ typedef enum
  * @return On success, the total number of bytes written is returned.
  *         On failure, a negative error code is returned.
  */
-int multihash_encode(uint64_t code, const uint8_t *data, size_t data_len, uint8_t *out,
-                     size_t out_len);
+int multihash_encode(uint64_t code, const uint8_t *data, size_t data_len, uint8_t *out, size_t out_len);
 
 /**
  * @brief Decode a multihash from the given buffer, extracting the hash function code,
@@ -60,8 +59,7 @@ int multihash_encode(uint64_t code, const uint8_t *data, size_t data_len, uint8_
  * @return On success, the total number of bytes consumed is returned.
  *         On failure, a negative error code is returned.
  */
-int multihash_decode(const uint8_t *in, size_t in_len, uint64_t *code, uint8_t *digest,
-                     size_t *digest_len);
+int multihash_decode(const uint8_t *in, size_t in_len, uint64_t *code, uint8_t *digest, size_t *digest_len);
 
 #ifdef __cplusplus
 }

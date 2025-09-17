@@ -74,7 +74,7 @@ int multibase_base32_encode(const uint8_t *data, size_t data_len, char *out, siz
         }
         out_chars += extra;
     }
-    
+
     if (out_len < out_chars + 1)
     {
         return MULTIBASE_ERR_BUFFER_TOO_SMALL;

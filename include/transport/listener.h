@@ -28,7 +28,6 @@ extern "C"
 struct libp2p_listener;
 typedef struct libp2p_listener libp2p_listener_t;
 
-
 /**
  * @enum libp2p_listener_err_t
  * @brief Return codes for listener operations.
@@ -76,7 +75,7 @@ typedef struct
 struct libp2p_listener
 {
     const libp2p_listener_vtbl_t *vt;
-    _Atomic(void *) ctx;          /**< Transport-specific state (atomic pointer for thread‑safe access) */
+    _Atomic(void *) ctx;           /**< Transport-specific state (atomic pointer for thread‑safe access) */
     _Atomic unsigned int refcount; /**< Reference count for thread-safe lifetime */
     pthread_mutex_t mutex;         /**< Mutex to serialize vtbl calls */
 };
@@ -123,15 +122,11 @@ static inline libp2p_listener_err_t libp2p_listener_accept(libp2p_listener_t *l,
 
     libp2p_listener_ref(l);
 
-    pthread_mutex_lock(&l->mutex);
-    // Ensure vt is valid after potentially waiting for the lock
-    // and after incrementing refcount (though ref should protect it)
+    /* Do not hold the wrapper mutex across potentially blocking accept.
+     * The transport implementation provides its own concurrency control. */
     libp2p_listener_err_t ret = LIBP2P_LISTENER_ERR_INTERNAL; // Default error
     if (l->vt && l->vt->accept)
-    {
         ret = l->vt->accept(l, out);
-    }
-    pthread_mutex_unlock(&l->mutex);
 
     libp2p_listener_unref(l);
     return ret;
@@ -147,22 +142,11 @@ static inline libp2p_listener_err_t libp2p_listener_accept(libp2p_listener_t *l,
 static inline libp2p_listener_err_t libp2p_listener_local_addr(libp2p_listener_t *l, multiaddr_t **out)
 {
     if (!l || !out)
-    { // Check !out here, l->vt check is done after ref
         return LIBP2P_LISTENER_ERR_NULL_PTR;
-    }
-
-    libp2p_listener_ref(l);
-
-    pthread_mutex_lock(&l->mutex);
-    libp2p_listener_err_t ret = LIBP2P_LISTENER_ERR_NULL_PTR; // Default error if vt or func is null
-    if (l->vt && l->vt->local_addr)
-    { // Check vt and specific function pointer
-        ret = l->vt->local_addr(l, out);
-    }
-    pthread_mutex_unlock(&l->mutex);
-
-    libp2p_listener_unref(l);
-    return ret;
+    if (!l->vt || !l->vt->local_addr)
+        return LIBP2P_LISTENER_ERR_NULL_PTR;
+    /* Delegate to transport implementation; it handles its own concurrency. */
+    return l->vt->local_addr(l, out);
 }
 
 /**
@@ -180,13 +164,11 @@ static inline libp2p_listener_err_t libp2p_listener_close(libp2p_listener_t *l)
 
     libp2p_listener_ref(l);
 
-    pthread_mutex_lock(&l->mutex);
+    /* Avoid taking the wrapper mutex here to prevent deadlocks with
+     * accept() that may wait internally while holding it. */
     libp2p_listener_err_t ret = LIBP2P_LISTENER_ERR_NULL_PTR; // Default error
     if (l->vt && l->vt->close)
-    { // Check vt and specific function pointer
         ret = l->vt->close(l);
-    }
-    pthread_mutex_unlock(&l->mutex);
 
     libp2p_listener_unref(l);
     return ret;
@@ -197,10 +179,7 @@ static inline libp2p_listener_err_t libp2p_listener_close(libp2p_listener_t *l)
  *
  * @param l Listener instance (may be NULL).
  */
-static inline void libp2p_listener_free(libp2p_listener_t *l)
-{
-    libp2p_listener_unref(l);
-}
+static inline void libp2p_listener_free(libp2p_listener_t *l) { libp2p_listener_unref(l); }
 
 #ifdef __cplusplus
 } /* extern "C" */

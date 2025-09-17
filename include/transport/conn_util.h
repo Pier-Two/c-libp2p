@@ -15,11 +15,12 @@
 #include <stdint.h>
 #include <time.h>
 
-#include "transport/connection.h"
 #include "protocol/tcp/protocol_tcp_util.h" /* now_mono_ms() */
+#include "transport/connection.h"
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /**
@@ -38,10 +39,7 @@ extern "C" {
  *                 Pass 0 to use the default (1000ms).
  * @return LIBP2P_CONN_OK on success or a negative libp2p_conn_err_t on failure.
  */
-libp2p_conn_err_t libp2p_conn_write_all(libp2p_conn_t *c,
-                                        const uint8_t *buf,
-                                        size_t len,
-                                        uint64_t slow_ms);
+libp2p_conn_err_t libp2p_conn_write_all(libp2p_conn_t *c, const uint8_t *buf, size_t len, uint64_t slow_ms);
 
 /**
  * @brief Read exactly @p len bytes from the connection.
@@ -54,9 +52,22 @@ libp2p_conn_err_t libp2p_conn_write_all(libp2p_conn_t *c,
  * @param len Number of bytes to read.
  * @return LIBP2P_CONN_OK on success or a negative libp2p_conn_err_t on failure.
  */
-libp2p_conn_err_t libp2p_conn_read_exact(libp2p_conn_t *c,
-                                         uint8_t *buf,
-                                         size_t len);
+libp2p_conn_err_t libp2p_conn_read_exact(libp2p_conn_t *c, uint8_t *buf, size_t len);
+
+/**
+ * @brief Read exactly @p len bytes with a stall timeout.
+ *
+ * Behaves like libp2p_conn_read_exact(), but if the connection repeatedly
+ * reports AGAIN without making forward progress for @p slow_ms milliseconds,
+ * returns LIBP2P_CONN_ERR_TIMEOUT instead of spinning indefinitely.
+ *
+ * @param c       Connection handle.
+ * @param buf     Destination buffer (size >= @p len).
+ * @param len     Number of bytes to read.
+ * @param slow_ms Maximum stall time in milliseconds (0 = default 1000ms).
+ * @return LIBP2P_CONN_OK on success or a negative libp2p_conn_err_t.
+ */
+libp2p_conn_err_t libp2p_conn_read_exact_timed(libp2p_conn_t *c, uint8_t *buf, size_t len, uint64_t slow_ms);
 
 #ifdef __cplusplus
 } /* extern "C" */

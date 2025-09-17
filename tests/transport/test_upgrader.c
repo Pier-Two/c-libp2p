@@ -1,13 +1,14 @@
 #include "multiformats/multiaddr/multiaddr.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_ed25519.h"
+#include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol/noise/protocol_noise.h"
-#include "protocol/mplex/protocol_mplex.h"
 #include "protocol/tcp/protocol_tcp.h"
 #include "protocol/tcp/protocol_tcp_conn.h"
 #include "transport/listener.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <noise/protocol.h>
 #include <pthread.h>
@@ -17,6 +18,60 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+
+/* Event-driven receive state and helpers (file-scope) */
+typedef struct
+{
+    volatile int got;
+    size_t n;
+    uint8_t buf[8];
+    libp2p_mplex_ctx_t *ctx; /* server ctx to stop the loop from callback */
+    pthread_mutex_t *mutex;  /* optional signaling mutex */
+    pthread_cond_t *cond;    /* optional signaling cond */
+} recv_state_t;
+
+typedef struct
+{
+    libp2p_mplex_ctx_t *ctx;
+    volatile int *got;
+    int timeout_ms;
+} stop_loop_args_t;
+
+static void on_stream_event_cb(libp2p_mplex_stream_t *st, libp2p_mplex_event_t ev, void *user)
+{
+    recv_state_t *rs = (recv_state_t *)user;
+    if (ev == LIBP2P_MPLEX_STREAM_DATA_AVAILABLE)
+    {
+        libp2p_mplex_ssize_t r = libp2p_mplex_stream_read(st, rs->buf, sizeof(rs->buf));
+        if (r > 0)
+        {
+            if (rs->mutex && rs->cond)
+            {
+                pthread_mutex_lock(rs->mutex);
+                rs->got = 1;
+                rs->n = (size_t)r;
+                pthread_cond_signal(rs->cond);
+                pthread_mutex_unlock(rs->mutex);
+            }
+            else
+            {
+                rs->got = 1;
+                rs->n = (size_t)r;
+            }
+            if (rs->ctx)
+            {
+                (void)libp2p_mplex_stop_event_loop(rs->ctx);
+            }
+        }
+    }
+}
+
+static void *mplex_server_loop(void *arg)
+{
+    libp2p_mplex_ctx_t *c = (libp2p_mplex_ctx_t *)arg;
+    (void)libp2p_mplex_run_event_loop(c, -1);
+    return NULL;
+}
 #ifdef _WIN32
 #include <io.h>
 #ifndef F_GETFL
@@ -148,17 +203,19 @@ static void test_upgrade_handshake(void)
 
     libp2p_security_t *sec_list_cli[] = {sec_cli, NULL};
     libp2p_security_t *sec_list_srv[] = {sec_srv, NULL};
-    libp2p_muxer_t *mux = libp2p_mplex_new();
-    libp2p_muxer_t *mux_list[] = {mux, NULL};
+    libp2p_muxer_t *mux_client = libp2p_mplex_muxer_new();
+    libp2p_muxer_t *mux_server = libp2p_mplex_muxer_new();
+    libp2p_muxer_t *mux_list_cli[] = {mux_client, NULL};
+    libp2p_muxer_t *mux_list_srv[] = {mux_server, NULL};
     libp2p_upgrader_config_t uc = libp2p_upgrader_config_default();
     uc.security = (const libp2p_security_t *const *)sec_list_cli;
     uc.n_security = 1;
-    uc.muxers = (const libp2p_muxer_t *const *)mux_list;
+    uc.muxers = (const libp2p_muxer_t *const *)mux_list_cli;
     uc.n_muxers = 1;
     libp2p_upgrader_t *up_cli = libp2p_upgrader_new(&uc);
     uc.security = (const libp2p_security_t *const *)sec_list_srv;
     uc.n_security = 1;
-    uc.muxers = (const libp2p_muxer_t *const *)mux_list;
+    uc.muxers = (const libp2p_muxer_t *const *)mux_list_srv;
     uc.n_muxers = 1;
     libp2p_upgrader_t *up_srv = libp2p_upgrader_new(&uc);
     TEST_OK("upgrader alloc", up_cli && up_srv, "up_cli=%p up_srv=%p", (void *)up_cli, (void *)up_srv);
@@ -185,12 +242,7 @@ static void test_upgrade_handshake(void)
     rc = accept_with_timeout(lst, &srv, 100, 2000);
     TEST_OK("accept", rc == 0 && srv, "rc=%d", rc);
 
-    tcp_conn_ctx_t *cctx = cli->ctx;
-    int flags = fcntl(cctx->fd, F_GETFL, 0);
-    fcntl(cctx->fd, F_SETFL, flags & ~O_NONBLOCK);
-    tcp_conn_ctx_t *sctx = srv->ctx;
-    flags = fcntl(sctx->fd, F_GETFL, 0);
-    fcntl(sctx->fd, F_SETFL, flags & ~O_NONBLOCK);
+    /* Keep sockets non-blocking for event-driven operation (required by mplex loop) */
 
     struct upg_args cli_args = {.upg = up_cli, .conn = cli, .hint = NULL, .out = NULL};
     struct upg_args srv_args = {.upg = up_srv, .conn = srv, .hint = NULL, .out = NULL};
@@ -213,25 +265,59 @@ static void test_upgrade_handshake(void)
     TEST_OK("server saw client", srv_args.out && srv_args.out->remote_peer && peer_id_equals(srv_args.out->remote_peer, &pid_cli) == 1, "match=%d",
             srv_args.out && srv_args.out->remote_peer ? peer_id_equals(srv_args.out->remote_peer, &pid_cli) : -1);
 
-    libp2p_mplex_ctx_t *ctx_c = libp2p_mplex_ctx_new(cli_args.out->conn);
-    libp2p_mplex_ctx_t *ctx_s = libp2p_mplex_ctx_new(srv_args.out->conn);
+    /* Reuse the already-negotiated mplex contexts from the upgrader's muxers */
+    libp2p_mplex_ctx_t *ctx_c = NULL;
+    libp2p_mplex_ctx_t *ctx_s = NULL;
+    if (cli_args.out && cli_args.out->muxer)
+        ctx_c = (libp2p_mplex_ctx_t *)cli_args.out->muxer->ctx;
+    if (srv_args.out && srv_args.out->muxer)
+        ctx_s = (libp2p_mplex_ctx_t *)srv_args.out->muxer->ctx;
     TEST_OK("mplex ctx", ctx_c && ctx_s, "ctx");
     if (ctx_c && ctx_s)
     {
-        uint64_t sid = 0;
-        TEST_OK("stream open", libp2p_mplex_stream_open(ctx_c, (const uint8_t *)"s", 1, &sid) == LIBP2P_MPLEX_OK,
-                "open");
-        TEST_OK("stream send", libp2p_mplex_stream_send(ctx_c, sid, 1, (const uint8_t *)"ping", 4) == LIBP2P_MPLEX_OK,
-                "send");
-        libp2p_mplex_process_one(ctx_s);
-        libp2p_mplex_process_one(ctx_s);
-        uint8_t buf[8];
-        size_t n = 0;
-        libp2p_mplex_err_t mrc = libp2p_mplex_stream_recv(ctx_s, sid, 0, buf, sizeof(buf), &n);
-        TEST_OK("data after upgrade", mrc == LIBP2P_MPLEX_OK && n == 4 && memcmp(buf, "ping", 4) == 0,
-                "mrc=%d n=%zu", mrc, n);
-        libp2p_mplex_ctx_free(ctx_c);
-        libp2p_mplex_ctx_free(ctx_s);
+        /* Event-driven: set callbacks and run event loops */
+        pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+        pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
+        recv_state_t rs = {0};
+        libp2p_mplex_event_callbacks_t cbs = {.on_stream_event = on_stream_event_cb, .on_error = NULL, .user_data = &rs};
+        (void)libp2p_mplex_set_event_callbacks(ctx_s, &cbs);
+        (void)libp2p_mplex_set_event_callbacks(ctx_c, &cbs);
+
+        rs.mutex = &m;
+        rs.cond = &cv;
+        rs.ctx = ctx_s;
+
+        /* start event loops on both sides */
+        pthread_t t_loop_srv, t_loop_cli;
+        (void)pthread_create(&t_loop_srv, NULL, mplex_server_loop, ctx_s);
+        (void)pthread_create(&t_loop_cli, NULL, mplex_server_loop, ctx_c);
+
+        /* open a stream and send data */
+        libp2p_mplex_stream_t *stream = NULL;
+        TEST_OK("stream open", libp2p_mplex_stream_open(ctx_c, (const uint8_t *)"s", 1, &stream) == LIBP2P_MPLEX_OK, "open");
+        TEST_OK("stream send", libp2p_mplex_stream_write_async(stream, (const uint8_t *)"ping", 4) >= 0, "send");
+
+        /* wait on condition for up to 2 seconds */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 2;
+        pthread_mutex_lock(&m);
+        while (!rs.got)
+        {
+            int err = pthread_cond_timedwait(&cv, &m, &ts);
+            if (err == ETIMEDOUT)
+                break;
+        }
+        pthread_mutex_unlock(&m);
+
+        /* stop loops and join */
+        (void)libp2p_mplex_stop_event_loop(ctx_s);
+        (void)libp2p_mplex_stop_event_loop(ctx_c);
+        (void)pthread_join(t_loop_srv, NULL);
+        (void)pthread_join(t_loop_cli, NULL);
+
+        TEST_OK("data after upgrade", rs.got && rs.n == 4 && memcmp(rs.buf, "ping", 4) == 0, "got=%d n=%zu", rs.got, rs.n);
+        /* ctxs are owned by upgrader */
     }
 
     /* raw connections are owned by the upgraded conns now */
@@ -269,7 +355,8 @@ static void test_upgrade_handshake(void)
     multiaddr_free(addr);
     libp2p_upgrader_free(up_cli);
     libp2p_upgrader_free(up_srv);
-    libp2p_muxer_free(mux);
+    libp2p_muxer_free(mux_client);
+    libp2p_muxer_free(mux_server);
     libp2p_security_free(sec_cli);
     libp2p_security_free(sec_srv);
     peer_id_destroy(&pid_cli);

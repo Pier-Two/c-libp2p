@@ -1,29 +1,29 @@
 #ifdef _WIN32
-  // avoid pulling in the world
-  #ifndef WIN32_LEAN_AND_MEAN
-  #  define WIN32_LEAN_AND_MEAN
-  #endif
-  // core Windows types, plus LONG, DWORD, etc.
-  #include <windows.h>
-  // Win32 CryptoAPI (CryptGenRandom, CryptAcquireContext, …)
-  #include <wincrypt.h>
+// avoid pulling in the world
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+// core Windows types, plus LONG, DWORD, etc.
+#include <windows.h>
+// Win32 CryptoAPI (CryptGenRandom, CryptAcquireContext, …)
+#include <wincrypt.h>
 #else
-  // POSIX / BSD side
-  #include <fcntl.h>
-  #include <sys/types.h>
-  #include <unistd.h>
-  #ifdef __linux__
-  #  include <sys/random.h>
-  #endif
+// POSIX / BSD side
+#include <fcntl.h>
+#include <sys/types.h>
+#include <unistd.h>
+#ifdef __linux__
+#include <sys/random.h>
+#endif
 #endif
 
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 #include "../../lib/secp256k1/include/secp256k1.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 #include "peer_id/peer_id_secp256k1.h"
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #ifndef HAVE_EXPLICIT_BZERO
 static void explicit_bzero(void *s, size_t n)
