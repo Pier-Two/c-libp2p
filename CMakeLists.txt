@@ -248,6 +248,16 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+if(TARGET libp2p_metrics)
+    # Ensure the metrics library lands alongside the other shared objects so
+    # packaging logic (e.g. interop Docker image) can pick it up reliably.
+    set_target_properties(libp2p_metrics PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+        ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+endif()
+
 # Include public headers.
 include_directories(BEFORE ${PROJECT_SOURCE_DIR}/include/protocol/tcp)
 include_directories(${PROJECT_SOURCE_DIR}/include)
