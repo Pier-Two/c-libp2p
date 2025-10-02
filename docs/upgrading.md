@@ -38,6 +38,8 @@ libp2p_host_builder_max_conns(b, 128, 128);         /* limit inbound/outbound co
 libp2p_host_builder_per_conn_stream_caps(b, 32, 32);
 ```
 
+Call `libp2p_host_builder_transport(b, "quic")` as well if you want the host to consider QUIC addresses during dialing and listening.
+
 All of these setters copy their arguments, so you can free any temporary arrays
 once the builder call returns.
 
@@ -91,10 +93,18 @@ The host publishes upgrade progress through the event bus:
 - `LIBP2P_EVT_CONN_OPENED` / `LIBP2P_EVT_CONN_CLOSED` – connection lifecycle.
 - `LIBP2P_EVT_STREAM_OPENED` / `LIBP2P_EVT_STREAM_CLOSED` – stream lifecycle.
 - `LIBP2P_EVT_OUTGOING_CONNECTION_ERROR` – dial or handshake failure (error code
-  and message included).
+ and message included).
 
 Subscribe with `libp2p_event_subscribe()` or poll via
 `libp2p_host_next_event()` to observe and react to these transitions.
+
+> **Note**
+> QUIC multiaddresses (`/ip*/.../udp/.../quic_v1`) bundle TLS 1.3 and stream
+> multiplexing directly into the transport. When the host detects such an
+> address it executes the transport dial and protocol negotiation stages, but
+> skips the separate Noise and Yamux/Mplex steps described above. This keeps the
+> upgrading pipeline consistent while letting QUIC act as a fully upgraded
+> session.
 
 ## Protocol selection utilities
 

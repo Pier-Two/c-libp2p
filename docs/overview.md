@@ -10,7 +10,7 @@ blocks and how the rest of the documentation fits together.
 
 The `libp2p_host_t` type (see `include/libp2p/host.h`) encapsulates the runtime:
 
-- Transports (TCP today, with hooks for QUIC and others)
+- Transports (TCP and QUIC out of the box, with hooks for additional stacks)
 - Security transports (Noise is built in) and stream multiplexers (Yamux and
   mplex) negotiated via multistream-select v1
 - A single-threaded callback executor so user protocol callbacks always run in a
@@ -33,7 +33,7 @@ Hosts are usually constructed with the ergonomic builder in
   describing addresses. They are used everywhere a remote endpoint is
   referenced. See [multiaddress.md](multiaddress.md).
 - **Transports** – Implementations of the raw byte-pipe abstraction reside under
-  `src/protocol/tcp` and are exposed through `include/libp2p/transport.h`. Hosts
+  `src/protocol/tcp` and `src/protocol/quic`, and are exposed through `include/libp2p/transport.h`. Hosts
   select the first transport that reports it can handle a given multiaddress.
   See [transports.md](transports.md).
 - **Security + multiplexing** – Security transports and muxers are requested via

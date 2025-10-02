@@ -20,6 +20,7 @@ Use the host runtime to establish a stream to the remote ping service, then call
 
 libp2p_host_builder_t *b = libp2p_host_builder_new();
 libp2p_host_builder_transport(b, "tcp");
+/* Add libp2p_host_builder_transport(b, "quic") to reach QUIC listeners */
 libp2p_host_builder_security(b, "noise");
 libp2p_host_builder_muxer(b, "yamux");
 
@@ -28,6 +29,7 @@ libp2p_host_builder_build(b, &host);
 libp2p_host_builder_free(b);
 
 libp2p_stream_t *stream = NULL;
+/* Replace the default address with /ip4/127.0.0.1/udp/4001/quic_v1 to ping over QUIC */
 if (libp2p_host_dial_protocol_blocking(host, "/ip4/127.0.0.1/tcp/4001",
                                        LIBP2P_PING_PROTO_ID,
                                        5000 /* ms timeout */, &stream) == 0) {

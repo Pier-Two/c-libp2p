@@ -8,7 +8,8 @@ you can also use them directly for bespoke setups or testing.
 ## Built-in transport factories
 
 `include/libp2p/transport.h` exposes convenience factories for the transports
-shipped with the library:
+shipped with the library. TCP is always available; QUIC is built when the
+library is compiled with the bundled picoquic dependency:
 
 ```c
 #include "libp2p/transport.h"
@@ -17,12 +18,54 @@ libp2p_transport_t *tcp = NULL;
 if (libp2p_transport_tcp(&tcp) != 0) {
     /* TCP not available */
 }
+
+libp2p_transport_t *quic = NULL;
+if (libp2p_transport_quic(&quic) == 0) {
+    /* QUIC transport ready – remember to set the TLS identity before use */
+} else {
+    /* QUIC support was not compiled in */
+}
 ```
 
 The helper returns a configured `libp2p_transport_t` whose virtual table matches
 `include/transport/transport.h`. At runtime the host builder translates
 transport names (for example `"tcp"`) into the corresponding factory calls and
 stores the resulting handles on the host.
+
+## QUIC transport specifics
+
+QUIC connections carry TLS 1.3 encryption and stream multiplexing directly in
+the transport layer. c-libp2p uses the picoquic stack and requires each QUIC
+transport to be seeded with the node's private key so that TLS certificates can
+be minted on demand. Dialing or listening without an identity causes
+`libp2p_transport_dial()` / `libp2p_transport_listen()` to fail with an internal
+error.
+
+```c
+#include "protocol/quic/protocol_quic.h"
+#include "peer_id/peer_id_ed25519.h"
+
+libp2p_quic_tls_cert_options_t opts = libp2p_quic_tls_cert_options_default();
+opts.identity_key_type = PEER_ID_ED25519_KEY_TYPE;
+opts.identity_key = private_key_bytes;      /* protobuf-encoded PrivateKey */
+opts.identity_key_len = private_key_length;
+
+(void)libp2p_quic_transport_set_identity(quic, &opts);
+```
+
+The host builder performs this wiring automatically by copying the host
+identity into any QUIC transports it instantiates. Manual setups should call
+`libp2p_quic_transport_set_identity()` once after creating the transport.
+
+When constructing QUIC multiaddresses, use UDP plus either `/quic_v1` (preferred
+for IETF QUIC) or `/quic`:
+
+```c
+multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic_v1", &err);
+```
+
+Because QUIC already provides authenticated encryption and stream support, the
+host skips the separate Noise and muxer upgraders when dialing QUIC addresses.
 
 ## Dialling and listening manually
 

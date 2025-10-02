@@ -15,6 +15,11 @@ multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/4001", &err);
 if (!addr || err != MULTIADDR_SUCCESS) {
     /* handle parse error */
 }
+
+multiaddr_t *quic = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic_v1", &err);
+if (!quic || err != MULTIADDR_SUCCESS) {
+    /* QUIC multiaddress parse error */
+}
 ```
 
 Binary multiaddr bytes received over the network can be parsed with

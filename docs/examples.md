@@ -52,7 +52,9 @@ int main(void)
 
     libp2p_host_builder_t *builder = libp2p_host_builder_new();
     libp2p_host_builder_listen_addr(builder, "/ip4/127.0.0.1/tcp/4001");
+    /* Use /ip4/127.0.0.1/udp/4001/quic_v1 when exposing QUIC */
     libp2p_host_builder_transport(builder, "tcp");
+    /* Add libp2p_host_builder_transport(builder, "quic") to accept QUIC */
     libp2p_host_builder_security(builder, "noise");
     libp2p_host_builder_muxer(builder, "yamux");
 
@@ -112,6 +114,8 @@ Highlights:
 - Events are polled with a timeout to keep the example simple. Real projects can
   subscribe for asynchronous delivery via `libp2p_event_subscribe()`.
 
+- Enable QUIC by registering the transport (`libp2p_host_builder_transport(builder, "quic")`) and switching the listen multiaddr to `/udp/.../quic_v1`.
+
 ## Dialer targeting the echo service
 
 ```c
@@ -128,9 +132,11 @@ Highlights:
 int main(int argc, char **argv)
 {
     const char *target = (argc > 1) ? argv[1] : "/ip4/127.0.0.1/tcp/4001";
+    /* Swap the default for /ip4/127.0.0.1/udp/4001/quic_v1 to dial QUIC */
 
     libp2p_host_builder_t *builder = libp2p_host_builder_new();
     libp2p_host_builder_transport(builder, "tcp");
+    /* Call again with "quic" to favour QUIC dialing */
     libp2p_host_builder_security(builder, "noise");
     libp2p_host_builder_muxer(builder, "yamux");
 
