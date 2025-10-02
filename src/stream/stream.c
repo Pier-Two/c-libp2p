@@ -4,6 +4,8 @@
 #include "libp2p/stream_internal.h"
 #include "peer_id/peer_id.h"
 #include "transport/connection.h"
+#include "libp2p/muxer.h"
+#include <stdatomic.h>
 #include <stdio.h>
 /* resource manager removed: keep rust-libp2p parity */
 #include <stdlib.h>
@@ -35,10 +37,14 @@ typedef struct stream_stub
     libp2p_conn_t *parent_conn;
     struct libp2p_muxer *parent_mx;
     int owns_parent;
+    int closed;
     /* Optional custom backend ops for yamux/mplex-backed streams. */
     void *io_ctx;
     libp2p_stream_backend_ops_t ops;
     int has_ops;
+    libp2p_stream_cleanup_fn cleanup;
+    void *cleanup_ctx;
+    atomic_int defer_destroy;
 } stream_stub_t;
 
 static stream_stub_t *S(libp2p_stream_t *s) { return (stream_stub_t *)s; }
@@ -127,7 +133,8 @@ int libp2p_stream_close(libp2p_stream_t *s)
     stream_stub_t *st = S(s);
     if (!st)
         return LIBP2P_ERR_NULL_PTR;
-    /* Unregister from host active streams before tearing down */
+    if (st->closed)
+        return 0;
     if (st->host)
     {
         pthread_mutex_lock(&st->host->mtx);
@@ -173,6 +180,7 @@ int libp2p_stream_close(libp2p_stream_t *s)
     if (st->peer)
     {
         peer_id_destroy(st->peer);
+        free(st->peer);
         st->peer = NULL;
     }
     if (st->remote_addr_str)
@@ -183,21 +191,9 @@ int libp2p_stream_close(libp2p_stream_t *s)
     /* If this stream owns the parent session (outbound single-stream
      * dial), tear it down as well. Allow a tiny grace period so peers can
      * drain any in-flight data before the session disappears. */
-    if (st->owns_parent)
-    {
-        if (st->parent_conn)
-        {
-            libp2p_conn_close(st->parent_conn);
-            libp2p_conn_free(st->parent_conn);
-            st->parent_conn = NULL;
-        }
-        if (st->parent_mx)
-        {
-            extern void libp2p_muxer_free(struct libp2p_muxer * mx);
-            libp2p_muxer_free(st->parent_mx);
-            st->parent_mx = NULL;
-        }
-    }
+    if (st->owns_parent && st->parent_conn)
+        libp2p_conn_close(st->parent_conn);
+    st->closed = 1;
     return rc;
 }
 
@@ -206,6 +202,25 @@ int libp2p_stream_reset(libp2p_stream_t *s)
     stream_stub_t *st = S(s);
     if (!st)
         return LIBP2P_ERR_NULL_PTR;
+    if (st->closed)
+        return 0;
+    if (st->host)
+    {
+        pthread_mutex_lock(&st->host->mtx);
+        stream_entry_t **pp = &st->host->active_streams;
+        while (*pp)
+        {
+            if ((*pp)->s == s)
+            {
+                stream_entry_t *victim = *pp;
+                *pp = victim->next;
+                free(victim);
+                break;
+            }
+            pp = &(*pp)->next;
+        }
+        pthread_mutex_unlock(&st->host->mtx);
+    }
     /* Resource manager removed: no release accounting */
     int rc = 0;
     if (st->has_ops && st->ops.reset)
@@ -229,24 +244,32 @@ int libp2p_stream_reset(libp2p_stream_t *s)
     if (st->peer)
     {
         peer_id_destroy(st->peer);
+        free(st->peer);
         st->peer = NULL;
     }
-    if (st->owns_parent)
+    if (st->remote_addr_str)
     {
-        if (st->parent_conn)
-        {
-            libp2p_conn_close(st->parent_conn);
-            libp2p_conn_free(st->parent_conn);
-            st->parent_conn = NULL;
-        }
-        if (st->parent_mx)
-        {
-            extern void libp2p_muxer_free(struct libp2p_muxer * mx);
-            libp2p_muxer_free(st->parent_mx);
-            st->parent_mx = NULL;
-        }
+        free(st->remote_addr_str);
+        st->remote_addr_str = NULL;
     }
+    if (st->owns_parent && st->parent_conn)
+        libp2p_conn_close(st->parent_conn);
+    st->closed = 1;
     return rc == 0 ? LIBP2P_ERR_RESET : rc;
+}
+
+void libp2p_stream_free(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    int deferred = atomic_load_explicit(&st->defer_destroy, memory_order_acquire);
+    if (deferred > 0)
+    {
+        atomic_store_explicit(&st->defer_destroy, 2, memory_order_release);
+        return;
+    }
+    libp2p__stream_destroy(s);
 }
 
 ssize_t libp2p_stream_read(libp2p_stream_t *s, void *buf, size_t len)
@@ -398,10 +421,12 @@ libp2p_stream_t *libp2p_stream_from_conn(struct libp2p_host *host, libp2p_conn_t
     ss->parent_conn = NULL;
     ss->parent_mx = NULL;
     ss->owns_parent = 0;
+    ss->closed = 0;
     ss->remote_addr_str = NULL;
     ss->io_ctx = NULL;
     memset(&ss->ops, 0, sizeof(ss->ops));
     ss->has_ops = 0;
+    atomic_init(&ss->defer_destroy, 0);
 
     /* Cache remote address string for reuse and register in host list */
     if (host)
@@ -438,6 +463,63 @@ void libp2p_stream_set_parent(libp2p_stream_t *s, libp2p_conn_t *parent_conn, st
     st->parent_conn = parent_conn;
     st->parent_mx = mx;
     st->owns_parent = take_ownership ? 1 : 0;
+}
+
+int libp2p_stream_set_protocol_id(libp2p_stream_t *s, const char *protocol_id)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return LIBP2P_ERR_NULL_PTR;
+
+    char *dup = NULL;
+    if (protocol_id)
+    {
+        dup = strdup(protocol_id);
+        if (!dup)
+            return LIBP2P_ERR_INTERNAL;
+    }
+
+    free(st->proto);
+    st->proto = dup;
+
+    if (st->host)
+    {
+        pthread_mutex_lock(&st->host->mtx);
+        stream_entry_t *ent = st->host->active_streams;
+        while (ent)
+        {
+            if (ent->s == s)
+            {
+                ent->protocol_id = st->proto;
+                break;
+            }
+            ent = ent->next;
+        }
+        pthread_mutex_unlock(&st->host->mtx);
+    }
+    return 0;
+}
+
+int libp2p_stream_set_remote_peer(libp2p_stream_t *s, peer_id_t *peer)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+    {
+        if (peer)
+        {
+            peer_id_destroy(peer);
+            free(peer);
+        }
+        return LIBP2P_ERR_NULL_PTR;
+    }
+
+    if (st->peer)
+    {
+        peer_id_destroy(st->peer);
+        free(st->peer);
+    }
+    st->peer = peer;
+    return 0;
 }
 
 int libp2p__stream_consume_on_writable(libp2p_stream_t *s, libp2p_on_writable_fn *out_cb, void **out_ud)
@@ -492,6 +574,28 @@ struct libp2p_host *libp2p__stream_host(libp2p_stream_t *s)
     return st ? st->host : NULL;
 }
 
+void libp2p__stream_set_cleanup(libp2p_stream_t *s, libp2p_stream_cleanup_fn fn, void *ctx)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    st->cleanup = fn;
+    st->cleanup_ctx = ctx;
+}
+
+void libp2p__stream_mark_deferred(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    int expected = 0;
+    while (!atomic_compare_exchange_weak_explicit(&st->defer_destroy, &expected, 1, memory_order_release, memory_order_acquire))
+    {
+        if (expected != 0)
+            return;
+    }
+}
+
 libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, const libp2p_stream_backend_ops_t *ops, const char *protocol_id,
                                         int initiator, peer_id_t *remote_peer)
 {
@@ -514,6 +618,8 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
     if (ops)
         ss->ops = *ops;
     ss->has_ops = 1;
+    ss->closed = 0;
+    atomic_init(&ss->defer_destroy, 0);
 
     if (host)
     {
@@ -539,6 +645,55 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
         }
     }
     return (libp2p_stream_t *)ss;
+}
+
+void libp2p__stream_destroy(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    if (!st->closed)
+        (void)libp2p_stream_close(s);
+    if (st->cleanup)
+    {
+        st->cleanup(st->cleanup_ctx, s);
+        st->cleanup = NULL;
+        st->cleanup_ctx = NULL;
+    }
+    if (st->has_ops && st->ops.free_ctx && st->io_ctx)
+        st->ops.free_ctx(st->io_ctx);
+    st->io_ctx = NULL;
+    st->has_ops = 0;
+    if (st->owns_parent)
+    {
+        if (st->parent_mx)
+        {
+            libp2p_muxer_free(st->parent_mx);
+            st->parent_mx = NULL;
+        }
+        if (st->parent_conn)
+        {
+            libp2p_conn_free(st->parent_conn);
+            st->parent_conn = NULL;
+        }
+    }
+    if (st->proto)
+    {
+        free(st->proto);
+        st->proto = NULL;
+    }
+    if (st->peer)
+    {
+        peer_id_destroy(st->peer);
+        free(st->peer);
+        st->peer = NULL;
+    }
+    if (st->remote_addr_str)
+    {
+        free(st->remote_addr_str);
+        st->remote_addr_str = NULL;
+    }
+    free(st);
 }
 
 int libp2p__stream_is_writable(libp2p_stream_t *s)

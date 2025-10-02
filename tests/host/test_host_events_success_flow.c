@@ -118,7 +118,7 @@ int main(void)
         LIBP2P_EVT_CONN_OPENED
     };
     if (!wait_for_kinds(cli, need_cli, 3, 5000))
-    { libp2p_stream_close(stream); libp2p_host_free(cli); libp2p_host_builder_free(cli_b); libp2p_host_free(srv); libp2p_host_builder_free(srv_b); return 1; }
+    { libp2p_stream_close(stream); libp2p_stream_free(stream); libp2p_host_free(cli); libp2p_host_builder_free(cli_b); libp2p_host_free(srv); libp2p_host_builder_free(srv_b); return 1; }
 
     const libp2p_event_kind_t need_srv[] = {
         LIBP2P_EVT_CONN_OPENED,
@@ -126,10 +126,11 @@ int main(void)
         LIBP2P_EVT_STREAM_OPENED
     };
     if (!wait_for_kinds(srv, need_srv, 3, 5000))
-    { libp2p_stream_close(stream); libp2p_host_free(cli); libp2p_host_builder_free(cli_b); libp2p_host_free(srv); libp2p_host_builder_free(srv_b); return 1; }
+    { libp2p_stream_close(stream); libp2p_stream_free(stream); libp2p_host_free(cli); libp2p_host_builder_free(cli_b); libp2p_host_free(srv); libp2p_host_builder_free(srv_b); return 1; }
 
     /* Close on client and ensure client sees stream/conn closed */
     libp2p_stream_close(stream);
+    libp2p_stream_free(stream);
     const libp2p_event_kind_t need_cli_close[] = {
         LIBP2P_EVT_STREAM_CLOSED,
         LIBP2P_EVT_CONN_CLOSED

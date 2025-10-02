@@ -67,6 +67,14 @@ static inline void libp2p_io_free(libp2p_io_t *io)
         io->vt->free(io);
 }
 
+static inline void libp2p_io_close_free(libp2p_io_t *io)
+{
+    if (!io)
+        return;
+    (void)libp2p_io_close(io);
+    libp2p_io_free(io);
+}
+
 /* Factories */
 struct libp2p_connection; /* fwd */
 struct libp2p_stream;     /* fwd */

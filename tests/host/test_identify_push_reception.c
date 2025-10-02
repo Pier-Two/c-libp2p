@@ -9,6 +9,7 @@
 #include "libp2p/host_builder.h"
 #include "libp2p/events.h"
 #include "libp2p/lpmsg.h"
+#include "libp2p/stream.h"
 #include "peer_id/peer_id.h"
 #include "protocol/identify/protocol_identify.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
@@ -222,13 +223,14 @@ int main(void)
     fprintf(stderr, "[TEST_RCV] dial returned; sending payload\n");
     uint8_t *payload = NULL; size_t plen = 0;
     if (libp2p_identify_encode_local(ha, NULL, 0, &payload, &plen) != 0 || !payload)
-    { free(addrB); libp2p_stream_close(push); return 1; }
+    { free(addrB); libp2p_stream_close(push); libp2p_stream_free(push); return 1; }
 
     peer_id_t *pidA = NULL; (void)libp2p_host_get_peer_id(ha, &pidA);
     protocols_update_waiter_t waiter;
     if (!hb || !protocols_update_waiter_start(&waiter, hb, pidA, "[TEST_RCV]"))
     {
         libp2p_stream_close(push);
+        libp2p_stream_free(push);
         free(payload);
         free(addrB);
         return 1;
@@ -238,6 +240,7 @@ int main(void)
     {
         protocols_update_waiter_stop(&waiter, hb);
         libp2p_stream_close(push);
+        libp2p_stream_free(push);
         free(payload);
         free(addrB);
         if (pidA) { peer_id_destroy(pidA); free(pidA); }
@@ -247,6 +250,7 @@ int main(void)
     {
         protocols_update_waiter_stop(&waiter, hb);
         libp2p_stream_close(push);
+        libp2p_stream_free(push);
         free(payload);
         free(addrB);
         if (pidA) { peer_id_destroy(pidA); free(pidA); }
@@ -255,6 +259,7 @@ int main(void)
     protocols_update_waiter_stop(&waiter, hb);
     fprintf(stderr, "[TEST_RCV] sent payload (%zu bytes); closing push stream\n", plen);
     libp2p_stream_close(push);
+    libp2p_stream_free(push);
     free(payload);
 
     /* Verify hb.peerstore now lists a protocol for ha's peer id */

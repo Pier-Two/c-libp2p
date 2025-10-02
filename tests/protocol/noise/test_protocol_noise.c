@@ -1,5 +1,6 @@
 #include "peer_id/peer_id_ecdsa.h"
 #include "peer_id/peer_id_ed25519.h"
+#include "libp2p/crypto/ltc_compat.h"
 #include "peer_id/peer_id_proto.h"
 #include "peer_id/peer_id_rsa.h"
 #include "peer_id/peer_id_secp256k1.h"

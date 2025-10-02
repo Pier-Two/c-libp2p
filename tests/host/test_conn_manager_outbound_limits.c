@@ -84,7 +84,11 @@ int main(void)
     int ok = (rc2 != 0 && s2 == NULL);
 
     /* Cleanup */
-    if (s1) libp2p_stream_close(s1);
+    if (s1)
+    {
+        libp2p_stream_close(s1);
+        libp2p_stream_free(s1);
+    }
     libp2p_host_free(cli);
     libp2p_host_builder_free(clib);
     libp2p_host_stop(srv);

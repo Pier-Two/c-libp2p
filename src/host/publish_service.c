@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "host_internal.h"
+#include "libp2p/stream.h"
 #include "libp2p/debug_trace.h"
 #include "libp2p/events.h"
 #include "libp2p/log.h"
@@ -112,9 +113,6 @@ static int append_unique_string(char ***list, size_t *len, size_t *cap, const ch
     return 0;
 }
 
-/* Previously used a one-shot timer thread with nanosleep; removed to align
- * strictly with event-driven rescheduling via host events. */
-
 /* Identify Push async open callback context */
 typedef struct
 {
@@ -126,11 +124,15 @@ static void __libp2p__idpush_on_open(libp2p_stream_t *s, void *user_data, int er
 {
     __libp2p__idpush_ctx_t *ctx = (__libp2p__idpush_ctx_t *)user_data;
     LIBP2P_TRACE("idpush", "on_open stream=%p err=%d plen=%zu", (void *)s, err, ctx ? ctx->plen : 0);
-    if (s && err == 0 && ctx && ctx->payload && ctx->plen > 0)
+    if (s)
     {
-        (void)libp2p_lp_send(s, ctx->payload, ctx->plen);
-        LIBP2P_TRACE("idpush", "payload sent stream=%p bytes=%zu", (void *)s, ctx->plen);
+        if (err == 0 && ctx && ctx->payload && ctx->plen > 0)
+        {
+            (void)libp2p_lp_send(s, ctx->payload, ctx->plen);
+            LIBP2P_TRACE("idpush", "payload sent stream=%p bytes=%zu", (void *)s, ctx->plen);
+        }
         libp2p_stream_close(s);
+        libp2p_stream_free(s);
     }
     if (ctx)
     {

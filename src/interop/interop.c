@@ -9,6 +9,9 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <ifaddrs.h>
+#endif
 
 #include "libp2p/host.h"
 #include "libp2p/events.h"
@@ -17,6 +20,8 @@
 #include "protocol/identify/protocol_identify.h"
 #include "protocol/ping/protocol_ping.h"
 #include "libp2p/log.h"
+#include "multiformats/multiaddr/multiaddr.h"
+#include "multiformats/multicodec/multicodec_codes.h"
 
 #ifndef NOW_MONO_MS_DECLARED
 static inline uint64_t now_mono_ms(void)
@@ -170,6 +175,124 @@ static char *redis_blpop(int fd, const char *key, int timeout_sec)
     return val;
 }
 
+/* Normalize QUIC separator to align internal multiaddr representation with external specs. */
+static void replace_quic_separator(char *addr, char from, char to)
+{
+    if (!addr)
+        return;
+    const size_t needle_len = 5; /* strlen("/quic") */
+    char *cursor = addr;
+    while ((cursor = strstr(cursor, "/quic")) != NULL)
+    {
+        cursor += needle_len;
+        if (*cursor == '\0')
+            break;
+        if (*cursor == from)
+            *cursor = to;
+        cursor++;
+    }
+}
+
+#ifndef _WIN32
+static int ipv4_is_local(const char *ip)
+{
+    if (!ip)
+        return 0;
+    struct ifaddrs *ifaddr = NULL;
+    if (getifaddrs(&ifaddr) != 0)
+        return 0;
+    int found = 0;
+    for (struct ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next)
+    {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+            continue;
+        const struct sockaddr_in *sa = (const struct sockaddr_in *)ifa->ifa_addr;
+        char buf[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf)))
+            continue;
+        if (strcmp(buf, ip) == 0)
+        {
+            found = 1;
+            break;
+        }
+    }
+    freeifaddrs(ifaddr);
+    return found;
+}
+#else
+static int ipv4_is_local(const char *ip)
+{
+    (void)ip;
+    return 0;
+}
+#endif
+
+static int build_loopback_variant(const char *addr, char *out, size_t out_len)
+{
+    if (!addr || !out || out_len == 0)
+        return 0;
+
+    int err = 0;
+    multiaddr_t *ma = multiaddr_new_from_str(addr, &err);
+    if (!ma || err != MULTIADDR_SUCCESS)
+    {
+        if (ma)
+            multiaddr_free(ma);
+        return 0;
+    }
+
+    uint64_t proto = 0;
+    if (multiaddr_get_protocol_code(ma, 0, &proto) != 0 || proto != MULTICODEC_IP4)
+    {
+        multiaddr_free(ma);
+        return 0;
+    }
+
+    uint8_t ip_bytes[4];
+    size_t ip_len = sizeof(ip_bytes);
+    if (multiaddr_get_address_bytes(ma, 0, ip_bytes, &ip_len) != MULTIADDR_SUCCESS || ip_len != sizeof(ip_bytes))
+    {
+        multiaddr_free(ma);
+        return 0;
+    }
+
+    char ip_str[INET_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET, ip_bytes, ip_str, sizeof(ip_str)))
+    {
+        multiaddr_free(ma);
+        return 0;
+    }
+
+    if (strcmp(ip_str, "127.0.0.1") == 0 || !ipv4_is_local(ip_str))
+    {
+        multiaddr_free(ma);
+        return 0;
+    }
+
+    uint8_t port_bytes[2];
+    size_t port_len = sizeof(port_bytes);
+    if (multiaddr_get_address_bytes(ma, 1, port_bytes, &port_len) != MULTIADDR_SUCCESS || port_len != sizeof(port_bytes))
+    {
+        multiaddr_free(ma);
+        return 0;
+    }
+
+    uint16_t port = (uint16_t)((port_bytes[0] << 8) | port_bytes[1]);
+    multiaddr_free(ma);
+
+    const char *p2p_suffix = strstr(addr, "/p2p/");
+    if (!p2p_suffix)
+        p2p_suffix = "";
+
+    if (snprintf(out, out_len, "/ip4/127.0.0.1/udp/%u/quic_v1%s", (unsigned)port, p2p_suffix) >= (int)out_len)
+    {
+        out[0] = '\0';
+        return 0;
+    }
+
+    return 1;
+}
+
 typedef struct
 {
     char publish_addr[256];
@@ -179,6 +302,7 @@ typedef struct
     int open_streams; /* total open streams counter */
     pthread_mutex_t mtx;
     pthread_cond_t cv;
+    libp2p_host_t *host; /* owning host for deriving peer id */
 } interop_sync_t;
 
 static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
@@ -191,10 +315,12 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
         const char *bound_str = evt->u.listen_addr_added.addr;
         const char *publish_str = bound_str;
         char actual_addr[256];
-        if (strstr(bound_str, "0.0.0.0"))
+        if (strstr(bound_str, "/ip4/0.0.0.0/"))
         {
-            const char *tcp_start = strstr(bound_str, "/tcp/");
-            if (tcp_start)
+            const char *proto_start = strstr(bound_str, "/tcp/");
+            if (!proto_start)
+                proto_start = strstr(bound_str, "/udp/");
+            if (proto_start)
             {
                 int test_sock = socket(AF_INET, SOCK_DGRAM, 0);
                 if (test_sock >= 0)
@@ -211,7 +337,7 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
                         {
                             char ip_str[INET_ADDRSTRLEN];
                             inet_ntop(AF_INET, &local_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
-                            snprintf(actual_addr, sizeof(actual_addr), "/ip4/%s%s", ip_str, tcp_start);
+                            snprintf(actual_addr, sizeof(actual_addr), "/ip4/%s%s", ip_str, proto_start);
                             publish_str = actual_addr;
                         }
                     }
@@ -219,8 +345,34 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
                 }
             }
         }
+        char publish_buf[sizeof(sync->publish_addr)];
+        snprintf(publish_buf, sizeof(publish_buf), "%s", publish_str);
+        replace_quic_separator(publish_buf, '_', '-');
+
+        if (!strstr(publish_buf, "/p2p/") && sync->host)
+        {
+            peer_id_t *pid = NULL;
+            if (libp2p_host_get_peer_id(sync->host, &pid) == 0 && pid)
+            {
+                char pid_buf[128];
+                int pid_len = peer_id_to_string(pid, PEER_ID_FMT_BASE58_LEGACY, pid_buf, sizeof(pid_buf));
+                if (pid_len > 0)
+                {
+                    size_t base_len = strlen(publish_buf);
+                    if (base_len < sizeof(publish_buf))
+                    {
+                        size_t remaining = sizeof(publish_buf) - base_len;
+                        int appended = snprintf(publish_buf + base_len, remaining, "/p2p/%s", pid_buf);
+                        if (appended < 0 || (size_t)appended >= remaining)
+                            publish_buf[base_len] = '\0';
+                    }
+                }
+                peer_id_destroy(pid);
+                free(pid);
+            }
+        }
         pthread_mutex_lock(&sync->mtx);
-        snprintf(sync->publish_addr, sizeof(sync->publish_addr), "%s", publish_str);
+        snprintf(sync->publish_addr, sizeof(sync->publish_addr), "%s", publish_buf);
         sync->have_addr = 1;
         pthread_cond_broadcast(&sync->cv);
         pthread_mutex_unlock(&sync->mtx);
@@ -248,25 +400,44 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
     }
 }
 
-static int run_listener(const char *ip, const char *redis_host, const char *redis_port, int timeout, const char *muxer_name)
+static int run_listener(const char *ip, const char *redis_host, const char *redis_port, int timeout, const char *transport_name, const char *security_name, const char *muxer_name)
 {
-    LP_LOGI("INTEROP", "run_listener: ip=%s redis_host=%s redis_port=%s timeout=%d muxer=%s", ip, redis_host, redis_port, timeout, muxer_name);
+    const char *sec_log = (security_name && security_name[0]) ? security_name : "(builtin)";
+    const char *mux_log = (muxer_name && muxer_name[0]) ? muxer_name : "(builtin)";
+    LP_LOGI("INTEROP", "run_listener: ip=%s redis_host=%s redis_port=%s timeout=%d transport=%s security=%s muxer=%s",
+            ip, redis_host, redis_port, timeout, transport_name ? transport_name : "NULL", sec_log, mux_log);
 
-    char listen_maddr[64];
-    snprintf(listen_maddr, sizeof(listen_maddr), "/ip4/%s/tcp/0", ip);
+    const char *listen_ip = ip ? ip : "0.0.0.0";
+    const char *ip_proto = (listen_ip && strchr(listen_ip, ':')) ? "ip6" : "ip4";
+    const int is_quic = (transport_name && ((strcmp(transport_name, "quic") == 0) || (strcmp(transport_name, "quic-v1") == 0)));
+    const char *quic_internal = (transport_name && strcmp(transport_name, "quic") == 0) ? "quic" : "quic_v1";
+    const char *builder_transport = is_quic ? "quic" : "tcp";
+    const char *security_to_use = (!is_quic && security_name && security_name[0]) ? security_name : (!is_quic ? "noise" : NULL);
+    const char *muxer_to_use = (!is_quic && muxer_name && muxer_name[0]) ? muxer_name : (!is_quic ? "yamux" : NULL);
+
+    char listen_maddr[128];
+    if (is_quic)
+        snprintf(listen_maddr, sizeof(listen_maddr), "/%s/%s/udp/0/%s", ip_proto, listen_ip, quic_internal);
+    else
+        snprintf(listen_maddr, sizeof(listen_maddr), "/%s/%s/tcp/0", ip_proto, listen_ip);
 
     libp2p_host_builder_t *b = libp2p_host_builder_new();
     if (!b)
         return 1;
     (void)libp2p_host_builder_listen_addr(b, listen_maddr);
-    (void)libp2p_host_builder_transport(b, "tcp");
-    (void)libp2p_host_builder_security(b, "noise");
-    if (muxer_name && (strcmp(muxer_name, "yamux") == 0 || strcmp(muxer_name, "mplex") == 0))
-        (void)libp2p_host_builder_muxer(b, muxer_name);
-    else
-        (void)libp2p_host_builder_muxer(b, "yamux");
-    (void)libp2p_host_builder_multistream(b, 5000, true);
-    (void)libp2p_host_builder_flags(b, LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND);
+    (void)libp2p_host_builder_transport(b, builder_transport);
+    if (!is_quic)
+    {
+        if (security_to_use)
+            (void)libp2p_host_builder_security(b, security_to_use);
+        if (muxer_to_use)
+            (void)libp2p_host_builder_muxer(b, muxer_to_use);
+        (void)libp2p_host_builder_multistream(b, 5000, true);
+    }
+    uint32_t listener_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
+    if (!is_quic)
+        listener_flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+    (void)libp2p_host_builder_flags(b, listener_flags);
 
     libp2p_host_t *host = NULL;
     if (libp2p_host_builder_build(b, &host) != 0 || !host)
@@ -275,7 +446,7 @@ static int run_listener(const char *ip, const char *redis_host, const char *redi
         return 1;
     }
 
-    /* Ensure Noise handshake has an identity key. */
+    /* Ensure transports have a deterministic identity key. */
     {
         size_t sk_len = 0;
         uint8_t *sk = hex_to_bytes(ED25519_PRIVATE_HEX, &sk_len);
@@ -295,6 +466,7 @@ static int run_listener(const char *ip, const char *redis_host, const char *redi
     memset(&sync, 0, sizeof(sync));
     pthread_mutex_init(&sync.mtx, NULL);
     pthread_cond_init(&sync.cv, NULL);
+    sync.host = host;
     libp2p_subscription_t *sub = NULL;
     (void)libp2p_event_subscribe(host, interop_evt_cb, &sync, &sub);
 
@@ -394,9 +566,17 @@ static int run_listener(const char *ip, const char *redis_host, const char *redi
     return 0;
 }
 
-static int run_dialer(const char *redis_host, const char *redis_port, int timeout, const char *muxer_name)
+static int run_dialer(const char *redis_host, const char *redis_port, int timeout, const char *transport_name, const char *security_name, const char *muxer_name)
 {
-    LP_LOGI("INTEROP", "run_dialer: redis_host=%s redis_port=%s timeout=%d muxer=%s", redis_host, redis_port, timeout, muxer_name);
+    const char *sec_log = (security_name && security_name[0]) ? security_name : "(builtin)";
+    const char *mux_log = (muxer_name && muxer_name[0]) ? muxer_name : "(builtin)";
+    LP_LOGI("INTEROP", "run_dialer: redis_host=%s redis_port=%s timeout=%d transport=%s security=%s muxer=%s",
+            redis_host, redis_port, timeout, transport_name ? transport_name : "NULL", sec_log, mux_log);
+
+    const int is_quic = (transport_name && ((strcmp(transport_name, "quic") == 0) || (strcmp(transport_name, "quic-v1") == 0)));
+    const char *builder_transport = is_quic ? "quic" : "tcp";
+    const char *security_to_use = (!is_quic && security_name && security_name[0]) ? security_name : (!is_quic ? "noise" : NULL);
+    const char *muxer_to_use = (!is_quic && muxer_name && muxer_name[0]) ? muxer_name : (!is_quic ? "yamux" : NULL);
 
     LP_LOGD("INTEROP", "Connecting to Redis...");
     int rfd = redis_connect(redis_host, redis_port);
@@ -416,28 +596,44 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
         return 1;
     }
     LP_LOGD("INTEROP", "Got listener address: %s", addr_str);
+    replace_quic_separator(addr_str, '-', '_');
+    LP_LOGD("INTEROP", "Normalized listener address: %s", addr_str);
+
+    char loopback_addr[256];
+    loopback_addr[0] = '\0';
+    if (build_loopback_variant(addr_str, loopback_addr, sizeof(loopback_addr)))
+        LP_LOGD("INTEROP", "Derived loopback variant: %s", loopback_addr);
 
     /* Build unified host with desired proposals */
     libp2p_host_builder_t *b = libp2p_host_builder_new();
     if (!b)
+    {
+        free(addr_str);
         return 1;
-    (void)libp2p_host_builder_transport(b, "tcp");
-    (void)libp2p_host_builder_security(b, "noise");
-    if (muxer_name && (strcmp(muxer_name, "yamux") == 0 || strcmp(muxer_name, "mplex") == 0))
-        (void)libp2p_host_builder_muxer(b, muxer_name);
-    else
-        (void)libp2p_host_builder_muxer(b, "yamux");
-    (void)libp2p_host_builder_multistream(b, 5000, false);
-    (void)libp2p_host_builder_flags(b, LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND);
+    }
+    (void)libp2p_host_builder_transport(b, builder_transport);
+    if (!is_quic)
+    {
+        if (security_to_use)
+            (void)libp2p_host_builder_security(b, security_to_use);
+        if (muxer_to_use)
+            (void)libp2p_host_builder_muxer(b, muxer_to_use);
+        (void)libp2p_host_builder_multistream(b, 5000, false);
+    }
+    uint32_t dialer_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
+    if (!is_quic)
+        dialer_flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+    (void)libp2p_host_builder_flags(b, dialer_flags);
 
     libp2p_host_t *host = NULL;
     if (libp2p_host_builder_build(b, &host) != 0 || !host)
     {
         libp2p_host_builder_free(b);
+        free(addr_str);
         return 1;
     }
 
-    /* Ensure Noise handshake has an identity key. */
+    /* Ensure transports have a deterministic identity key. */
     {
         size_t sk_len = 0;
         uint8_t *sk = hex_to_bytes(ED25519_PRIVATE_HEX, &sk_len);
@@ -448,40 +644,90 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
         }
     }
 
-    uint64_t start = now_mono_ms();
+    libp2p_protocol_server_t *ping_srv = NULL;
+    int host_started = 0;
+    int ret = 1;
     libp2p_stream_t *ping_stream = NULL;
+
+    if (libp2p_ping_service_start(host, &ping_srv) != 0)
+    {
+        LP_LOGE("INTEROP", "dialer failed to start ping service");
+        goto cleanup;
+    }
+
+    if (libp2p_host_start(host) != 0)
+    {
+        LP_LOGE("INTEROP", "dialer failed to start host runtime");
+        goto cleanup;
+    }
+    host_started = 1;
+
+    uint64_t start = now_mono_ms();
     int rc = libp2p_host_dial_protocol_blocking(host, addr_str, LIBP2P_PING_PROTO_ID, timeout * 1000, &ping_stream);
-    free(addr_str);
+    if ((rc != 0 || !ping_stream) && loopback_addr[0] != '\0')
+    {
+        LP_LOGW("INTEROP", "Dial attempt err=%d, retrying with loopback address", rc);
+        rc = libp2p_host_dial_protocol_blocking(host, loopback_addr, LIBP2P_PING_PROTO_ID, timeout * 1000, &ping_stream);
+    }
     if (rc != 0 || !ping_stream)
     {
         LP_LOGE("INTEROP", "failed to dial protocol (err=%d)", rc);
-        libp2p_host_free(host);
-        libp2p_host_builder_free(b);
-        return 1;
+        goto cleanup;
+    }
+
+    const char *negotiated = libp2p_stream_protocol_id(ping_stream);
+    LP_LOGI("INTEROP", "Negotiated protocol: %s", negotiated ? negotiated : "(null)");
+    if (!negotiated || strcmp(negotiated, LIBP2P_PING_PROTO_ID) != 0)
+    {
+        LP_LOGE("INTEROP", "unexpected negotiated protocol: %s", negotiated ? negotiated : "(null)");
+        goto cleanup;
     }
 
     /* Dial succeeded at this point: emit logs expected by interop checks. */
-    LP_LOGI("INTEROP", "Dial successful");
-    LP_LOGI("INTEROP", "negotiated muxer = %s", muxer_name ? muxer_name : "unknown");
+    LP_LOGI("INTEROP", "Dial successful (transport=%s)", transport_name ? transport_name : "unknown");
+    if (!is_quic)
+        LP_LOGI("INTEROP", "negotiated muxer = %s", muxer_to_use ? muxer_to_use : "unknown");
 
     uint64_t ping_ms = 0;
     libp2p_ping_err_t prc = libp2p_ping_roundtrip_stream(ping_stream, (uint64_t)timeout * 1000ULL, &ping_ms);
     if (prc != LIBP2P_PING_OK)
     {
         LP_LOGE("INTEROP", "ping failed (err=%d)", (int)prc);
-        libp2p_stream_close(ping_stream);
-        libp2p_host_free(host);
-        libp2p_host_builder_free(b);
-        return 1;
+        goto cleanup;
     }
+    LP_LOGD("INTEROP", "Closing ping stream...");
     libp2p_stream_close(ping_stream);
+    LP_LOGD("INTEROP", "Ping stream closed");
+    if (!host_started)
+    {
+        libp2p_stream_free(ping_stream);
+        LP_LOGD("INTEROP", "Ping stream freed (no host runtime)");
+    }
+    else
+    {
+        LP_LOGD("INTEROP", "Ping stream release deferred to host runtime");
+    }
+    ping_stream = NULL;
 
     uint64_t handshake_plus_rtt_ms = now_mono_ms() - start;
     printf("{\"handshakePlusOneRTTMillis\":%.3f,\"pingRTTMilllis\":%.3f}\n", (double)handshake_plus_rtt_ms, (double)ping_ms);
+    ret = 0;
 
+cleanup:
+    if (ping_stream)
+    {
+        libp2p_stream_close(ping_stream);
+        if (!host_started)
+            libp2p_stream_free(ping_stream);
+    }
+    if (host_started)
+        libp2p_host_stop(host);
+    if (ping_srv)
+        (void)libp2p_ping_service_stop(host, ping_srv);
     libp2p_host_free(host);
     libp2p_host_builder_free(b);
-    return 0;
+    free(addr_str);
+    return ret;
 }
 
 int main(void)
@@ -492,24 +738,56 @@ int main(void)
     setvbuf(stderr, NULL, _IONBF, 0);
     const char *transport = getenv("transport");
     LP_LOGD("INTEROP", "transport = %s", transport ? transport : "NULL");
-    if (!transport || strcmp(transport, "tcp") != 0)
+    int is_quic = 0;
+    if (!transport)
     {
-        LP_LOGE("INTEROP", "unsupported transport");
+        LP_LOGE("INTEROP", "missing transport");
         return 1;
     }
+    if (strcmp(transport, "tcp") == 0)
+    {
+        is_quic = 0;
+    }
+    else if ((strcmp(transport, "quic") == 0) || (strcmp(transport, "quic-v1") == 0))
+    {
+        is_quic = 1;
+    }
+    else
+    {
+        LP_LOGE("INTEROP", "unsupported transport: %s", transport);
+        return 1;
+    }
+
     const char *muxer = getenv("muxer");
     LP_LOGD("INTEROP", "muxer = %s", muxer ? muxer : "NULL");
-    if (!muxer || (strcmp(muxer, "yamux") != 0 && strcmp(muxer, "mplex") != 0))
+    if (!is_quic)
     {
-        LP_LOGE("INTEROP", "unsupported muxer (supported: yamux, mplex)");
-        return 1;
+        if (!muxer || (strcmp(muxer, "yamux") != 0 && strcmp(muxer, "mplex") != 0))
+        {
+            LP_LOGE("INTEROP", "unsupported muxer (supported: yamux, mplex)");
+            return 1;
+        }
     }
+    else if (muxer && muxer[0])
+    {
+        LP_LOGW("INTEROP", "ignoring muxer override '%s' for QUIC transport", muxer);
+        muxer = NULL;
+    }
+
     const char *sec = getenv("security");
     LP_LOGD("INTEROP", "security = %s", sec ? sec : "NULL");
-    if (!sec || strcmp(sec, "noise") != 0)
+    if (!is_quic)
     {
-        LP_LOGE("INTEROP", "unsupported security");
-        return 1;
+        if (!sec || strcmp(sec, "noise") != 0)
+        {
+            LP_LOGE("INTEROP", "unsupported security");
+            return 1;
+        }
+    }
+    else if (sec && sec[0])
+    {
+        LP_LOGW("INTEROP", "ignoring security override '%s' for QUIC transport", sec);
+        sec = NULL;
     }
     int is_dialer = getenv("is_dialer") && strcmp(getenv("is_dialer"), "true") == 0;
     LP_LOGD("INTEROP", "is_dialer = %s", is_dialer ? "true" : "false");
@@ -531,11 +809,11 @@ int main(void)
     if (is_dialer)
     {
         LP_LOGI("INTEROP", "Running as dialer");
-        return run_dialer(host, port, timeout, muxer);
+        return run_dialer(host, port, timeout, transport, sec, muxer);
     }
     else
     {
         LP_LOGI("INTEROP", "Running as listener");
-        return run_listener(ip, host, port, timeout, muxer);
+        return run_listener(ip, host, port, timeout, transport, sec, muxer);
     }
 }

@@ -34,8 +34,9 @@ static int is_supported_transport(const char *name)
 {
     if (!name)
         return 0;
-    /* Currently only TCP transport is built-in */
-    return strcmp(name, "tcp") == 0;
+    if ((strcmp(name, "tcp") == 0) || (strcmp(name, "quic") == 0))
+        return 1;
+    return 0;
 }
 
 static int is_supported_security(const char *name)

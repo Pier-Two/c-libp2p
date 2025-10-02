@@ -46,6 +46,14 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
 struct libp2p_muxer; /* fwd */
 void libp2p_stream_set_parent(libp2p_stream_t *s, libp2p_conn_t *parent_conn, struct libp2p_muxer *mx, int take_ownership);
 
+/* Destroy a stream stub after it has been closed; pointer becomes invalid. */
+void libp2p__stream_destroy(libp2p_stream_t *s);
+
+/* Optional callback invoked just before the stream storage is released. */
+typedef void (*libp2p_stream_cleanup_fn)(void *ctx, libp2p_stream_t *s);
+void libp2p__stream_set_cleanup(libp2p_stream_t *s, libp2p_stream_cleanup_fn fn, void *ctx);
+void libp2p__stream_mark_deferred(libp2p_stream_t *s);
+
 #include <stddef.h>
 
 /* Internal helpers for runtime-driven readiness integration. */

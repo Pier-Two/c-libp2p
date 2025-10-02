@@ -1,10 +1,12 @@
 #include "protocol/ping/protocol_ping.h"
 #include "../../host/host_internal.h"
 #include "libp2p/stream_internal.h"
+#include "libp2p/log.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
+#include <inttypes.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -226,7 +228,10 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
         {
             uint64_t now = now_mono_ms();
             if (now >= overall_deadline_ms)
+            {
+                LP_LOGD("PING", "read timeout stream=%p", (void *)s);
                 return LIBP2P_PING_ERR_TIMEOUT;
+            }
             uint64_t remain = overall_deadline_ms - now;
             if (remain < wait_ms)
                 wait_ms = remain;
@@ -270,7 +275,9 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
         }
         (void)libp2p_stream_set_deadline(s, wait_ms);
 
+        LP_LOGD("PING", "read attempt stream=%p len=%zu wait_ms=%" PRIu64, (void *)s, len, wait_ms);
         ssize_t n = libp2p_stream_read(s, buf, len);
+        LP_LOGD("PING", "read returned stream=%p n=%zd", (void *)s, n);
         if (n > 0)
         {
             buf += (size_t)n;
@@ -279,6 +286,7 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
         }
         if (n == LIBP2P_ERR_AGAIN)
         {
+            LP_LOGD("PING", "read would-block stream=%p", (void *)s);
             /* Try again; deadline blocks until readable. */
             continue;
         }
@@ -299,17 +307,27 @@ libp2p_ping_err_t libp2p_ping_roundtrip_stream(libp2p_stream_t *s, uint64_t time
         return LIBP2P_PING_ERR_IO;
     uint64_t start = now_mono_ms();
     uint64_t deadline = timeout_ms ? (start + timeout_ms) : 0;
+    LP_LOGD("PING", "roundtrip begin stream=%p timeout_ms=%" PRIu64, (void *)s, timeout_ms);
     libp2p_ping_err_t rc = stream_write_all(s, payload, sizeof(payload), deadline);
     if (rc != LIBP2P_PING_OK)
+    {
+        LP_LOGD("PING", "write failed rc=%d", rc);
         return rc;
+    }
+    LP_LOGD("PING", "write complete stream=%p", (void *)s);
     uint8_t echo[32];
     rc = stream_read_exact(s, echo, sizeof(echo), deadline);
     if (rc != LIBP2P_PING_OK)
+    {
+        LP_LOGD("PING", "read failed rc=%d", rc);
         return rc;
+    }
+    LP_LOGD("PING", "read complete stream=%p", (void *)s);
     if (memcmp(payload, echo, sizeof(payload)) != 0)
         return LIBP2P_PING_ERR_UNEXPECTED;
     if (rtt_ms)
         *rtt_ms = now_mono_ms() - start;
+    LP_LOGD("PING", "roundtrip ok stream=%p rtt_ms=%" PRIu64, (void *)s, rtt_ms ? *rtt_ms : 0);
     return LIBP2P_PING_OK;
 }
 
@@ -349,6 +367,11 @@ static void *ping_srv_thread(void *arg)
     struct libp2p_host *host = ctx->host;
     free(ctx);
     (void)libp2p_ping_serve_stream(s);
+    if (s)
+    {
+        libp2p_stream_close(s);
+        libp2p_stream_free(s);
+    }
     if (host)
     {
         libp2p__worker_dec(host);
@@ -361,26 +384,38 @@ static void ping_on_open(libp2p_stream_t *s, void *ud)
     (void)ud;
     ping_srv_ctx_t *ctx = (ping_srv_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
+    {
+        if (s)
+        {
+            libp2p_stream_close(s);
+            libp2p_stream_free(s);
+        }
         return;
+    }
     ctx->s = s;
-    /* account for detached worker lifetimes so host_free waits safely */
     struct libp2p_host *host = libp2p__stream_host(s);
     ctx->host = host;
+    /* Ensure inbound QUIC streams start delivering payload bytes immediately. */
+    libp2p_stream_set_read_interest(s, true);
+    /* account for detached worker lifetimes so host_free waits safely */
     if (host)
         libp2p__worker_inc(host);
     pthread_t th;
     if (pthread_create(&th, NULL, ping_srv_thread, ctx) == 0)
-        pthread_detach(th);
-    else
     {
-        if (host)
-        {
-            libp2p__worker_dec(host);
-        }
-        free(ctx);
+        pthread_detach(th);
+        return;
     }
-}
+    if (host)
+        libp2p__worker_dec(host);
+    free(ctx);
+    if (s)
+    {
+        libp2p_stream_close(s);
+        libp2p_stream_free(s);
+    }
 
+}
 int libp2p_ping_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server)
 {
     if (!host || !out_server)

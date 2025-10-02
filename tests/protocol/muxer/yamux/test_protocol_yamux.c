@@ -174,6 +174,67 @@ static const libp2p_conn_vtbl_t PIPE_VTBL = {
     .free = pipe_free,
 };
 
+typedef struct
+{
+    atomic_int in_write;
+    atomic_int overlap;
+} race_conn_ctx_t;
+
+static ssize_t race_conn_read(libp2p_conn_t *c, void *buf, size_t len)
+{
+    (void)c;
+    (void)buf;
+    (void)len;
+    return LIBP2P_CONN_ERR_AGAIN;
+}
+
+static ssize_t race_conn_write(libp2p_conn_t *c, const void *buf, size_t len)
+{
+    race_conn_ctx_t *ctx = c->ctx;
+    if (!ctx)
+        return LIBP2P_CONN_ERR_INTERNAL;
+    if (atomic_fetch_add_explicit(&ctx->in_write, 1, memory_order_acq_rel) != 0)
+        atomic_store_explicit(&ctx->overlap, 1, memory_order_release);
+    /* Small delay to increase overlap window if locking is missing. */
+    usleep(1000);
+    atomic_fetch_sub_explicit(&ctx->in_write, 1, memory_order_acq_rel);
+    return (ssize_t)len;
+}
+
+static libp2p_conn_err_t race_conn_deadline(libp2p_conn_t *c, uint64_t ms)
+{
+    (void)c;
+    (void)ms;
+    return LIBP2P_CONN_OK;
+}
+
+static const multiaddr_t *race_conn_addr(libp2p_conn_t *c)
+{
+    (void)c;
+    return NULL;
+}
+
+static libp2p_conn_err_t race_conn_close(libp2p_conn_t *c)
+{
+    (void)c;
+    return LIBP2P_CONN_OK;
+}
+
+static void race_conn_free(libp2p_conn_t *c)
+{
+    (void)c;
+}
+
+static const libp2p_conn_vtbl_t RACE_CONN_VTBL = {
+    .read = race_conn_read,
+    .write = race_conn_write,
+    .set_deadline = race_conn_deadline,
+    .local_addr = race_conn_addr,
+    .remote_addr = race_conn_addr,
+    .close = race_conn_close,
+    .free = race_conn_free,
+};
+
 static void ensure_stdio_open(void)
 {
     int fds[3] = {0, 1, 2};
@@ -235,6 +296,22 @@ static void make_pipe_pair(libp2p_conn_t *a, libp2p_conn_t *b)
     a->ctx = actx;
     b->vt = &PIPE_VTBL;
     b->ctx = bctx;
+}
+
+typedef struct
+{
+    libp2p_yamux_ctx_t *ctx;
+    uint32_t stream_id;
+    const uint8_t *buf;
+    size_t len;
+    libp2p_yamux_err_t rc;
+} yamux_send_args_t;
+
+static void *yamux_send_thread(void *arg)
+{
+    yamux_send_args_t *a = (yamux_send_args_t *)arg;
+    a->rc = libp2p_yamux_stream_send(a->ctx, a->stream_id, a->buf, a->len, 0);
+    return NULL;
 }
 
 static void *dial_thread(void *arg)
@@ -1430,6 +1507,46 @@ static void test_stream_flow_control(void)
     libp2p_conn_free(&s);
 }
 
+static void test_yamux_serializes_concurrent_writes(void)
+{
+    race_conn_ctx_t rctx;
+    atomic_init(&rctx.in_write, 0);
+    atomic_init(&rctx.overlap, 0);
+
+    libp2p_conn_t conn = {0};
+    conn.vt = &RACE_CONN_VTBL;
+    conn.ctx = &rctx;
+
+    libp2p_yamux_ctx_t *ctx = libp2p_yamux_ctx_new(&conn, 1, YAMUX_INITIAL_WINDOW);
+    assert(ctx);
+
+    uint32_t sid1 = 0;
+    uint32_t sid2 = 0;
+    assert(libp2p_yamux_stream_open(ctx, &sid1) == LIBP2P_YAMUX_OK);
+    assert(libp2p_yamux_stream_open(ctx, &sid2) == LIBP2P_YAMUX_OK);
+
+    const uint8_t payload1[] = "serial-one";
+    const uint8_t payload2[] = "serial-two";
+
+    yamux_send_args_t a1 = {.ctx = ctx, .stream_id = sid1, .buf = payload1, .len = sizeof(payload1) - 1, .rc = LIBP2P_YAMUX_OK};
+    yamux_send_args_t a2 = {.ctx = ctx, .stream_id = sid2, .buf = payload2, .len = sizeof(payload2) - 1, .rc = LIBP2P_YAMUX_OK};
+
+    pthread_t t1 = 0;
+    pthread_t t2 = 0;
+    pthread_create(&t1, NULL, yamux_send_thread, &a1);
+    pthread_create(&t2, NULL, yamux_send_thread, &a2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+
+    int overlap = atomic_load_explicit(&rctx.overlap, memory_order_acquire);
+    int ok = (overlap == 0) && (a1.rc == LIBP2P_YAMUX_OK) && (a2.rc == LIBP2P_YAMUX_OK);
+    print_standard("yamux serializes concurrent writes", ok ? "" : "detected overlapping writes", ok);
+
+    libp2p_yamux_ctx_free(ctx);
+    if (!ok)
+        exit(1);
+}
+
 /**
  * Test basic stream data exchange without process loop
  * This test verifies that data can be sent and received between streams
@@ -1523,6 +1640,7 @@ int main(void)
     RUN_ONE(test_multiple_concurrent_streams);
     RUN_ONE(test_muxer_context_storage);
     RUN_ONE(test_basic_stream_data_exchange);
+    RUN_ONE(test_yamux_serializes_concurrent_writes);
 
     return 0;
 }

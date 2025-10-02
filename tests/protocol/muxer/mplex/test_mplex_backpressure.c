@@ -587,10 +587,11 @@ cleanup:
     /* Signal server to exit */
     pthread_mutex_lock(&tctx.mutex);
     tctx.server_fd = -1;
+    libp2p_mplex_ctx_t *server_ctx_local = tctx.server_ctx;
     pthread_mutex_unlock(&tctx.mutex);
-    if (tctx.server_ctx)
+    if (server_ctx_local)
     {
-        libp2p_mplex_stop_event_loop(tctx.server_ctx);
+        libp2p_mplex_stop_event_loop(server_ctx_local);
     }
 
     /* Cleanup client resources */
@@ -601,6 +602,14 @@ cleanup:
 
     /* Join server thread */
     pthread_join(tctx.server_thread, NULL);
+
+    if (server_ctx_local)
+    {
+        libp2p_mplex_free(server_ctx_local);
+        pthread_mutex_lock(&tctx.mutex);
+        tctx.server_ctx = NULL;
+        pthread_mutex_unlock(&tctx.mutex);
+    }
 
     /* Cleanup synchronization objects */
     pthread_mutex_destroy(&tctx.mutex);

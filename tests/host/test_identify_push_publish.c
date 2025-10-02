@@ -171,6 +171,8 @@ int main(void)
         free(addrB);
         return 1;
     }
+    free(addrB);
+    addrB = NULL;
     fprintf(stderr, "[TEST_PUB] starting ping roundtrip on stream\n");
     uint64_t rtt = 0;
     (void)libp2p_ping_roundtrip_stream(ping_stream, 1000, &rtt);
@@ -267,6 +269,11 @@ int main(void)
         free(pidA);
     }
     fprintf(stderr, "[TEST_PUB] stopping hosts\n");
+    if (ping_srv)
+    {
+        (void)libp2p_ping_service_stop(hb, ping_srv);
+        ping_srv = NULL;
+    }
     libp2p_host_stop(ha);
     libp2p_host_stop(hb);
     libp2p_host_free(ha);

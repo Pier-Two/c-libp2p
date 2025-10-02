@@ -442,6 +442,33 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
         fprintf(stderr, "make_noise_conn: calloc for ctx failed\n");
         return NULL;
     }
+    uint8_t *early_copy = NULL;
+    if (early_data && early_data_len > 0)
+    {
+        early_copy = (uint8_t *)malloc(early_data_len);
+        if (!early_copy)
+        {
+        fprintf(stderr, "make_noise_conn: malloc early_data copy failed\n");
+        free(ctx);
+        return NULL;
+        }
+        memcpy(early_copy, early_data, early_data_len);
+    }
+
+    uint8_t *ext_copy = NULL;
+    if (extensions && extensions_len > 0)
+    {
+        ext_copy = (uint8_t *)malloc(extensions_len);
+        if (!ext_copy)
+        {
+        fprintf(stderr, "make_noise_conn: malloc extensions copy failed\n");
+        free(early_copy);
+        free(ctx);
+        return NULL;
+        }
+        memcpy(ext_copy, extensions, extensions_len);
+    }
+
     ctx->raw = raw;
     ctx->send = send;
     ctx->recv = recv;
@@ -453,9 +480,9 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
     ctx->cipher_pending = NULL;
     ctx->cipher_len = 0;
     ctx->cipher_got = 0;
-    ctx->early_data = early_data;
+    ctx->early_data = early_copy;
     ctx->early_data_len = early_data_len;
-    ctx->extensions = extensions;
+    ctx->extensions = ext_copy;
     ctx->extensions_len = extensions_len;
     ctx->parsed_ext = parsed_ext;
     pthread_mutex_init(&ctx->write_mtx, NULL);
@@ -464,6 +491,8 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
     if (!c)
     {
         fprintf(stderr, "make_noise_conn: calloc for c failed\n");
+        free(early_copy);
+        free(ext_copy);
         free(ctx);
         return NULL;
     }

@@ -1,4 +1,5 @@
 #include "libp2p/stream_internal.h"
+#include "libp2p/debug_trace.h"
 #include "protocol/muxer/yamux/protocol_yamux.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -134,7 +135,9 @@ libp2p_stream_t *libp2p_stream_from_yamux(struct libp2p_host *host, libp2p_yamux
     if (!ctx)
         return NULL;
     /* Hold a reference to the session while this stream exists. */
-    atomic_fetch_add_explicit(&ctx->refcnt, 1, memory_order_acq_rel);
+    unsigned prev_ref = atomic_fetch_add_explicit(&ctx->refcnt, 1, memory_order_acq_rel);
+    unsigned new_ref = prev_ref + 1;
+    LIBP2P_TRACE("yamux_ref", "ctx=%p stream=%u ref=%u->%u", (void *)ctx, id, prev_ref, new_ref);
     ystream_ctx_t *yc = (ystream_ctx_t *)calloc(1, sizeof(*yc));
     if (!yc)
     {

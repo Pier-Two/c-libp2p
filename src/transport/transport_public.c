@@ -1,5 +1,6 @@
 #include "libp2p/transport.h"
 #include "protocol/tcp/protocol_tcp.h"
+#include "protocol/quic/protocol_quic.h"
 
 int libp2p_transport_tcp(libp2p_transport_t **out)
 {
@@ -16,7 +17,9 @@ int libp2p_transport_tcp(libp2p_transport_t **out)
 
 int libp2p_transport_quic(libp2p_transport_t **out)
 {
-    (void)out;
-    /* QUIC transport not available in this build; explicitly return error. */
-    return -1;
+    if (!out)
+        return -1;
+    libp2p_quic_config_t cfg = libp2p_quic_config_default();
+    *out = libp2p_quic_transport_new(&cfg);
+    return *out ? 0 : -1;
 }

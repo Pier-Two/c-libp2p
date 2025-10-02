@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
+#include "libp2p/crypto/ltc_compat.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 #include "peer_id/peer_id_rsa.h"

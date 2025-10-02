@@ -126,6 +126,11 @@ int main(void)
     int ok = (da.rc == LIBP2P_MULTISELECT_OK && la.rc == LIBP2P_MULTISELECT_OK && da.accepted && la.accepted && strcmp(da.accepted, "/bar/1.0.0") == 0 && strcmp(la.accepted, "/bar/1.0.0") == 0);
     print_standard("multiselect io negotiation", ok ? "" : "unexpected result", ok);
 
+    if (da.accepted)
+        free((void *)da.accepted);
+    if (la.accepted)
+        free((void *)la.accepted);
+
     libp2p_io_free(aio);
     libp2p_io_free(bio);
     libp2p_conn_close(&a);

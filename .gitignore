@@ -1,5 +1,6 @@
 # Build directory (out-of-source build folder)
 build/
+.tmp.dprobes.h
 
 # Prerequisites
 *.d
@@ -58,9 +59,11 @@ dkms.conf
 
 # Ignore all files in the bin folder without extensions 
 bin/*
-build/*
+build*
+backup_tests*
 !bin/.emptydir
 debug.plist
+.sandbox-logs
 
 # IDE Settings
 .vscode/*

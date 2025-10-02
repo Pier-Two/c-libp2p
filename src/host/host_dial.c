@@ -32,6 +32,7 @@
 #include "libp2p/peerstore.h"
 #include "protocol/identify/protocol_identify.h"
 #include "protocol/tcp/protocol_tcp_util.h" /* now_mono_ms */
+#include "multiformats/multicodec/multicodec_codes.h"
 
 /* ================= Outbound yamux session loop (event-driven) ================= */
 
@@ -209,24 +210,25 @@ static void auto_identify_run(libp2p_host_t *host, libp2p_yamux_ctx_t *yctx, con
         return;
     libp2p_io_t *io = libp2p_io_from_yamux(yctx, sid);
     if (!io)
+    {
+        (void)libp2p_yamux_stream_close(yctx, sid);
         return;
+    }
 
     const char *accepted = NULL;
     const char *prop[2] = {LIBP2P_IDENTIFY_PROTO_ID, NULL};
+    uint8_t *buf = NULL;
+
     libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(io, prop, host->opts.multiselect_handshake_timeout_ms, &accepted);
     if (ms != LIBP2P_MULTISELECT_OK)
-    {
-        libp2p_io_free(io);
-        return;
-    }
+        goto cleanup;
 
-    uint8_t *buf = (uint8_t *)malloc(64 * 1024);
+    buf = (uint8_t *)malloc(64 * 1024);
     if (!buf)
-    {
-        libp2p_io_free(io);
-        return;
-    }
-    ssize_t n = libp2p_lp_recv_io_timeout(io, buf, 64 * 1024, (host->opts.handshake_timeout_ms > 0) ? (uint64_t)host->opts.handshake_timeout_ms : 0);
+        goto cleanup;
+
+    ssize_t n = libp2p_lp_recv_io_timeout(io, buf, 64 * 1024,
+                                          (host->opts.handshake_timeout_ms > 0) ? (uint64_t)host->opts.handshake_timeout_ms : 0);
     if (n > 0)
     {
         libp2p_identify_t *id = NULL;
@@ -278,10 +280,13 @@ static void auto_identify_run(libp2p_host_t *host, libp2p_yamux_ctx_t *yctx, con
             libp2p_identify_free(id);
         }
     }
-    free(buf);
+
+cleanup:
+    if (buf)
+        free(buf);
     if (accepted)
         free((void *)accepted);
-    libp2p_io_free(io);
+    libp2p_io_close_free(io);
 }
 
 static int peer_id_clone_simple(const peer_id_t *in, peer_id_t *out)
@@ -339,6 +344,33 @@ static void host_collect_ls_cb(const char *const *ids, size_t n, int err, void *
 }
 
 /* multiselect mapping provided by libp2p_error_from_multiselect() */
+
+static bool addr_is_quic(const multiaddr_t *addr)
+{
+    if (!addr)
+        return false;
+    size_t n = multiaddr_nprotocols(addr);
+    if (n < 3)
+        return false;
+    size_t idx = 1;
+    uint64_t code = 0;
+    if (multiaddr_get_protocol_code(addr, idx, &code) != 0)
+        return false;
+    if (code == MULTICODEC_IP6ZONE)
+    {
+        idx++;
+        if (idx >= n || multiaddr_get_protocol_code(addr, idx, &code) != 0)
+            return false;
+    }
+    if (code != MULTICODEC_UDP)
+        return false;
+    if (idx + 1 >= n)
+        return false;
+    uint64_t next = 0;
+    if (multiaddr_get_protocol_code(addr, idx + 1, &next) != 0)
+        return false;
+    return (next == MULTICODEC_QUIC_V1 || next == MULTICODEC_QUIC);
+}
 
 static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr, const char *const proposals[], int dial_timeout_ms,
                               const char **accepted_out, libp2p_stream_t **out_stream, const libp2p_cancel_token_t *cancel)
@@ -403,6 +435,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     }
 
     libp2p_conn_t *raw = NULL;
+    int is_quic = addr_is_quic(addr) ? 1 : 0;
     if (cancel && libp2p_cancel_token_is_canceled(cancel))
     {
         multiaddr_free(addr);
@@ -418,6 +451,143 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         return libp2p_error_from_transport(d_rc);
     }
     multiaddr_free(addr);
+
+    /* QUIC: bypass upgrader; stream support comes in Phase 2. */
+    if (is_quic)
+    {
+        libp2p_uconn_t *uc_q = NULL;
+        int qrc = libp2p__host_upgrade_outbound_quic(host, raw, &uc_q);
+        if (qrc != 0 || !uc_q)
+            return qrc ? qrc : LIBP2P_ERR_INTERNAL;
+
+        libp2p_conn_t *secured = uc_q->conn;
+        peer_id_t *remote_peer = uc_q->remote_peer;
+        libp2p_muxer_t *mx = (libp2p_muxer_t *)uc_q->muxer;
+        libp2p_stream_t *dial_stream = NULL;
+        libp2p_io_t *subio = NULL;
+        const char *accepted = NULL;
+        int take_ownership = 1;
+        int rc = 0;
+
+        if (cancel && libp2p_cancel_token_is_canceled(cancel))
+        {
+            rc = LIBP2P_ERR_CANCELED;
+            goto quic_fail;
+        }
+
+        if (!mx || !mx->vt || !mx->vt->open_stream)
+        {
+            rc = LIBP2P_ERR_INTERNAL;
+            goto quic_fail;
+        }
+
+        if (mx->vt->open_stream(mx, NULL, 0, &dial_stream) != LIBP2P_MUXER_OK || !dial_stream)
+        {
+            rc = LIBP2P_ERR_INTERNAL;
+            goto quic_fail;
+        }
+
+        if (cancel && libp2p_cancel_token_is_canceled(cancel))
+        {
+            rc = LIBP2P_ERR_CANCELED;
+            goto quic_fail;
+        }
+
+        subio = libp2p_io_from_stream(dial_stream);
+        if (!subio)
+        {
+            rc = LIBP2P_ERR_INTERNAL;
+            goto quic_fail;
+        }
+
+        if (cancel && libp2p_cancel_token_is_canceled(cancel))
+        {
+            rc = LIBP2P_ERR_CANCELED;
+            goto quic_fail;
+        }
+
+        libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+        if (ms != LIBP2P_MULTISELECT_OK)
+        {
+            rc = libp2p_error_from_multiselect(ms);
+            {
+                libp2p_event_t evt = {0};
+                evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
+                evt.u.outgoing_conn_error.peer = NULL;
+                evt.u.outgoing_conn_error.code = rc;
+                evt.u.outgoing_conn_error.msg = "multistream negotiation failed";
+                libp2p_event_publish(host, &evt);
+            }
+            goto quic_fail;
+        }
+
+        libp2p_io_free(subio);
+        subio = NULL;
+
+        if (accepted)
+        {
+            const char *dup = strdup(accepted);
+            free((void *)accepted);
+            accepted = dup;
+            if (!accepted)
+            {
+                rc = LIBP2P_ERR_INTERNAL;
+                goto quic_fail;
+            }
+            if (libp2p_stream_set_protocol_id(dial_stream, accepted) != 0)
+            {
+                rc = LIBP2P_ERR_INTERNAL;
+                goto quic_fail;
+            }
+        }
+
+        if (remote_peer)
+        {
+            if (libp2p_stream_set_remote_peer(dial_stream, remote_peer) != 0)
+            {
+                remote_peer = NULL;
+                rc = LIBP2P_ERR_INTERNAL;
+                goto quic_fail;
+            }
+            remote_peer = NULL;
+        }
+
+        if (accepted && strcmp(accepted, LIBP2P_IDENTIFY_PUSH_PROTO_ID) == 0)
+            take_ownership = 0;
+
+        libp2p_stream_set_parent(dial_stream, secured, mx, take_ownership);
+        free(uc_q);
+
+        *out_stream = dial_stream;
+        (void)dial_timeout_ms;
+        if (accepted_out)
+            *accepted_out = accepted;
+        libp2p__emit_protocol_negotiated(host, accepted);
+        libp2p__emit_stream_opened(host, libp2p_stream_protocol_id(dial_stream), libp2p_stream_remote_peer(dial_stream), true);
+        libp2p__emit_conn_opened(host, false, libp2p_stream_remote_peer(dial_stream), libp2p_stream_remote_addr(dial_stream));
+        if (!accepted_out && accepted)
+            free((void *)accepted);
+        return 0;
+
+    quic_fail:
+        if (subio)
+            libp2p_io_close_free(subio);
+        if (dial_stream)
+            libp2p_stream_reset(dial_stream);
+        if (remote_peer)
+        {
+            peer_id_destroy(remote_peer);
+            free(remote_peer);
+        }
+        if (mx)
+            libp2p_muxer_free(mx);
+        if (secured)
+            libp2p_conn_free(secured);
+        free(uc_q);
+        if (accepted && !accepted_out)
+            free((void *)accepted);
+        return rc ? rc : LIBP2P_ERR_INTERNAL;
+    }
 
     /* Upgrade raw connection using shared helper (Noise + muxer). */
     if (cancel && libp2p_cancel_token_is_canceled(cancel))
@@ -503,7 +673,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     const char *accepted = NULL;
     if (cancel && libp2p_cancel_token_is_canceled(cancel))
     {
-        libp2p_io_free(subio);
+        libp2p_io_close_free(subio);
         libp2p_conn_free(secured);
         if (remote_peer)
             peer_id_destroy(remote_peer);
@@ -513,7 +683,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
     if (ms != LIBP2P_MULTISELECT_OK)
     {
-        libp2p_io_free(subio);
+        libp2p_io_close_free(subio);
         libp2p_conn_free(secured);
         if (remote_peer)
             peer_id_destroy(remote_peer);
@@ -552,7 +722,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     }
     if (cancel && libp2p_cancel_token_is_canceled(cancel))
     {
-        libp2p_io_free(subio);
+        libp2p_io_close_free(subio);
         libp2p_conn_free(secured);
         if (remote_peer)
             peer_id_destroy(remote_peer);
@@ -563,7 +733,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
                                : libp2p_stream_from_mplex(host, (libp2p_mplex_ctx_t *)mx->ctx, mps, accepted, 1, remote_peer);
     if (!ss)
     {
-        libp2p_io_free(subio);
+        libp2p_io_close_free(subio);
         libp2p_conn_free(secured);
         if (remote_peer)
             peer_id_destroy(remote_peer);
@@ -581,8 +751,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
        the remote peer can drain the push payload before the session goes
        away. */
     int take_ownership = 1;
-    if (accepted && strcmp(accepted, LIBP2P_IDENTIFY_PUSH_PROTO_ID) == 0)
-        take_ownership = 0;
     libp2p_stream_set_parent(ss, secured, mx, take_ownership);
     libp2p_io_free(subio);
     free(uc); /* parent now owns secured+mx; remote_peer moved into stream */
@@ -709,6 +877,7 @@ static int do_dial_upgrade_only(libp2p_host_t *host, const char *remote_multiadd
         return LIBP2P_ERR_CANCELED;
     }
     libp2p_conn_t *raw = NULL;
+    int is_quic = addr_is_quic(addr) ? 1 : 0;
     libp2p_transport_t *t = libp2p__host_select_transport(host, addr);
     libp2p_transport_err_t d_rc = t ? libp2p_transport_dial(t, addr, &raw) : LIBP2P_TRANSPORT_ERR_UNSUPPORTED;
     if (d_rc != LIBP2P_TRANSPORT_OK || !raw)
@@ -718,6 +887,65 @@ static int do_dial_upgrade_only(libp2p_host_t *host, const char *remote_multiadd
         return libp2p_error_from_transport(d_rc);
     }
     multiaddr_free(addr);
+
+    if (is_quic)
+    {
+        libp2p_uconn_t *uc_q = NULL;
+        int qrc = libp2p__host_upgrade_outbound_quic(host, raw, &uc_q);
+        if (qrc != 0 || !uc_q)
+            return qrc ? qrc : LIBP2P_ERR_INTERNAL;
+
+        libp2p_conn_t *secured = uc_q->conn;
+        peer_id_t *remote_peer = uc_q->remote_peer;
+        libp2p_muxer_t *mx = (libp2p_muxer_t *)uc_q->muxer;
+        uc_q->conn = NULL;
+        uc_q->remote_peer = NULL;
+        uc_q->muxer = NULL;
+        free(uc_q);
+
+        if (!mx)
+        {
+            if (remote_peer)
+                peer_id_destroy(remote_peer);
+            if (secured)
+                libp2p_conn_free(secured);
+            libp2p__emit_outgoing_error(host, LIBP2P_ERR_INTERNAL, "quic muxer unavailable");
+            return LIBP2P_ERR_INTERNAL;
+        }
+
+        if (cancel && libp2p_cancel_token_is_canceled(cancel))
+        {
+            libp2p_muxer_free(mx);
+            if (secured)
+                libp2p_conn_free(secured);
+            if (remote_peer)
+                peer_id_destroy(remote_peer);
+            return LIBP2P_ERR_CANCELED;
+        }
+
+        libp2p_stream_t *ss = libp2p_stream_from_conn(host, secured, NULL, 1, remote_peer);
+        if (!ss)
+        {
+            libp2p_muxer_free(mx);
+            if (secured)
+                libp2p_conn_free(secured);
+            if (remote_peer)
+                peer_id_destroy(remote_peer);
+            libp2p_event_t evt = {0};
+            evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
+            evt.u.outgoing_conn_error.peer = NULL;
+            evt.u.outgoing_conn_error.code = LIBP2P_ERR_INTERNAL;
+            evt.u.outgoing_conn_error.msg = "failed to wrap stream";
+            libp2p_event_publish(host, &evt);
+            return LIBP2P_ERR_INTERNAL;
+        }
+
+        libp2p_stream_set_parent(ss, secured, mx, 1);
+        libp2p__emit_conn_opened(host, false, libp2p_stream_remote_peer(ss), libp2p_stream_remote_addr(ss));
+        (void)dial_timeout_ms;
+        *out_stream = ss;
+        return 0;
+    }
 
     /* Upgrade using shared helper */
     if (cancel && libp2p_cancel_token_is_canceled(cancel))

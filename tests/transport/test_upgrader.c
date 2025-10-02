@@ -1,6 +1,7 @@
 #include "multiformats/multiaddr/multiaddr.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_ed25519.h"
+#include "libp2p/crypto/ltc_compat.h"
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol/noise/protocol_noise.h"
 #include "protocol/tcp/protocol_tcp.h"

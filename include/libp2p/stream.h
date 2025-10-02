@@ -26,6 +26,7 @@ ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len);
 ssize_t libp2p_stream_writev(libp2p_stream_t *s, const struct iovec *iov, int iovcnt);
 int libp2p_stream_close(libp2p_stream_t *s);
 int libp2p_stream_reset(libp2p_stream_t *s);
+void libp2p_stream_free(libp2p_stream_t *s);
 ssize_t libp2p_stream_read(libp2p_stream_t *s, void *buf, size_t len);
 int libp2p_stream_set_read_interest(libp2p_stream_t *s, bool enable);
 int libp2p_stream_on_writable(libp2p_stream_t *s, libp2p_on_writable_fn cb, void *user_data);
@@ -36,6 +37,8 @@ void libp2p_stream_set_user_data(libp2p_stream_t *s, void *user_data);
 void *libp2p_stream_get_user_data(const libp2p_stream_t *s);
 const peer_id_t *libp2p_stream_remote_peer(const libp2p_stream_t *s);
 const char *libp2p_stream_protocol_id(const libp2p_stream_t *s);
+int libp2p_stream_set_protocol_id(libp2p_stream_t *s, const char *protocol_id);
+int libp2p_stream_set_remote_peer(libp2p_stream_t *s, peer_id_t *peer);
 const multiaddr_t *libp2p_stream_local_addr(const libp2p_stream_t *s);
 const multiaddr_t *libp2p_stream_remote_addr(const libp2p_stream_t *s);
 

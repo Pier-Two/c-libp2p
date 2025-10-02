@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdio.h>
 
 #include "host_internal.h"
 #include "libp2p/debug_trace.h"
@@ -18,6 +19,7 @@
 #include "peer_id/peer_id_rsa.h"
 #include "peer_id/peer_id_secp256k1.h"
 #include "protocol/identify/protocol_identify.h"
+#include "libp2p/stream.h"
 
 typedef struct identify_srv_ctx
 {
@@ -42,6 +44,7 @@ static void *identify_srv_thread(void *arg)
     }
     free(buf);
     (void)libp2p_stream_close(s);
+    libp2p_stream_free(s);
     if (host)
         libp2p__worker_dec(host);
     return NULL;
@@ -233,6 +236,15 @@ static void identify_push_process_full(libp2p_stream_t *s, identify_push_state_t
     libp2p_identify_free(id);
 }
 
+static void identify_push_on_close(libp2p_stream_t *s, void *ud);
+
+static void identify_push_close_and_signal(libp2p_stream_t *s, identify_push_state_t *st)
+{
+    if (st)
+        st->done = 1;
+    libp2p_stream_close(s);
+}
+
 static void identify_push_feed(libp2p_stream_t *s, const uint8_t *data, size_t len, void *ud)
 {
     identify_push_state_t *st = (identify_push_state_t *)libp2p_stream_get_user_data(s);
@@ -242,7 +254,7 @@ static void identify_push_feed(libp2p_stream_t *s, const uint8_t *data, size_t l
         st = (identify_push_state_t *)calloc(1, sizeof(*st));
         if (!st)
         {
-            libp2p_stream_close(s);
+            identify_push_close_and_signal(s, NULL);
             return;
         }
         st->host = (struct libp2p_host *)ud;
@@ -284,14 +296,14 @@ static void identify_push_feed(libp2p_stream_t *s, const uint8_t *data, size_t l
                     if (st->need > (uint64_t)LIBP2P_IDENTIFY_PUSH_MAX_FRAME)
                     {
                         /* Frame too large: close defensively */
-                        libp2p_stream_close(s);
+                        identify_push_close_and_signal(s, st);
                         return;
                     }
                     st->header_done = 1;
                     st->payload = (uint8_t *)malloc((size_t)need);
                     if (!st->payload)
                     { /* OOM: close */
-                        libp2p_stream_close(s);
+                        identify_push_close_and_signal(s, st);
                         return;
                     }
                     size_t excess = st->hdr_used - consumed;
@@ -306,7 +318,7 @@ static void identify_push_feed(libp2p_stream_t *s, const uint8_t *data, size_t l
             else if (st->hdr_used == sizeof(st->hdr))
             {
                 /* malformed header */
-                libp2p_stream_close(s);
+                identify_push_close_and_signal(s, st);
                 return;
             }
         }
@@ -403,12 +415,12 @@ static void *identify_push_thread(void *arg)
         LIBP2P_TRACE("identify_push", "exit without payload status=%d stream=%p", status, (void *)s);
 
     int close_rc = libp2p_stream_close(s);
+    identify_push_on_close(s, host);
     if (close_rc != 0)
     {
-        /* If close did not trigger our callback, clean up here. */
-        identify_push_on_close(s, host);
         LIBP2P_TRACE("identify_push", "stream_close rc=%d stream=%p", close_rc, (void *)s);
     }
+    libp2p_stream_free(s);
 
     if (host)
         libp2p__worker_dec(host);

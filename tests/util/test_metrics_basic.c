@@ -4,6 +4,7 @@
 
 #include "libp2p/host.h"
 #include "libp2p/metrics.h"
+#include "libp2p/stream.h"
 #include "libp2p/stream_internal.h"
 
 typedef struct { int dummy; } fake_io_t;
@@ -73,6 +74,7 @@ int main(void)
     /* Cleanup */
     printf("closing stream...\n");
     (void)libp2p_stream_close(s);
+    libp2p_stream_free(s);
     printf("closed stream. (skipping host_free in this unit test)\n");
     (void)host; /* intentionally leaked for this short-lived test process */
     printf("freeing metrics...\n");

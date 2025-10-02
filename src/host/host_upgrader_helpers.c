@@ -1,10 +1,27 @@
 #include "host_internal.h"
 #include <string.h>
+#include <stdlib.h>
 #include "libp2p/error_map.h"
 #include "transport/upgrader.h"
 #include "libp2p/muxer.h"
 #include "protocol/muxer/yamux/protocol_yamux.h"
 #include "protocol/muxer/mplex/protocol_mplex.h"
+#include "protocol/quic/protocol_quic.h"
+
+static libp2p_muxer_t *(*quic_muxer_factory)(libp2p_host_t *host,
+                                             libp2p_quic_session_t *session,
+                                             const multiaddr_t *local,
+                                             const multiaddr_t *remote,
+                                             libp2p_conn_t *conn) = libp2p_quic_muxer_new;
+
+void libp2p__host_set_quic_muxer_factory(libp2p_muxer_t *(*factory)(libp2p_host_t *host,
+                                                                   libp2p_quic_session_t *session,
+                                                                   const multiaddr_t *local,
+                                                                   const multiaddr_t *remote,
+                                                                   libp2p_conn_t *conn))
+{
+    quic_muxer_factory = factory ? factory : libp2p_quic_muxer_new;
+}
 
 int libp2p__host_upgrade_outbound(libp2p_host_t *host,
                                   libp2p_conn_t *raw,
@@ -171,6 +188,120 @@ int libp2p__host_upgrade_inbound(libp2p_host_t *host,
     if (fallback_mplex && uc->muxer != fallback_mplex)
         libp2p_muxer_free(fallback_mplex);
 
+    *out_uc = uc;
+    return 0;
+}
+
+/* === QUIC bypass constructors (Phase 1) === */
+int libp2p__host_upgrade_outbound_quic(libp2p_host_t *host, libp2p_conn_t *session_conn, libp2p_uconn_t **out_uc)
+{
+    if (!host || !session_conn || !out_uc)
+        return LIBP2P_ERR_NULL_PTR;
+
+    libp2p_quic_session_t *session = libp2p_quic_conn_session(session_conn);
+    if (!session)
+    {
+        libp2p_conn_free(session_conn);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    peer_id_t *remote_peer = NULL;
+    int prc = libp2p_quic_conn_copy_verified_peer(session_conn, &remote_peer);
+    if (prc != 0)
+    {
+        libp2p_conn_free(session_conn);
+        return prc;
+    }
+    if (!remote_peer)
+    {
+        libp2p_conn_free(session_conn);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    libp2p_muxer_t *mx = quic_muxer_factory(host, session,
+                                            libp2p_conn_local_addr(session_conn),
+                                            libp2p_conn_remote_addr(session_conn),
+                                            session_conn);
+    if (!mx)
+    {
+        peer_id_destroy(remote_peer);
+        free(remote_peer);
+        libp2p_conn_free(session_conn);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    libp2p_uconn_t *uc = (libp2p_uconn_t *)calloc(1, sizeof(*uc));
+    if (!uc)
+    {
+        libp2p_muxer_free(mx);
+        peer_id_destroy(remote_peer);
+        free(remote_peer);
+        libp2p_conn_free(session_conn);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    uc->conn = session_conn;
+    uc->remote_peer = remote_peer;
+    uc->muxer = mx;
+    *out_uc = uc;
+    return 0;
+}
+
+int libp2p__host_upgrade_inbound_quic(libp2p_host_t *host, libp2p_conn_t *session_conn, libp2p_uconn_t **out_uc)
+{
+    if (!host || !session_conn || !out_uc)
+        return LIBP2P_ERR_NULL_PTR;
+
+    libp2p_quic_session_t *session = libp2p_quic_conn_session(session_conn);
+    if (!session)
+    {
+        libp2p_conn_free(session_conn);
+        libp2p__emit_incoming_error(host, LIBP2P_ERR_INTERNAL, "quic session missing");
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    peer_id_t *remote_peer = NULL;
+    int prc = libp2p_quic_conn_copy_verified_peer(session_conn, &remote_peer);
+    if (prc != 0)
+    {
+        libp2p_conn_free(session_conn);
+        libp2p__emit_incoming_error(host, prc, "quic peer verification failed");
+        return prc;
+    }
+    if (!remote_peer)
+    {
+        libp2p_conn_free(session_conn);
+        libp2p__emit_incoming_error(host, LIBP2P_ERR_INTERNAL, "quic peer missing");
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    libp2p_muxer_t *mx = quic_muxer_factory(host, session,
+                                            libp2p_conn_local_addr(session_conn),
+                                            libp2p_conn_remote_addr(session_conn),
+                                            session_conn);
+    if (!mx)
+    {
+        libp2p_conn_free(session_conn);
+        libp2p__emit_incoming_error_with_peer(host, remote_peer, LIBP2P_ERR_INTERNAL, "quic muxer unavailable");
+        peer_id_destroy(remote_peer);
+        free(remote_peer);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    libp2p_uconn_t *uc = (libp2p_uconn_t *)calloc(1, sizeof(*uc));
+    if (!uc)
+    {
+        libp2p_muxer_free(mx);
+        libp2p_conn_free(session_conn);
+        libp2p__emit_incoming_error_with_peer(host, remote_peer, LIBP2P_ERR_INTERNAL, "quic inbound upgrade allocation failed");
+        peer_id_destroy(remote_peer);
+        free(remote_peer);
+        return LIBP2P_ERR_INTERNAL;
+    }
+
+    uc->conn = session_conn;
+    uc->remote_peer = remote_peer;
+    uc->muxer = mx;
     *out_uc = uc;
     return 0;
 }

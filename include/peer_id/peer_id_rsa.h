@@ -9,7 +9,6 @@ extern "C"
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 

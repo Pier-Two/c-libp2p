@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
+#include "libp2p/crypto/ltc_compat.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_ed25519.h"
 #include "peer_id/peer_id_proto.h"
@@ -154,3 +154,6 @@ peer_id_error_t peer_id_create_from_private_key_ed25519(const uint8_t *key_data,
     return PEER_ID_E_CRYPTO_FAILED;
 #endif
 }
+
+#undef ed25519_export
+#undef ed25519_import_raw

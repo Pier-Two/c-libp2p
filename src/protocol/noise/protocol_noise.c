@@ -17,16 +17,7 @@
 #include "peer_id/peer_id_secp256k1.h"
 #define PEER_ID_RSA_KEY_TYPE 0
 #define PEER_ID_ECDSA_KEY_TYPE 3
-#define ed25519_sign ltc_ed25519_sign
-#define ed25519_verify ltc_ed25519_verify
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
-#undef ed25519_sign
-#undef ed25519_verify
-#define ed25519_sign ltc_ed25519_sign
-#define ed25519_verify ltc_ed25519_verify
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
-#undef ed25519_sign
-#undef ed25519_verify
+#include "libp2p/crypto/ltc_compat.h"
 
 peer_id_error_t peer_id_create_from_private_key_rsa(const uint8_t *key_data, size_t key_data_len, uint8_t **pubkey_buf, size_t *pubkey_len);
 peer_id_error_t peer_id_create_from_private_key_ecdsa(const uint8_t *key_data, size_t key_data_len, uint8_t **pubkey_buf, size_t *pubkey_len);
@@ -795,6 +786,10 @@ static libp2p_security_err_t noise_secure_outbound(libp2p_security_t *self, libp
         noise_extensions_free(parsed_ext);
         return LIBP2P_SECURITY_ERR_INTERNAL;
     }
+    free(remote_ed);
+    remote_ed = NULL;
+    free(remote_ext);
+    remote_ext = NULL;
     *out = secure;
     return LIBP2P_SECURITY_OK;
 }
@@ -1030,6 +1025,10 @@ static libp2p_security_err_t noise_secure_inbound(libp2p_security_t *self, libp2
         noise_extensions_free(parsed_ext);
         return LIBP2P_SECURITY_ERR_INTERNAL;
     }
+    free(remote_ed);
+    remote_ed = NULL;
+    free(remote_ext);
+    remote_ext = NULL;
     *out = secure;
     return LIBP2P_SECURITY_OK;
 }

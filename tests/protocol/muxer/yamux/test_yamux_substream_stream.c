@@ -220,6 +220,8 @@ int main(void)
     /* Cleanup */
     libp2p_stream_close(sa);
     libp2p_stream_close(sb);
+    libp2p_stream_free(sa);
+    libp2p_stream_free(sb);
     libp2p_yamux_stop(ca);
     libp2p_yamux_stop(cb);
     pthread_join(ta, NULL);

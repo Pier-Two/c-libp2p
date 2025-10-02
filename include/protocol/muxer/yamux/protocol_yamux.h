@@ -145,6 +145,7 @@ typedef struct libp2p_yamux_ctx
     atomic_bool io_busy;     /**< Acts as a lightweight global I/O lock for
                                  libp2p_yamux_process_one to prevent concurrent
                                  reads from multiple threads. */
+    pthread_mutex_t write_mtx; /**< Serialises writes to the underlying conn. */
 } libp2p_yamux_ctx_t;
 
 /**

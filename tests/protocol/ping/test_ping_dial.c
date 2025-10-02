@@ -76,6 +76,7 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "write failed\n");
         libp2p_stream_close(s);
+        libp2p_stream_free(s);
         libp2p_host_free(host);
         libp2p_host_builder_free(builder);
         return 1;
@@ -108,6 +109,7 @@ int main(int argc, char **argv)
 
     int ok = (got == sizeof(echo) && memcmp(payload, echo, sizeof(echo)) == 0);
     libp2p_stream_close(s);
+    libp2p_stream_free(s);
     libp2p_host_free(host);
     libp2p_host_builder_free(builder);
 

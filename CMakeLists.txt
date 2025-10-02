@@ -36,14 +36,65 @@ set_tests_properties(Testprotocol_multiselect_io PROPERTIES TIMEOUT 20)
 add_compile_options(-O0 -g)
 
 if(APPLE)
-  if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "")
-    set(CMAKE_OSX_ARCHITECTURES "${CMAKE_SYSTEM_PROCESSOR}" CACHE STRING "Build architectures for macOS" FORCE)
-    message(STATUS "Building for macOS architecture: ${CMAKE_OSX_ARCHITECTURES}")
+  string(TOLOWER "${CMAKE_HOST_SYSTEM_PROCESSOR}" _host_arch)
+  set(_prefer_arm64 OFF)
+  if(_host_arch STREQUAL "arm64")
+    set(_prefer_arm64 ON)
+  else()
+    execute_process(COMMAND /usr/sbin/sysctl -n hw.optional.arm64
+      OUTPUT_VARIABLE _hw_arm64
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(_hw_arm64 STREQUAL "1")
+      set(_prefer_arm64 ON)
+    endif()
+  endif()
+  set(_target_macos_arch "${CMAKE_SYSTEM_PROCESSOR}")
+  if(_prefer_arm64)
+    set(_target_macos_arch "arm64")
+  endif()
+  if(NOT DEFINED CMAKE_OSX_ARCHITECTURES OR "${CMAKE_OSX_ARCHITECTURES}" STREQUAL "")
+    # Default to the native host architecture; this avoids Rosetta on Apple Silicon.
+    set(CMAKE_OSX_ARCHITECTURES "${_target_macos_arch}" CACHE STRING "Build architectures for macOS" FORCE)
+  elseif(_prefer_arm64 AND NOT (CMAKE_OSX_ARCHITECTURES MATCHES "(^|;)arm64($|;)"))
+    # When configuring under Rosetta, the cache may carry over x86_64—force arm64 to avoid timeouts.
+    set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "Build architectures for macOS" FORCE)
+  endif()
+  if(_prefer_arm64)
+    set(ED448_ARCH "arch_ref64" CACHE STRING "Specify Ed448-Goldilocks arch" FORCE)
+    set(SECP256K1_ASM OFF CACHE STRING "" FORCE)
+    set(PTLS_WITH_FUSION OFF CACHE BOOL "" FORCE)
+    set(WITH_FUSION OFF CACHE BOOL "" FORCE)
+    if(EXISTS "/opt/homebrew/lib/libcrypto.dylib")
+      set(OPENSSL_ROOT_DIR "/opt/homebrew" CACHE PATH "" FORCE)
+      set(OPENSSL_INCLUDE_DIR "/opt/homebrew/include" CACHE PATH "" FORCE)
+      set(OPENSSL_CRYPTO_LIBRARY "/opt/homebrew/lib/libcrypto.dylib" CACHE FILEPATH "" FORCE)
+      set(OPENSSL_SSL_LIBRARY "/opt/homebrew/lib/libssl.dylib" CACHE FILEPATH "" FORCE)
+    endif()
+  endif()
+  message(STATUS "Building for macOS architecture: ${CMAKE_OSX_ARCHITECTURES}")
+
+  # Ensure early-defined targets (like test_protocol_multiselect_io) inherit the
+  # configured slice instead of falling back to CMake's default architecture.
+  if(TARGET test_protocol_multiselect_io AND CMAKE_OSX_ARCHITECTURES)
+    set_target_properties(test_protocol_multiselect_io PROPERTIES
+      OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")
   endif()
 endif()
 
 option(ENABLE_SANITIZERS "Enable Address, UndefinedBehavior, Thread, etc. Sanitizers" OFF)
 set(SANITIZERS "address;undefined" CACHE STRING "List of sanitizers to enable (semicolon-separated)")
+
+# QUIC transport vendoring
+option(LIBP2P_VENDOR_PICOQUIC "Build and expose picoquic vendor target" ON)
+
+if(NOT LIBP2P_VENDOR_PICOQUIC)
+    message(FATAL_ERROR "Bundled picoquic is required; configure with -DLIBP2P_VENDOR_PICOQUIC=ON.")
+endif()
+
+if(LIBP2P_VENDOR_PICOQUIC AND NOT EXISTS "${PROJECT_SOURCE_DIR}/lib/picoquic/CMakeLists.txt")
+    message(FATAL_ERROR "LIBP2P_VENDOR_PICOQUIC is ON, but the picoquic submodule is missing. Run `git submodule update --init --recursive`.")
+endif()
 
 # ---------------------------------------------------------------------
 # Static‑analysis / coverage options
@@ -61,6 +112,11 @@ if(ENABLE_SANITIZERS)
 
     add_compile_options(-fsanitize=${_san_opt} -fno-omit-frame-pointer)
     add_link_options(-fsanitize=${_san_opt})
+
+    if(TARGET test_protocol_multiselect_io)
+        target_compile_options(test_protocol_multiselect_io PRIVATE -fsanitize=${_san_opt} -fno-omit-frame-pointer)
+        target_link_options(test_protocol_multiselect_io PRIVATE -fsanitize=${_san_opt})
+    endif()
 
     # With sanitizers enabled, inline assembly in secp256k1 conflicts with
     # instrumentation on some toolchains (register pressure). Disable ASM for
@@ -261,7 +317,27 @@ endif()
 
 # Add libtomcrypt submodule.
 _add_subdirectory_no_tests(lib/libtomcrypt)
-target_compile_definitions(libtomcrypt PRIVATE USE_LTM LTM_DESC)
+target_compile_definitions(libtomcrypt PRIVATE
+    USE_LTM
+    LTM_DESC
+    ed25519_export=ltc_ed25519_export
+    ed25519_import=ltc_ed25519_import
+    ed25519_import_pkcs8=ltc_ed25519_import_pkcs8
+    ed25519_import_raw=ltc_ed25519_import_raw
+    ed25519_import_x509=ltc_ed25519_import_x509
+    ed25519_make_key=ltc_ed25519_make_key
+    ed25519_sign=ltc_ed25519_sign
+    ed25519_verify=ltc_ed25519_verify
+    ed25519ctx_verify=ltc_ed25519ctx_verify
+    ed25519ph_verify=ltc_ed25519ph_verify
+    x25519_export=ltc_x25519_export
+    x25519_import=ltc_x25519_import
+    x25519_import_pkcs8=ltc_x25519_import_pkcs8
+    x25519_import_raw=ltc_x25519_import_raw
+    x25519_import_x509=ltc_x25519_import_x509
+    x25519_make_key=ltc_x25519_make_key
+    x25519_shared_secret=ltc_x25519_shared_secret
+)
 
 # Add noise-c submodule with crypto backends disabled.
 set(USE_LIBSODIUM OFF CACHE BOOL "" FORCE)
@@ -269,6 +345,35 @@ set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
 _add_subdirectory_no_tests(lib/noise-c)
 set_target_properties(noiseprotocol PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_sources(noiseprotocol PRIVATE ${CMAKE_SOURCE_DIR}/cmake/newhope_abs_shim.c)
+
+if(LIBP2P_VENDOR_PICOQUIC)
+    # Add picoquic QUIC stack with bundled picotls.
+    set(PICOQUIC_FETCH_PTLS ON CACHE BOOL "Fetch Picotls when configuring picoquic" FORCE)
+    # Temporarily suppress pkg-config discovery so picotls does not enable
+    # optional Brotli (or other) system libs that may not match our arch.
+    # We'll restore the environment after adding the subdirectory.
+    set(_SAVED_PKG_CONFIG_PATH "$ENV{PKG_CONFIG_PATH}")
+    set(_SAVED_PKG_CONFIG_LIBDIR "$ENV{PKG_CONFIG_LIBDIR}")
+    set(ENV{PKG_CONFIG_PATH} "")
+    set(ENV{PKG_CONFIG_LIBDIR} "${CMAKE_BINARY_DIR}/__no_pkgconfig__")
+    set(picoquic_BUILD_TESTS OFF CACHE BOOL "Build picoquic tests" FORCE)
+    set(BUILD_DEMO OFF CACHE BOOL "Build picoquic demo binaries" FORCE)
+    set(BUILD_HTTP OFF CACHE BOOL "Build picoquic HTTP helpers" FORCE)
+    set(BUILD_LOGLIB OFF CACHE BOOL "Build picoquic log helpers" FORCE)
+    set(BUILD_LOGREADER OFF CACHE BOOL "Build picoquic log reader" FORCE)
+    set(WITH_OPENSSL ON CACHE BOOL "Use OpenSSL backend for picoquic" FORCE)
+    set(WITH_MBEDTLS OFF CACHE BOOL "Disable mbedTLS backend for picoquic" FORCE)
+    _add_subdirectory_no_tests(lib/picoquic)
+    # Restore pkg-config search path
+    set(ENV{PKG_CONFIG_PATH} "${_SAVED_PKG_CONFIG_PATH}")
+    set(ENV{PKG_CONFIG_LIBDIR} "${_SAVED_PKG_CONFIG_LIBDIR}")
+    if(TARGET picoquic-core)
+        set_target_properties(picoquic-core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    add_library(libp2p_quic_vendor INTERFACE)
+    target_link_libraries(libp2p_quic_vendor INTERFACE picoquic-core)
+endif()
 
 # ---------------------------------------------------------------------------
 # Workaround: MinGW/Windows build failure in Noise-C's NewHope implementation
@@ -593,6 +698,51 @@ target_link_libraries(test_host_events_listen_and_stop PRIVATE libp2p_unified Th
 set_target_properties(test_host_events_listen_and_stop PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
 add_test(NAME TestHostEventsListenAndStop COMMAND test_host_events_listen_and_stop)
+
+add_executable(test_quic_upgrade_outbound
+    tests/host/test_quic_upgrade_outbound.c)
+target_link_libraries(test_quic_upgrade_outbound PRIVATE libp2p_unified)
+target_include_directories(test_quic_upgrade_outbound PRIVATE ${PROJECT_SOURCE_DIR})
+set_target_properties(test_quic_upgrade_outbound PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME TestQuicUpgradeOutbound COMMAND test_quic_upgrade_outbound)
+set_tests_properties(TestQuicUpgradeOutbound PROPERTIES TIMEOUT 10)
+add_executable(test_host_quic_stream_loopback
+    tests/host/test_quic_stream_loopback.c)
+target_link_libraries(test_host_quic_stream_loopback PRIVATE libp2p_unified)
+target_include_directories(test_host_quic_stream_loopback PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR}/_deps/picotls-src/include)
+set_target_properties(test_host_quic_stream_loopback PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME TestHostQuicStreamLoopback COMMAND test_host_quic_stream_loopback)
+set_tests_properties(TestHostQuicStreamLoopback PROPERTIES TIMEOUT 20)
+
+add_executable(test_quic_host_stream_exchange
+    tests/host/test_quic_host_stream_exchange.c)
+target_link_libraries(test_quic_host_stream_exchange PRIVATE libp2p_unified)
+target_include_directories(test_quic_host_stream_exchange PRIVATE ${PROJECT_SOURCE_DIR})
+set_target_properties(test_quic_host_stream_exchange PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME TestQuicHostStreamExchange COMMAND test_quic_host_stream_exchange)
+set_tests_properties(TestQuicHostStreamExchange PROPERTIES TIMEOUT 20)
+
+add_executable(test_quic_listener_accept
+    tests/host/test_quic_listener_accept.c)
+target_link_libraries(test_quic_listener_accept PRIVATE libp2p_unified)
+target_include_directories(test_quic_listener_accept PRIVATE ${PROJECT_SOURCE_DIR})
+set_target_properties(test_quic_listener_accept PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME TestQuicListenerAccept COMMAND test_quic_listener_accept)
+set_tests_properties(TestQuicListenerAccept PROPERTIES TIMEOUT 20)
+
+add_executable(test_quic_incoming_error_events
+    tests/host/test_quic_incoming_error_events.c)
+target_link_libraries(test_quic_incoming_error_events PRIVATE libp2p_unified)
+target_include_directories(test_quic_incoming_error_events PRIVATE ${PROJECT_SOURCE_DIR})
+set_target_properties(test_quic_incoming_error_events PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME TestQuicIncomingErrorEvents COMMAND test_quic_incoming_error_events)
+set_tests_properties(TestQuicIncomingErrorEvents PROPERTIES TIMEOUT 10)
+
 
 # dial cancellation test
 add_executable(test_dial_cancellable
@@ -1096,6 +1246,78 @@ add_module(
 )
 target_link_libraries(protocol_ping PUBLIC libp2p_unified)
 
+# ---------------------------------------------
+# protocol/quic (skeleton)
+# ---------------------------------------------
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+add_library(protocol_quic STATIC
+    src/protocol/quic/protocol_quic.c
+    src/protocol/quic/quic_listener.c
+    src/protocol/quic/quic_conn.c
+    src/protocol/quic/quic_tls.c
+    src/protocol/quic/quic_muxer.c
+)
+set_target_properties(protocol_quic PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(protocol_quic PUBLIC ${PROJECT_SOURCE_DIR}/include)
+target_include_directories(protocol_quic PRIVATE ${PROJECT_SOURCE_DIR}/src/protocol/quic)
+target_include_directories(protocol_quic PRIVATE ${PROJECT_BINARY_DIR}/_deps/picotls-src/include)
+if(ENABLE_CLANG_TIDY AND LIBP2P_CLANG_TIDY)
+    set_target_properties(protocol_quic PROPERTIES C_CLANG_TIDY "${LIBP2P_CLANG_TIDY}")
+endif()
+target_link_libraries(protocol_quic
+    PRIVATE
+        multiaddr
+        libtomcrypt
+        wjcryptlib
+        eddsa
+        secp256k1
+    PUBLIC
+        peer_id
+        peer_id_proto
+        OpenSSL::Crypto
+)
+# Link to vendor interface (picoquic-core) if available; safe even unused
+if(TARGET libp2p_quic_vendor)
+    target_link_libraries(protocol_quic PUBLIC libp2p_quic_vendor)
+endif()
+# libp2p_unified calls the QUIC factory; ensure symbol availability
+target_link_libraries(libp2p_unified PUBLIC protocol_quic)
+
+add_executable(test_protocol_quic tests/protocol/quic/test_quic_tls_identity.c)
+target_link_libraries(test_protocol_quic PRIVATE protocol_quic peer_id)
+set_target_properties(test_protocol_quic PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME Testprotocol_quic COMMAND test_protocol_quic)
+set_tests_properties(Testprotocol_quic PROPERTIES TIMEOUT 10)
+
+add_executable(test_quic_can_handle tests/protocol/quic/test_quic_can_handle.c)
+target_link_libraries(test_quic_can_handle PRIVATE libp2p_unified)
+set_target_properties(test_quic_can_handle PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME Testquic_can_handle COMMAND test_quic_can_handle)
+set_tests_properties(Testquic_can_handle PROPERTIES TIMEOUT 5)
+
+add_executable(test_quic_listener_lifecycle tests/protocol/quic/test_quic_listener_lifecycle.c)
+target_link_libraries(test_quic_listener_lifecycle PRIVATE libp2p_unified)
+set_target_properties(test_quic_listener_lifecycle PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME Testquic_listener_lifecycle COMMAND test_quic_listener_lifecycle)
+set_tests_properties(Testquic_listener_lifecycle PROPERTIES TIMEOUT 20)
+
+add_executable(test_quic_tls_certificate tests/protocol/quic/test_quic_tls_certificate.c)
+target_link_libraries(test_quic_tls_certificate PRIVATE protocol_quic)
+set_target_properties(test_quic_tls_certificate PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME Testquic_tls_certificate COMMAND test_quic_tls_certificate)
+set_tests_properties(Testquic_tls_certificate PROPERTIES TIMEOUT 10)
+
+add_executable(test_quic_stream_loopback tests/protocol/quic/test_quic_stream_loopback.c)
+target_link_libraries(test_quic_stream_loopback PRIVATE libp2p_unified)
+target_include_directories(test_quic_stream_loopback PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_BINARY_DIR}/_deps/picotls-src/include)
+set_target_properties(test_quic_stream_loopback PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME Testquic_stream_loopback COMMAND test_quic_stream_loopback)
+set_tests_properties(Testquic_stream_loopback PROPERTIES TIMEOUT 20)
 # ---------------------------------------------
 # protocol/muxer/mplex
 # ---------------------------------------------

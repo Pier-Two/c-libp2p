@@ -14,6 +14,7 @@
 #include "libp2p/log.h"
 #include "libp2p/lpmsg.h"
 #include "libp2p/peerstore.h"
+#include "libp2p/stream.h"
 #include "libp2p/protocol_listen.h"
 #include "libp2p/runtime.h"
 #include "libp2p/stream_internal.h"
@@ -26,6 +27,7 @@
 #include "protocol/muxer/yamux/yamux_io_adapter.h"
 #include "protocol/muxer/yamux/yamux_stream_adapter.h"
 #include "protocol/noise/protocol_noise.h"
+#include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
 
@@ -80,6 +82,8 @@ typedef struct push_stream_node
     size_t buf_sz;
     struct push_stream_node *next;
 } push_stream_node_t;
+
+static void cbctx_stream_cleanup(void *ctx, libp2p_stream_t *s);
 
 /* Detach the listener list under the host mutex and optionally duplicate it into
  * an array for indexed processing. Falls back to list processing when memory
@@ -257,6 +261,7 @@ static void cbctx_register_stream(yamux_cb_ctx_t *c, libp2p_stream_t *s)
     n->next = c->streams;
     c->streams = n;
     pthread_mutex_unlock(&c->mtx);
+    libp2p__stream_set_cleanup(s, cbctx_stream_cleanup, c);
 }
 
 static void cbctx_configure_push(yamux_cb_ctx_t *c, libp2p_stream_t *s, const libp2p_protocol_def_t *def, size_t cap)
@@ -310,6 +315,14 @@ static void cbctx_remove_stream(yamux_cb_ctx_t *c, libp2p_stream_t *s)
         pp = &(*pp)->next;
     }
     pthread_mutex_unlock(&c->mtx);
+}
+
+static void cbctx_stream_cleanup(void *ctx, libp2p_stream_t *s)
+{
+    if (!ctx || !s)
+        return;
+    yamux_cb_ctx_t *c = (yamux_cb_ctx_t *)ctx;
+    cbctx_remove_stream(c, s);
 }
 
 static void cbctx_service_push(yamux_cb_ctx_t *c)
@@ -601,7 +614,11 @@ static void *inbound_session_thread(void *arg)
     cbctx->first_peer = NULL;
     cbctx->accepted_count = 0;
     memset(&cbctx->peer_template, 0, sizeof(cbctx->peer_template));
-    pthread_mutex_init(&cbctx->mtx, NULL);
+    pthread_mutexattr_t mtx_attr;
+    pthread_mutexattr_init(&mtx_attr);
+    pthread_mutexattr_settype(&mtx_attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&cbctx->mtx, &mtx_attr);
+    pthread_mutexattr_destroy(&mtx_attr);
     /* Keep a copy of the remote peer id to duplicate for subsequent streams */
     if (remote_peer && remote_peer->bytes && remote_peer->size)
     {
@@ -1511,6 +1528,8 @@ int libp2p_host_stop(libp2p_host_t *host)
     /* Defer freeing yamux session callback contexts until after all
      * detached substream workers have exited to avoid races. */
     yamux_cb_ctx_t **yamux_cbs = NULL;
+    libp2p_stream_t **pending_streams = NULL;
+    size_t pending_stream_count = 0;
     size_t yamux_cb_count = 0, yamux_cb_cap = 0;
     libp2p_conn_t **deferred_conns = NULL;
     size_t deferred_conn_count = 0, deferred_conn_cap = 0;
@@ -1534,16 +1553,19 @@ int libp2p_host_stop(libp2p_host_t *host)
         for (stream_entry_t *se = host->active_streams; se; se = se->next)
             scount++;
         libp2p_stream_t **streams = scount ? (libp2p_stream_t **)calloc(scount, sizeof(*streams)) : NULL;
+        pending_streams = streams;
         size_t si = 0;
         for (stream_entry_t *se = host->active_streams; se && streams; se = se->next)
             streams[si++] = se->s;
+        pending_stream_count = streams ? si : 0;
         pthread_mutex_unlock(&host->mtx);
-        LP_LOGD("HOST_STOP", "closing %zu active streams", (size_t)(streams ? si : 0));
-        for (size_t i = 0; streams && i < si; i++)
-            if (streams[i])
-                libp2p_stream_close(streams[i]);
-        if (streams)
-            free(streams);
+        LP_LOGD("HOST_STOP", "closing %zu active streams", (size_t)pending_stream_count);
+        for (size_t i = 0; i < pending_stream_count; i++)
+            if (pending_streams[i])
+            {
+                libp2p__stream_mark_deferred(pending_streams[i]);
+                libp2p_stream_close(pending_streams[i]);
+            }
     }
     LP_LOGD("HOST_STOP", "streams closed; proceeding to stop/join sessions");
     /* Stop and join per-connection session threads first (no new sessions can appear
@@ -1568,38 +1590,45 @@ int libp2p_host_stop(libp2p_host_t *host)
         if (!sn)
             break;
         /* Wait for the session to publish its thread and runtime without polling. */
-        pthread_mutex_lock(&sn->ready_mtx);
-        if (!sn->thread || !sn->rt)
+        if (!sn->is_quic)
         {
-            struct timespec now;
-            clock_gettime(CLOCK_REALTIME, &now);
-            struct timespec abs;
-            abs.tv_sec = now.tv_sec + 1;
-            abs.tv_nsec = now.tv_nsec; /* up to ~1s */
-            while ((!sn->thread || !sn->rt))
+            pthread_mutex_lock(&sn->ready_mtx);
+            if (!sn->thread || !sn->rt)
             {
-                int w = pthread_cond_timedwait(&sn->ready_cv, &sn->ready_mtx, &abs);
-                if (w == ETIMEDOUT)
-                    break;
+                struct timespec now;
+                clock_gettime(CLOCK_REALTIME, &now);
+                struct timespec abs;
+                abs.tv_sec = now.tv_sec + 1;
+                abs.tv_nsec = now.tv_nsec; /* up to ~1s */
+                while ((!sn->thread || !sn->rt))
+                {
+                    int w = pthread_cond_timedwait(&sn->ready_cv, &sn->ready_mtx, &abs);
+                    if (w == ETIMEDOUT)
+                        break;
+                }
             }
+            pthread_mutex_unlock(&sn->ready_mtx);
+            LP_LOGD("HOST_STOP", "stopping session thread %p (rt=%p)", (void *)sn->thread, (void *)sn->rt);
+            /* Take a temporary reference to the yamux context to avoid races with
+             * the session thread freeing it while we signal shutdown. */
+            libp2p_yamux_ctx_t *yref = sn->yctx;
+            if (yref)
+                atomic_fetch_add_explicit(&yref->refcnt, 1, memory_order_acq_rel);
+            /* Proactively signal muxer shutdown before stopping the runtime to
+             * expedite unblocking of any pending operations. */
+            if (yref)
+                libp2p_yamux_stop(yref);
+            if (sn->rt)
+                libp2p_runtime_stop(sn->rt);
+            if (sn->thread)
+                pthread_join(sn->thread, NULL);
+            if (yref)
+                libp2p_yamux_ctx_free(yref);
         }
-        pthread_mutex_unlock(&sn->ready_mtx);
-        LP_LOGD("HOST_STOP", "stopping session thread %p (rt=%p)", (void *)sn->thread, (void *)sn->rt);
-        /* Take a temporary reference to the yamux context to avoid races with
-         * the session thread freeing it while we signal shutdown. */
-        libp2p_yamux_ctx_t *yref = sn->yctx;
-        if (yref)
-            atomic_fetch_add_explicit(&yref->refcnt, 1, memory_order_acq_rel);
-        /* Proactively signal muxer shutdown before stopping the runtime to
-         * expedite unblocking of any pending operations. */
-        if (yref)
-            libp2p_yamux_stop(yref);
-        if (sn->rt)
-            libp2p_runtime_stop(sn->rt);
-        if (sn->thread)
-            pthread_join(sn->thread, NULL);
-        if (yref)
-            libp2p_yamux_ctx_free(yref);
+        else
+        {
+            LP_LOGD("HOST_STOP", "stopping QUIC session (mx=%p conn=%p)", (void *)sn->mx, (void *)sn->conn);
+        }
         /* Free per-session resources now that the thread has exited. */
         /* Save yamux cbctx for deferred free after worker threads drain. */
         if (sn->yamux_cb)
@@ -1625,7 +1654,13 @@ int libp2p_host_stop(libp2p_host_t *host)
             libp2p_runtime_free(sn->rt);
             sn->rt = NULL;
         }
-        if (sn->conn)
+        if (sn->yctx)
+        {
+            libp2p_yamux_ctx_t *base = sn->yctx;
+            libp2p_yamux_ctx_free(base);
+            sn->yctx = NULL;
+        }
+        if (!sn->is_quic && sn->conn)
         {
             /* Close immediately to unblock any pending I/O, but defer freeing
              * until worker threads (identify push, ping, etc.) have drained. */
@@ -1650,15 +1685,29 @@ int libp2p_host_stop(libp2p_host_t *host)
             }
             sn->conn = NULL;
         }
+        if (sn->is_quic && sn->conn)
+        {
+            libp2p_quic_conn_detach_session(sn->conn);
+        }
         if (sn->mx)
         {
             libp2p_muxer_free(sn->mx);
             sn->mx = NULL;
         }
+        if (sn->is_quic && sn->conn)
+        {
+            libp2p_conn_free(sn->conn);
+            sn->conn = NULL;
+        }
         /* destroy ready primitives and free */
         pthread_mutex_destroy(&sn->ready_mtx);
         pthread_cond_destroy(&sn->ready_cv);
         free(sn);
+    }
+    if (pending_streams)
+    {
+        for (size_t i = 0; i < pending_stream_count; i++)
+            pending_streams[i] = NULL;
     }
     LP_LOGD("HOST_STOP", "sessions stopped; notifying stopped");
     /* Now close listeners and join accept threads */
@@ -1767,6 +1816,13 @@ int libp2p_host_stop(libp2p_host_t *host)
     }
     pthread_mutex_unlock(&host->mtx);
     /* Now it is safe to free deferred yamux cbctx objects. */
+    for (size_t i = 0; i < pending_stream_count; i++)
+        if (pending_streams[i])
+        {
+            libp2p__stream_destroy(pending_streams[i]);
+            pending_streams[i] = NULL;
+        }
+    free(pending_streams);
     for (size_t i = 0; i < yamux_cb_count; i++)
         yamux_cb_ctx_free(yamux_cbs[i]);
     free(yamux_cbs);
@@ -1952,7 +2008,15 @@ static void *listener_accept_thread(void *arg)
 
         /* Upgrade inbound connection (Noise + muxer) via shared helper */
         libp2p_uconn_t *uc = NULL;
-        int uprci = libp2p__host_upgrade_inbound(host, raw, /*allow_mplex=*/1, &uc);
+        int uprci = 0;
+        if (libp2p_quic_conn_session(raw) != NULL)
+        {
+            uprci = libp2p__host_upgrade_inbound_quic(host, raw, &uc);
+        }
+        else
+        {
+            uprci = libp2p__host_upgrade_inbound(host, raw, /*allow_mplex=*/1, &uc);
+        }
         if (uprci != 0 || !uc)
             continue;
         libp2p_conn_t *secured = uc->conn;
@@ -2036,6 +2100,36 @@ static void *listener_accept_thread(void *arg)
 
         libp2p__emit_conn_opened(host, true, remote_peer, libp2p_conn_remote_addr(secured));
 
+        int is_quic = libp2p_quic_conn_session(secured) ? 1 : 0;
+
+        if (is_quic)
+        {
+            session_node_t *snode = (session_node_t *)calloc(1, sizeof(*snode));
+            if (snode)
+            {
+                snode->is_quic = 1;
+                pthread_mutex_init(&snode->ready_mtx, NULL);
+                pthread_cond_init(&snode->ready_cv, NULL);
+                pthread_mutex_lock(&host->mtx);
+                snode->next = host->sessions;
+                host->sessions = snode;
+                pthread_mutex_unlock(&host->mtx);
+                pthread_mutex_lock(&snode->ready_mtx);
+                snode->mx = mx;
+                snode->conn = secured;
+                pthread_cond_broadcast(&snode->ready_cv);
+                pthread_mutex_unlock(&snode->ready_mtx);
+                LP_LOGD("HOST", "registered inbound QUIC session node=%p", (void *)snode);
+            }
+            if (remote_peer)
+            {
+                peer_id_destroy(remote_peer);
+                free(remote_peer);
+                remote_peer = NULL;
+            }
+            continue;
+        }
+
         /* Spawn per-connection session thread to process frames and accept substreams */
 
         inbound_session_ctx_t *ictx = calloc(1, sizeof(*ictx));
@@ -2051,6 +2145,7 @@ static void *listener_accept_thread(void *arg)
         session_node_t *snode = (session_node_t *)calloc(1, sizeof(*snode));
         if (snode)
         {
+            snode->is_quic = 0;
             /* init ready signaling primitives */
             pthread_mutex_init(&snode->ready_mtx, NULL);
             pthread_cond_init(&snode->ready_cv, NULL);
@@ -2090,6 +2185,19 @@ static void *listener_accept_thread(void *arg)
                 libp2p_muxer_free(mx);
                 if (remote_peer)
                     peer_id_destroy(remote_peer);
+                if (snode)
+                {
+                    pthread_mutex_lock(&host->mtx);
+                    session_node_t **pp = &host->sessions;
+                    while (*pp && *pp != snode)
+                        pp = &(*pp)->next;
+                    if (*pp == snode)
+                        *pp = snode->next;
+                    pthread_mutex_unlock(&host->mtx);
+                    pthread_mutex_destroy(&snode->ready_mtx);
+                    pthread_cond_destroy(&snode->ready_cv);
+                    free(snode);
+                }
             }
         }
         else
@@ -2113,12 +2221,23 @@ static void *listener_accept_thread(void *arg)
                 libp2p_muxer_free(mx);
                 if (remote_peer)
                     peer_id_destroy(remote_peer);
+                if (snode)
+                {
+                    pthread_mutex_lock(&host->mtx);
+                    session_node_t **pp = &host->sessions;
+                    while (*pp && *pp != snode)
+                        pp = &(*pp)->next;
+                    if (*pp == snode)
+                        *pp = snode->next;
+                    pthread_mutex_unlock(&host->mtx);
+                    pthread_mutex_destroy(&snode->ready_mtx);
+                    pthread_cond_destroy(&snode->ready_cv);
+                    free(snode);
+                }
             }
         }
         /* Already handed off to session thread */
         continue;
-
-        /* dead code (removed) */
     }
     return NULL;
 }

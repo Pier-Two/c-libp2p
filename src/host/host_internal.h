@@ -15,6 +15,7 @@
 #include "libp2p/metrics.h"
 #include "libp2p/security.h"
 #include "libp2p/transport.h"
+#include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
 
@@ -68,6 +69,7 @@ typedef struct session_node
     /* Ready signaling to avoid polling during shutdown */
     pthread_mutex_t ready_mtx;
     pthread_cond_t ready_cv;
+    int is_quic; /* when set, muxer/conn belong to QUIC session (no yamux thread) */
     struct session_node *next;
 } session_node_t;
 
@@ -258,6 +260,22 @@ int libp2p__host_upgrade_inbound(struct libp2p_host *host,
                                  struct libp2p_connection *raw,
                                  int allow_mplex,
                                  libp2p_uconn_t **out_uc);
+
+/* QUIC-specific bypass helpers: construct a uconn directly from a QUIC
+ * session-bound libp2p_conn_t. No security or muxer negotiation performed. */
+int libp2p__host_upgrade_outbound_quic(struct libp2p_host *host,
+                                       struct libp2p_connection *session_conn,
+                                       libp2p_uconn_t **out_uc);
+
+int libp2p__host_upgrade_inbound_quic(struct libp2p_host *host,
+                                      struct libp2p_connection *session_conn,
+                                      libp2p_uconn_t **out_uc);
+
+void libp2p__host_set_quic_muxer_factory(libp2p_muxer_t *(*factory)(struct libp2p_host *host,
+                                                                   libp2p_quic_session_t *session,
+                                                                   const multiaddr_t *local,
+                                                                   const multiaddr_t *remote,
+                                                                   struct libp2p_connection *conn));
 
 /* === Event emission helpers (internal) === */
 void libp2p__emit_dialing(struct libp2p_host *host, const char *addr);

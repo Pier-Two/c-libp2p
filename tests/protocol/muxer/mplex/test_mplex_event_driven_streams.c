@@ -608,6 +608,12 @@ cleanup:
     pthread_join(tctx.server_thread, NULL);
     fprintf(stderr, "[TEST] joined server thread\n");
 
+    if (tctx.server_ctx)
+    {
+        libp2p_mplex_free(tctx.server_ctx);
+        tctx.server_ctx = NULL;
+    }
+
     /* Cleanup synchronization objects */
     pthread_mutex_destroy(&tctx.mutex);
     pthread_cond_destroy(&tctx.cond);
@@ -974,6 +980,12 @@ cleanup_concurrent:
 
     /* Join server thread */
     pthread_join(tctx.server_thread, NULL);
+
+    if (tctx.server_ctx)
+    {
+        libp2p_mplex_free(tctx.server_ctx);
+        tctx.server_ctx = NULL;
+    }
 
     /* Cleanup synchronization objects */
     pthread_mutex_destroy(&tctx.mutex);

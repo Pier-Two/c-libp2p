@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "host_internal.h"
+#include "libp2p/stream.h"
 #include "libp2p/events.h"
 #include "libp2p/identify.h"
 #include "libp2p/lpmsg.h"
@@ -141,5 +142,6 @@ int libp2p_identify_request(libp2p_identify_service_t *id, const peer_id_t *peer
     s = c.s;
     int apply_rc = read_and_apply_identify(id, s, peer);
     libp2p_stream_close(s);
+    libp2p_stream_free(s);
     return apply_rc;
 }

@@ -16,6 +16,7 @@
 #include "protocol/tcp/protocol_tcp_poller.h"
 #include "protocol/noise/protocol_noise.h"
 #include "protocol/tcp/protocol_tcp.h"
+#include "protocol/quic/protocol_quic.h"
 /* For push publisher */
 #include "libp2p/debug_trace.h"
 #include "libp2p/events.h"
@@ -268,6 +269,8 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
                 {
                     if (libp2p_transport_quic(&t) == 0 && t)
                     {
+                        if (h->opts.dial_timeout_ms > 0)
+                            (void)libp2p_quic_transport_set_dial_timeout(t, (uint32_t)h->opts.dial_timeout_ms);
                         libp2p_transport_t **nb = realloc(arr, (n + 1) * sizeof(*arr));
                         if (nb)
                         {
@@ -670,13 +673,26 @@ int libp2p_host_set_private_key(libp2p_host_t *host, const uint8_t *privkey_pb, 
     }
     libp2p_noise_config_t cfg = libp2p_noise_config_default();
     cfg.identity_private_key = host->identity_key;
-    cfg.identity_private_key_len = host->identity_key_len;
-    cfg.identity_key_type = host->identity_type;
-    host->noise = libp2p_noise_security_new(&cfg);
-    if (!host->noise)
+   cfg.identity_private_key_len = host->identity_key_len;
+   cfg.identity_key_type = host->identity_type;
+   host->noise = libp2p_noise_security_new(&cfg);
+   if (!host->noise)
+   {
+       pthread_mutex_unlock(&host->mtx);
+       return LIBP2P_ERR_INTERNAL;
+   }
+
+    if (host->transports && host->num_transports > 0)
     {
-        pthread_mutex_unlock(&host->mtx);
-        return LIBP2P_ERR_INTERNAL;
+        libp2p_quic_tls_cert_options_t qopts = libp2p_quic_tls_cert_options_default();
+        qopts.identity_key_type = (uint64_t)host->identity_type;
+        qopts.identity_key = host->identity_key;
+        qopts.identity_key_len = host->identity_key_len;
+        for (size_t i = 0; i < host->num_transports; i++)
+        {
+            if (libp2p_quic_transport_is(host->transports[i]))
+                (void)libp2p_quic_transport_set_identity(host->transports[i], &qopts);
+        }
     }
 
     pthread_mutex_unlock(&host->mtx);

@@ -22,3 +22,6 @@
 [submodule "lib/noise-c"]
 	path = lib/noise-c
 	url = https://github.com/uink45/noise-c.git
+[submodule "lib/picoquic"]
+	path = lib/picoquic
+	url = https://github.com/Pier-Two/picoquic.git
