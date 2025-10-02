@@ -2,6 +2,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <errno.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,55 @@ static uint8_t *hex_to_bytes(const char *hex, size_t *out_len)
     if (out_len)
         *out_len = n;
     return buf;
+}
+
+static int str_eq_nocase(const char *a, const char *b)
+{
+    while (*a && *b)
+    {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+            return 0;
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static libp2p_log_level_t resolve_log_level(void)
+{
+    const char *env = getenv("LIBP2P_LOG_LEVEL");
+    if (!env || !env[0])
+        return LIBP2P_LOG_INFO;
+    if (str_eq_nocase(env, "error") || str_eq_nocase(env, "err"))
+        return LIBP2P_LOG_ERROR;
+    if (str_eq_nocase(env, "warn") || str_eq_nocase(env, "warning"))
+        return LIBP2P_LOG_WARN;
+    if (str_eq_nocase(env, "info"))
+        return LIBP2P_LOG_INFO;
+    if (str_eq_nocase(env, "debug"))
+        return LIBP2P_LOG_DEBUG;
+    if (str_eq_nocase(env, "trace"))
+        return LIBP2P_LOG_TRACE;
+    return LIBP2P_LOG_INFO;
+}
+
+static const char *log_level_to_string(libp2p_log_level_t lvl)
+{
+    switch (lvl)
+    {
+        case LIBP2P_LOG_ERROR:
+            return "error";
+        case LIBP2P_LOG_WARN:
+            return "warn";
+        case LIBP2P_LOG_INFO:
+            return "info";
+        case LIBP2P_LOG_DEBUG:
+            return "debug";
+        case LIBP2P_LOG_TRACE:
+            return "trace";
+        default:
+            return "unknown";
+    }
 }
 
 static int redis_connect(const char *host, const char *port)
@@ -732,9 +782,9 @@ cleanup:
 
 int main(void)
 {
-    LP_LOGI("INTEROP", "Starting interop program");
-    /* Increase verbosity to aid interop debugging. */
-    libp2p_log_set_level(LIBP2P_LOG_DEBUG);
+    libp2p_log_level_t log_level = resolve_log_level();
+    libp2p_log_set_level(log_level);
+    LP_LOGI("INTEROP", "Starting interop program (log-level=%s)", log_level_to_string(log_level));
     setvbuf(stderr, NULL, _IONBF, 0);
     const char *transport = getenv("transport");
     LP_LOGD("INTEROP", "transport = %s", transport ? transport : "NULL");
