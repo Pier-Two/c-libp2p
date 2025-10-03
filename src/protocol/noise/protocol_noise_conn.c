@@ -6,6 +6,22 @@
 #include <string.h>
 #include <pthread.h>
 
+#include "libp2p/log.h"
+
+#define NOISE_MAX_READ_ERROR_LOGS 4
+
+#define NOISE_LOG_READ_ERROR(ctx, fmt, ...)                                                                      \
+    do                                                                                                           \
+    {                                                                                                            \
+        if ((ctx) && (ctx)->read_error_logs < NOISE_MAX_READ_ERROR_LOGS)                                        \
+        {                                                                                                        \
+            LP_LOGE("NOISE", fmt, ##__VA_ARGS__);                                                               \
+            (ctx)->read_error_logs++;                                                                            \
+            if ((ctx)->read_error_logs == NOISE_MAX_READ_ERROR_LOGS)                                             \
+                LP_LOGW("NOISE", "suppressing further noise read errors for this connection");                \
+        }                                                                                                        \
+    } while (0)
+
 #include "protocol/noise/protocol_noise_extensions.h"
 #include <time.h>
 
@@ -70,6 +86,7 @@ typedef struct noise_conn_ctx
     size_t max_plaintext;
     uint64_t send_count;
     uint64_t recv_count;
+    unsigned read_error_logs;
     /* Serialize writes so 2-byte header + ciphertext are not interleaved
      * across threads on the underlying stream. */
     pthread_mutex_t write_mtx;
@@ -118,7 +135,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
             pthread_mutex_unlock(&ctx->read_mtx);
             return LIBP2P_CONN_ERR_AGAIN;
         }
-        fprintf(stderr, "[NOISE_ERR] header read error r=%zd\n", r);
+        NOISE_LOG_READ_ERROR(ctx, "header read error r=%zd", r);
         pthread_mutex_unlock(&ctx->read_mtx);
         return r; /* EOF/CLOSED/INTERNAL */
     }
@@ -146,7 +163,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
             return LIBP2P_CONN_ERR_AGAIN;
         }
         /* Fatal: EOF/CLOSED/INTERNAL */
-        fprintf(stderr, "[NOISE_ERR] cipher read error r=%zd (mlen=%u got=%zu)\n", r, (unsigned)ctx->cipher_len, ctx->cipher_got);
+        NOISE_LOG_READ_ERROR(ctx, "cipher read error r=%zd (mlen=%u got=%zu)", r, (unsigned)ctx->cipher_len, ctx->cipher_got);
         free(ctx->cipher_pending);
         ctx->cipher_pending = NULL;
         ctx->cipher_len = 0;
@@ -160,7 +177,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     int err = noise_cipherstate_decrypt(ctx->recv, &nb);
     if (err == NOISE_ERROR_INVALID_NONCE)
     {
-        fprintf(stderr, "[NOISE_ERR] decrypt INVALID_NONCE (recv_count=%llu)\n", (unsigned long long)ctx->recv_count);
+        NOISE_LOG_READ_ERROR(ctx, "decrypt INVALID_NONCE (recv_count=%llu)", (unsigned long long)ctx->recv_count);
         free(ctx->cipher_pending);
         ctx->cipher_pending = NULL;
         ctx->cipher_len = 0;
@@ -172,7 +189,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     }
     if (err != NOISE_ERROR_NONE)
     {
-        fprintf(stderr, "[NOISE_ERR] decrypt failed err=%d\n", err);
+        NOISE_LOG_READ_ERROR(ctx, "decrypt failed err=%d", err);
         free(ctx->cipher_pending);
         ctx->cipher_pending = NULL;
         ctx->cipher_len = 0;
@@ -185,7 +202,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     size_t max_plain = ctx->max_plaintext ? ctx->max_plaintext : NOISE_MAX_PAYLOAD_LEN;
     if (nb.size > max_plain)
     {
-        fprintf(stderr, "[NOISE_ERR] plaintext too large nb.size=%zu max_plain=%zu\n", (size_t)nb.size, max_plain);
+        NOISE_LOG_READ_ERROR(ctx, "plaintext too large nb.size=%zu max_plain=%zu", (size_t)nb.size, max_plain);
         free(ctx->cipher_pending);
         ctx->cipher_pending = NULL;
         ctx->cipher_len = 0;
@@ -197,7 +214,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     ctx->buf = malloc(nb.size);
     if (!ctx->buf)
     {
-        fprintf(stderr, "[NOISE_ERR] malloc failed for plaintext size=%zu\n", (size_t)nb.size);
+        NOISE_LOG_READ_ERROR(ctx, "malloc failed for plaintext size=%zu", (size_t)nb.size);
         free(ctx->cipher_pending);
         ctx->cipher_pending = NULL;
         ctx->cipher_len = 0;
@@ -207,7 +224,7 @@ static ssize_t noise_conn_read(libp2p_conn_t *c, void *buf, size_t len)
         return LIBP2P_CONN_ERR_INTERNAL;
     }
     memcpy(ctx->buf, nb.data, nb.size);
-    fprintf(stderr, "[NOISE_READ] mlen=%u plain=%zu\n", (unsigned)ctx->cipher_len, (size_t)nb.size);
+    LP_LOGT("NOISE", "read mlen=%u plain=%zu", (unsigned)ctx->cipher_len, (size_t)nb.size);
     free(ctx->cipher_pending);
     ctx->cipher_pending = NULL;
     ctx->cipher_len = 0;
@@ -303,7 +320,7 @@ static ssize_t noise_conn_write(libp2p_conn_t *c, const void *buf, size_t len)
     header[1] = (uint8_t)nb.size;
     size_t total = nb.size + 2;
     size_t off = 0;
-    fprintf(stderr, "[NOISE_WRITE] plain=%zu cipher_total=%zu\n", (size_t)len, total);
+    LP_LOGT("NOISE", "write plain=%zu cipher_total=%zu", (size_t)len, total);
     /* Rely on caller-set deadlines on the underlying raw connection to block
      * efficiently between retries. Serialize the whole write under the mutex
      * to prevent interleaving with other writers. */
@@ -433,13 +450,13 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
 {
     if (!raw || !send || !recv)
     {
-        fprintf(stderr, "make_noise_conn: NULL input (raw=%p, send=%p, recv=%p)\n", raw, send, recv);
+        LP_LOGE("NOISE", "make_noise_conn: NULL input (raw=%p, send=%p, recv=%p)", raw, send, recv);
         return NULL;
     }
     noise_conn_ctx_t *ctx = calloc(1, sizeof(*ctx));
     if (!ctx)
     {
-        fprintf(stderr, "make_noise_conn: calloc for ctx failed\n");
+        LP_LOGE("NOISE", "make_noise_conn: calloc for ctx failed");
         return NULL;
     }
     uint8_t *early_copy = NULL;
@@ -448,9 +465,9 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
         early_copy = (uint8_t *)malloc(early_data_len);
         if (!early_copy)
         {
-        fprintf(stderr, "make_noise_conn: malloc early_data copy failed\n");
-        free(ctx);
-        return NULL;
+            LP_LOGE("NOISE", "make_noise_conn: malloc early_data copy failed");
+            free(ctx);
+            return NULL;
         }
         memcpy(early_copy, early_data, early_data_len);
     }
@@ -461,10 +478,10 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
         ext_copy = (uint8_t *)malloc(extensions_len);
         if (!ext_copy)
         {
-        fprintf(stderr, "make_noise_conn: malloc extensions copy failed\n");
-        free(early_copy);
-        free(ctx);
-        return NULL;
+            LP_LOGE("NOISE", "make_noise_conn: malloc extensions copy failed");
+            free(early_copy);
+            free(ctx);
+            return NULL;
         }
         memcpy(ext_copy, extensions, extensions_len);
     }
@@ -490,7 +507,7 @@ libp2p_conn_t *make_noise_conn(libp2p_conn_t *raw, NoiseCipherState *send, Noise
     libp2p_conn_t *c = calloc(1, sizeof(*c));
     if (!c)
     {
-        fprintf(stderr, "make_noise_conn: calloc for c failed\n");
+        LP_LOGE("NOISE", "make_noise_conn: calloc for c failed");
         free(early_copy);
         free(ext_copy);
         free(ctx);

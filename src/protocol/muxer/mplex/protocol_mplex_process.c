@@ -1,6 +1,7 @@
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol_mplex_internal.h"
+#include "libp2p/log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,11 +28,11 @@ static int handle_protocol_violation(libp2p_mplex_ctx_t *ctx)
     return LIBP2P_MPLEX_ERR_PROTOCOL;
 }
 
-#define MPLEX_VIOL(ctx, msg, id)                                                                                                         \
-    do                                                                                                                                   \
-    {                                                                                                                                    \
-        fprintf(stderr, "[MPLEX] PROTOCOL VIOLATION: %s (stream=%llu) ctx=%p\n", (msg), (unsigned long long)(id), (void *)(ctx));         \
-        return handle_protocol_violation((ctx));                                                                                        \
+#define MPLEX_VIOL(ctx, msg, id)                                                                                                \
+    do                                                                                                                         \
+    {                                                                                                                          \
+        LP_LOGE("MPLEX", "PROTOCOL VIOLATION: %s (stream=%llu) ctx=%p", (msg), (unsigned long long)(id), (void *)(ctx));      \
+        return handle_protocol_violation((ctx));                                                                               \
     } while (0)
 
 // Frame dispatch implementation
@@ -61,7 +62,7 @@ int libp2p_mplex_dispatch_frame(libp2p_mplex_ctx_t *ctx, const libp2p_mplex_fram
     switch (frame->flag)
     {
         case LIBP2P_MPLEX_FRAME_NEW_STREAM:
-            fprintf(stderr, "[MPLEX] NEW_STREAM id=%llu len=%zu ctx=%p\n", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
+            LP_LOGT("MPLEX", "NEW_STREAM id=%llu len=%zu ctx=%p", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
             // Remote side opened a new stream
             // Check if stream already exists (protocol violation)
             stream = libp2p_mplex_find_stream(ctx, frame->id, false, &stream_index);
@@ -99,14 +100,14 @@ int libp2p_mplex_dispatch_frame(libp2p_mplex_ctx_t *ctx, const libp2p_mplex_fram
             pthread_mutex_unlock(&ctx->mutex);
 
             // Trigger stream opened event
-            fprintf(stderr, "[MPLEX] trigger OPENED id=%llu ctx=%p\n", (unsigned long long)stream->id, (void *)ctx);
+            LP_LOGT("MPLEX", "trigger OPENED id=%llu ctx=%p", (unsigned long long)stream->id, (void *)ctx);
             libp2p_mplex_trigger_stream_event(ctx, stream, LIBP2P_MPLEX_STREAM_OPENED);
 
             break;
 
         case LIBP2P_MPLEX_FRAME_MSG_INITIATOR:
             // Message from initiator side
-            fprintf(stderr, "[MPLEX] MSG_INITIATOR id=%llu len=%zu ctx=%p\n", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
+            LP_LOGT("MPLEX", "MSG_INITIATOR id=%llu len=%zu ctx=%p", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
             stream = libp2p_mplex_find_stream(ctx, frame->id, false, &stream_index);
             if (!stream)
             {
@@ -154,7 +155,7 @@ int libp2p_mplex_dispatch_frame(libp2p_mplex_ctx_t *ctx, const libp2p_mplex_fram
 
         case LIBP2P_MPLEX_FRAME_MSG_RECEIVER:
             // Message from receiver side
-            fprintf(stderr, "[MPLEX] MSG_RECEIVER id=%llu len=%zu ctx=%p\n", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
+            LP_LOGT("MPLEX", "MSG_RECEIVER id=%llu len=%zu ctx=%p", (unsigned long long)frame->id, frame->data_len, (void *)ctx);
             stream = libp2p_mplex_find_stream(ctx, frame->id, true, &stream_index);
             if (!stream)
             {

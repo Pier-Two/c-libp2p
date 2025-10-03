@@ -1,5 +1,6 @@
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol_mplex_internal.h"
+#include "libp2p/log.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,8 +15,8 @@ int libp2p_mplex_set_event_callbacks(libp2p_mplex_ctx_t *ctx, const libp2p_mplex
     if (callbacks)
     {
         ctx->event_callbacks = *callbacks;
-        fprintf(stderr, "[MPLEX] set callbacks ctx=%p on_stream_event=%p user_data=%p\n", (void *)ctx, (void *)ctx->event_callbacks.on_stream_event,
-                ctx->event_callbacks.user_data);
+        LP_LOGT("MPLEX", "set callbacks ctx=%p on_stream_event=%p user_data=%p", (void *)ctx,
+                (void *)ctx->event_callbacks.on_stream_event, ctx->event_callbacks.user_data);
     }
     else
     {
@@ -66,7 +67,7 @@ void libp2p_mplex_trigger_stream_event(libp2p_mplex_ctx_t *ctx, libp2p_mplex_str
     // First check for stream-specific callback
     if (stream->event_callback)
     {
-        fprintf(stderr, "[MPLEX] stream cb streamctx=%p event=%d\n", (void *)stream->ctx, (int)event);
+        LP_LOGT("MPLEX", "stream cb streamctx=%p event=%d", (void *)stream->ctx, (int)event);
         stream->event_callback(stream, event, stream->event_callback_user_data);
         return;
     }
@@ -80,7 +81,7 @@ void libp2p_mplex_trigger_stream_event(libp2p_mplex_ctx_t *ctx, libp2p_mplex_str
     pthread_mutex_unlock(&ctx->mutex);
     if (cb)
     {
-        fprintf(stderr, "[MPLEX] ctx cb ctx=%p streamctx=%p event=%d userdata=%p\n", (void *)ctx, (void *)stream->ctx, (int)event, cb_ud);
+        LP_LOGT("MPLEX", "ctx cb ctx=%p streamctx=%p event=%d userdata=%p", (void *)ctx, (void *)stream->ctx, (int)event, cb_ud);
         cb(stream, event, cb_ud);
     }
 }

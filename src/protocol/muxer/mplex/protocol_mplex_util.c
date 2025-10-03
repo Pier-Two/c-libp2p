@@ -1,6 +1,7 @@
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol_mplex_internal.h"
+#include "libp2p/log.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,12 +81,12 @@ static int mplex_rx_read_more(libp2p_mplex_ctx_t *ctx)
     if (n > 0)
     {
         ctx->rx_len += (size_t)n;
-        fprintf(stderr, "[MPLEX] rx_read_more ctx=%p read=%zd len=%zu off=%zu cap=%zu\n", (void *)ctx, n, ctx->rx_len, ctx->rx_off, ctx->rx_cap);
+        LP_LOGT("MPLEX", "rx_read_more ctx=%p read=%zd len=%zu off=%zu cap=%zu", (void *)ctx, n, ctx->rx_len, ctx->rx_off, ctx->rx_cap);
         return LIBP2P_MPLEX_OK;
     }
     if (n == LIBP2P_CONN_ERR_AGAIN)
     {
-        fprintf(stderr, "[MPLEX] rx_read_more AGAIN ctx=%p len=%zu off=%zu\n", (void *)ctx, ctx->rx_len, ctx->rx_off);
+        LP_LOGT("MPLEX", "rx_read_more AGAIN ctx=%p len=%zu off=%zu", (void *)ctx, ctx->rx_len, ctx->rx_off);
         return LIBP2P_MPLEX_ERR_AGAIN;
     }
     if (n == LIBP2P_CONN_ERR_EOF || n == LIBP2P_CONN_ERR_CLOSED)
@@ -128,7 +129,7 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
 
     memset(frame, 0, sizeof(*frame));
 
-    fprintf(stderr, "[MPLEX] read_frame begin ctx=%p rx_len=%zu rx_off=%zu\n", (void *)ctx, ctx->rx_len, ctx->rx_off);
+    LP_LOGT("MPLEX", "read_frame begin ctx=%p rx_len=%zu rx_off=%zu", (void *)ctx, ctx->rx_len, ctx->rx_off);
 
     // Initialize buffer lazily
     if (!ctx->rx_buf)
@@ -150,11 +151,11 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
     if (ctx->rx_len == ctx->rx_off)
     {
         if (_dr == LIBP2P_MPLEX_ERR_AGAIN)
-            fprintf(stderr, "[MPLEX] read_frame: no data (AGAIN) ctx=%p\n", (void *)ctx);
+            LP_LOGT("MPLEX", "read_frame: no data (AGAIN) ctx=%p", (void *)ctx);
         else if (_dr == LIBP2P_MPLEX_ERR_EOF)
-            fprintf(stderr, "[MPLEX] read_frame: drain EOF ctx=%p\n", (void *)ctx);
+            LP_LOGT("MPLEX", "read_frame: drain EOF ctx=%p", (void *)ctx);
         else if (_dr != LIBP2P_MPLEX_OK)
-            fprintf(stderr, "[MPLEX] read_frame: drain rc=%d ctx=%p\n", _dr, (void *)ctx);
+            LP_LOGW("MPLEX", "read_frame: drain rc=%d ctx=%p", _dr, (void *)ctx);
         return LIBP2P_MPLEX_ERR_AGAIN;
     }
 
@@ -173,20 +174,20 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
         if (err == UNSIGNED_VARINT_ERR_TOO_LONG)
         {
             // Varint overflow is a protocol violation
-            fprintf(stderr, "[MPLEX] header decode TOO_LONG ctx=%p avail=%zu\n", (void *)ctx, avail);
-            fprintf(stderr, "[MPLEX] header decode TOO_LONG ctx=%p\n", (void *)ctx);
+            LP_LOGE("MPLEX", "header decode TOO_LONG ctx=%p avail=%zu", (void *)ctx, avail);
+            LP_LOGE("MPLEX", "header decode TOO_LONG ctx=%p", (void *)ctx);
             return LIBP2P_MPLEX_ERR_PROTOCOL;
         }
         if (err != UNSIGNED_VARINT_ERR_EMPTY_INPUT)
         {
-            fprintf(stderr, "[MPLEX] header decode err=%d ctx=%p avail=%zu\n", (int)err, (void *)ctx, avail);
+            LP_LOGW("MPLEX", "header decode err=%d ctx=%p avail=%zu", (int)err, (void *)ctx, avail);
             return LIBP2P_MPLEX_ERR_PROTOCOL;
         }
         // Need more bytes
         int rc = mplex_rx_read_more(ctx);
         if (rc != LIBP2P_MPLEX_OK)
         {
-            fprintf(stderr, "[MPLEX] read_frame: read_more rc=%d ctx=%p\n", rc, (void *)ctx);
+            LP_LOGT("MPLEX", "read_frame: read_more rc=%d ctx=%p", rc, (void *)ctx);
             return rc;
         }
     }
@@ -218,18 +219,18 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
         }
         if (err == UNSIGNED_VARINT_ERR_TOO_LONG)
         {
-            fprintf(stderr, "[MPLEX] length decode TOO_LONG ctx=%p avail=%zu\n", (void *)ctx, avail);
+            LP_LOGE("MPLEX", "length decode TOO_LONG ctx=%p avail=%zu", (void *)ctx, avail);
             return LIBP2P_MPLEX_ERR_PROTOCOL;
         }
         if (err != UNSIGNED_VARINT_ERR_EMPTY_INPUT)
         {
-            fprintf(stderr, "[MPLEX] length decode err=%d ctx=%p avail=%zu\n", (int)err, (void *)ctx, avail);
+            LP_LOGW("MPLEX", "length decode err=%d ctx=%p avail=%zu", (int)err, (void *)ctx, avail);
             return LIBP2P_MPLEX_ERR_PROTOCOL;
         }
         int rc = mplex_rx_read_more(ctx);
         if (rc != LIBP2P_MPLEX_OK)
         {
-            fprintf(stderr, "[MPLEX] read_frame: read_more(len) rc=%d ctx=%p\n", rc, (void *)ctx);
+            LP_LOGT("MPLEX", "read_frame: read_more(len) rc=%d ctx=%p", rc, (void *)ctx);
             return rc;
         }
     }
@@ -249,13 +250,13 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
             int rc = mplex_rx_read_more(ctx);
             if (rc != LIBP2P_MPLEX_OK)
             {
-                fprintf(stderr, "[MPLEX] drop id=0: read_more rc=%d ctx=%p\n", rc, (void *)ctx);
+                LP_LOGT("MPLEX", "drop id=0: read_more rc=%d ctx=%p", rc, (void *)ctx);
                 return rc;
             }
         }
         // Drop payload (if any)
         ctx->rx_off += frame->data_len;
-        fprintf(stderr, "[MPLEX] dropped invalid frame id=0 flag=%u len=%zu ctx=%p\n", (unsigned)frame->flag, frame->data_len, (void *)ctx);
+        LP_LOGT("MPLEX", "dropped invalid frame id=0 flag=%u len=%zu ctx=%p", (unsigned)frame->flag, frame->data_len, (void *)ctx);
         // Tail recursion: parse the next frame
         return libp2p_mplex_read_frame(ctx, frame);
     }
@@ -274,7 +275,7 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
         frame->data = malloc(frame->data_len);
         if (!frame->data)
         {
-            fprintf(stderr, "[MPLEX] read_frame: OOM data_len=%zu ctx=%p\n", frame->data_len, (void *)ctx);
+            LP_LOGE("MPLEX", "read_frame: OOM data_len=%zu ctx=%p", frame->data_len, (void *)ctx);
             return LIBP2P_MPLEX_ERR_INTERNAL;
         }
         memcpy(frame->data, ctx->rx_buf + ctx->rx_off, frame->data_len);
@@ -288,7 +289,7 @@ int libp2p_mplex_read_frame(libp2p_mplex_ctx_t *ctx, libp2p_mplex_frame_t *frame
         ctx->rx_len = 0;
     }
 
-    fprintf(stderr, "[MPLEX] read_frame success ctx=%p flag=%u id=%llu len=%zu rx_len=%zu rx_off=%zu\n", (void *)ctx, (unsigned)frame->flag,
+    LP_LOGT("MPLEX", "read_frame success ctx=%p flag=%u id=%llu len=%zu rx_len=%zu rx_off=%zu", (void *)ctx, (unsigned)frame->flag,
             (unsigned long long)frame->id, frame->data_len, ctx->rx_len, ctx->rx_off);
     return LIBP2P_MPLEX_OK;
 }

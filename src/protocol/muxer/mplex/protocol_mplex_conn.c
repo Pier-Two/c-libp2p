@@ -1,4 +1,5 @@
 #include "protocol_mplex_conn.h"
+#include "libp2p/log.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -156,17 +157,17 @@ static int set_socket_nonblocking(int fd)
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1)
     {
-        fprintf(stderr, "[MPLEX] set_nb F_GETFL fd=%d errno=%d\n", fd, errno);
+        LP_LOGW("MPLEX", "set_nb F_GETFL fd=%d errno=%d", fd, errno);
         return -1;
     }
 
     if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
     {
-        fprintf(stderr, "[MPLEX] set_nb F_SETFL fd=%d errno=%d\n", fd, errno);
+        LP_LOGW("MPLEX", "set_nb F_SETFL fd=%d errno=%d", fd, errno);
         return -1;
     }
 
-    fprintf(stderr, "[MPLEX] set_nb OK fd=%d\n", fd);
+    LP_LOGT("MPLEX", "set_nb OK fd=%d", fd);
     return 0;
 }
 
@@ -191,13 +192,13 @@ libp2p_conn_t *mplex_conn_new(int fd)
     // This makes tests resilient when FDs are pipes or unusual descriptors.
     if (set_socket_nonblocking(fd) == -1)
     {
-        fprintf(stderr, "[MPLEX] mplex_conn_new WARN set_nb fd=%d (continuing without O_NONBLOCK)\n", fd);
+        LP_LOGW("MPLEX", "mplex_conn_new WARN set_nb fd=%d (continuing without O_NONBLOCK)", fd);
     }
 
     mplex_conn_ctx_t *ctx = calloc(1, sizeof(mplex_conn_ctx_t));
     if (!ctx)
     {
-        fprintf(stderr, "[MPLEX] mplex_conn_new ERR calloc ctx fd=%d\n", fd);
+        LP_LOGE("MPLEX", "mplex_conn_new ERR calloc ctx fd=%d", fd);
         return NULL;
     }
 
@@ -210,14 +211,14 @@ libp2p_conn_t *mplex_conn_new(int fd)
     if (!conn)
     {
         free(ctx);
-        fprintf(stderr, "[MPLEX] mplex_conn_new ERR malloc conn fd=%d\n", fd);
+        LP_LOGE("MPLEX", "mplex_conn_new ERR malloc conn fd=%d", fd);
         return NULL;
     }
 
     conn->vt = &mplex_conn_vtbl;
     conn->ctx = ctx;
 
-    fprintf(stderr, "[MPLEX] mplex_conn_new OK fd=%d\n", fd);
+    LP_LOGT("MPLEX", "mplex_conn_new OK fd=%d", fd);
     return conn;
 }
 

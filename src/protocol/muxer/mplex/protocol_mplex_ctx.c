@@ -3,6 +3,7 @@
 #include "protocol/tcp/protocol_tcp_conn.h"
 #include "protocol_mplex_conn.h"
 #include "protocol_mplex_internal.h"
+#include "libp2p/log.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
 {
     if (!conn || !out_ctx)
     {
-        fprintf(stderr, "[MPLEX] new ERR_NULL_PTR conn=%p out_ctx=%p\n", (void *)conn, (void *)out_ctx);
+        LP_LOGE("MPLEX", "new ERR_NULL_PTR conn=%p out_ctx=%p", (void *)conn, (void *)out_ctx);
         return LIBP2P_MPLEX_ERR_NULL_PTR;
     }
 
@@ -30,7 +31,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
     libp2p_mplex_ctx_t *ctx = calloc(1, sizeof(libp2p_mplex_ctx_t));
     if (!ctx)
     {
-        fprintf(stderr, "[MPLEX] new ERR_INTERNAL allocating ctx\n");
+        LP_LOGE("MPLEX", "new ERR_INTERNAL allocating ctx");
         return LIBP2P_MPLEX_ERR_INTERNAL;
     }
 
@@ -57,7 +58,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
     {
         // ctx->conn is externally provided, do not free it here.
         free(ctx);
-        fprintf(stderr, "[MPLEX] new stream_array_init rc=%d\n", rc);
+        LP_LOGE("MPLEX", "new stream_array_init rc=%d", rc);
         return rc;
     }
 
@@ -67,7 +68,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
         libp2p_mplex_stream_array_destroy(&ctx->streams);
         // ctx->conn is externally provided, do not free it here.
         free(ctx);
-        fprintf(stderr, "[MPLEX] new stream_queue_init rc=%d\n", rc);
+        LP_LOGE("MPLEX", "new stream_queue_init rc=%d", rc);
         return rc;
     }
 
@@ -78,7 +79,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
         libp2p_mplex_stream_array_destroy(&ctx->streams);
         // ctx->conn is externally provided, do not free it here.
         free(ctx);
-        fprintf(stderr, "[MPLEX] new write_queue_init rc=%d\n", rc);
+        LP_LOGE("MPLEX", "new write_queue_init rc=%d", rc);
         return rc;
     }
 
@@ -109,7 +110,7 @@ int libp2p_mplex_new(libp2p_conn_t *conn, libp2p_mplex_ctx_t **out_ctx)
     }
 
     *out_ctx = ctx;
-    fprintf(stderr, "[MPLEX] new OK ctx=%p fd=%d\n", (void *)ctx, ctx->fd);
+    LP_LOGT("MPLEX", "new OK ctx=%p fd=%d", (void *)ctx, ctx->fd);
     return LIBP2P_MPLEX_OK;
 }
 
@@ -216,7 +217,7 @@ int libp2p_mplex_on_readable(libp2p_mplex_ctx_t *ctx)
     // Drain all complete frames currently available, including those already
     // buffered in ctx->rx_buf. This prevents starvation when multiple frames
     // are coalesced into a single socket read.
-    fprintf(stderr, "[MPLEX] readable ctx=%p fd=%d\n", (void *)ctx, libp2p_mplex_get_fd(ctx));
+    LP_LOGT("MPLEX", "readable ctx=%p fd=%d", (void *)ctx, libp2p_mplex_get_fd(ctx));
     for (;;)
     {
         libp2p_mplex_frame_t frame;
@@ -228,17 +229,17 @@ int libp2p_mplex_on_readable(libp2p_mplex_ctx_t *ctx)
         }
         if (rc != LIBP2P_MPLEX_OK)
         {
-            fprintf(stderr, "[MPLEX] readable rc=%d ctx=%p\n", rc, (void *)ctx);
+            LP_LOGT("MPLEX", "readable rc=%d ctx=%p", rc, (void *)ctx);
             return rc;
         }
 
-        fprintf(stderr, "[MPLEX] recv frame ctx=%p flag=%u id=%llu len=%zu\n", (void *)ctx, (unsigned)frame.flag, (unsigned long long)frame.id,
-                frame.data_len);
+        LP_LOGT("MPLEX", "recv frame ctx=%p flag=%u id=%llu len=%zu", (void *)ctx, (unsigned)frame.flag,
+                (unsigned long long)frame.id, frame.data_len);
         int drc = libp2p_mplex_dispatch_frame(ctx, &frame);
         libp2p_mplex_frame_free(&frame);
         if (drc != LIBP2P_MPLEX_OK)
         {
-            fprintf(stderr, "[MPLEX] dispatch rc=%d ctx=%p\n", drc, (void *)ctx);
+            LP_LOGT("MPLEX", "dispatch rc=%d ctx=%p", drc, (void *)ctx);
             return drc;
         }
         // Loop to attempt parsing any additional frames already buffered

@@ -2,6 +2,7 @@
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol_mplex_internal.h"
 #include "protocol_mplex_write_queue.h"
+#include "libp2p/log.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,13 +16,22 @@ static void dump_bytes(const char *tag, const uint8_t *buf, size_t len, size_t m
 {
     if (!buf || len == 0)
         return;
+
     size_t n = len < max ? len : max;
-    fprintf(stderr, "%s:", tag);
-    for (size_t i = 0; i < n; i++)
-        fprintf(stderr, " %02x", buf[i]);
-    if (n < len)
-        fprintf(stderr, " ...(%zu)", len);
-    fprintf(stderr, "\n");
+    char line[256];
+    size_t pos = 0;
+    if (tag)
+        pos += (size_t)snprintf(line + pos, sizeof(line) - pos, "%s:", tag);
+
+    for (size_t i = 0; i < n && pos < sizeof(line); i++)
+    {
+        pos += (size_t)snprintf(line + pos, sizeof(line) - pos, " %02x", buf[i]);
+    }
+
+    if (n < len && pos < sizeof(line))
+        (void)snprintf(line + pos, sizeof(line) - pos, " ...(%zu)", len);
+
+    LP_LOGT("MPLEX_SEND", "%s", line);
 }
 
 int libp2p_mplex_send_frame_nonblocking(libp2p_mplex_ctx_t *ctx, const libp2p_mplex_frame_t *frame)
@@ -41,7 +51,7 @@ int libp2p_mplex_send_frame_nonblocking(libp2p_mplex_ctx_t *ctx, const libp2p_mp
         size_t remain = ctx->pending_write_len - ctx->pending_write_off;
         size_t pushed = 0;
         int prc = conn_write_partial(ctx->conn, ctx->pending_write_buf + ctx->pending_write_off, remain, &pushed);
-        fprintf(stderr, "[MPLEX_SEND] flush pending ctx=%p pushed=%zu remain_before=%zu rc=%d\n", (void *)ctx, pushed, remain, prc);
+        LP_LOGT("MPLEX_SEND", "flush pending ctx=%p pushed=%zu remain_before=%zu rc=%d", (void *)ctx, pushed, remain, prc);
         ctx->pending_write_off += pushed;
         if (prc == LIBP2P_MPLEX_ERR_AGAIN)
         {
@@ -57,7 +67,7 @@ int libp2p_mplex_send_frame_nonblocking(libp2p_mplex_ctx_t *ctx, const libp2p_mp
         // If fully flushed, free buffer
         if (ctx->pending_write_off >= ctx->pending_write_len)
         {
-            fprintf(stderr, "[MPLEX_SEND] pending drained ctx=%p\n", (void *)ctx);
+            LP_LOGT("MPLEX_SEND", "pending drained ctx=%p", (void *)ctx);
             free(ctx->pending_write_buf);
             ctx->pending_write_buf = NULL;
             ctx->pending_write_len = 0;
@@ -81,11 +91,11 @@ int libp2p_mplex_send_frame_nonblocking(libp2p_mplex_ctx_t *ctx, const libp2p_mp
     // Try to send encoded buffer
     size_t written = 0;
     int rc = conn_write_partial(ctx->conn, encoded, encoded_len, &written);
-    fprintf(stderr, "[MPLEX_SEND] write attempt ctx=%p flag=%u id=%llu total=%zu wrote=%zu rc=%d\n", (void *)ctx, (unsigned)frame->flag,
+    LP_LOGT("MPLEX_SEND", "write attempt ctx=%p flag=%u id=%llu total=%zu wrote=%zu rc=%d", (void *)ctx, (unsigned)frame->flag,
             (unsigned long long)frame->id, encoded_len, written, rc);
     if (rc != LIBP2P_MPLEX_OK && rc != LIBP2P_MPLEX_ERR_AGAIN)
     {
-        fprintf(stderr, "[MPLEX_SEND] write error rc=%d (written=%zu of %zu)\n", rc, written, encoded_len);
+        LP_LOGW("MPLEX_SEND", "write error rc=%d (written=%zu of %zu)", rc, written, encoded_len);
     }
 
     // If we couldn't write the full buffer due to EAGAIN, stash the remainder and signal want_write
@@ -104,7 +114,7 @@ int libp2p_mplex_send_frame_nonblocking(libp2p_mplex_ctx_t *ctx, const libp2p_mp
         memcpy(ctx->pending_write_buf, encoded + written, remain);
         ctx->pending_write_len = remain;
         ctx->pending_write_off = 0;
-        fprintf(stderr, "[MPLEX_SEND] stashed pending ctx=%p remain=%zu\n", (void *)ctx, remain);
+        LP_LOGT("MPLEX_SEND", "stashed pending ctx=%p remain=%zu", (void *)ctx, remain);
         free(encoded);
         pthread_mutex_unlock(&ctx->mutex);
         return LIBP2P_MPLEX_ERR_AGAIN;
@@ -140,7 +150,7 @@ int libp2p_mplex_flush_writes(libp2p_mplex_ctx_t *ctx)
             size_t remain = ctx->pending_write_len - ctx->pending_write_off;
             size_t pushed = 0;
             int prc = conn_write_partial(ctx->conn, ctx->pending_write_buf + ctx->pending_write_off, remain, &pushed);
-            fprintf(stderr, "[MPLEX_SEND] flush pending (loop) ctx=%p pushed=%zu remain_before=%zu rc=%d\n", (void *)ctx, pushed, remain, prc);
+            LP_LOGT("MPLEX_SEND", "flush pending (loop) ctx=%p pushed=%zu remain_before=%zu rc=%d", (void *)ctx, pushed, remain, prc);
             ctx->pending_write_off += pushed;
             if (prc == LIBP2P_MPLEX_ERR_AGAIN)
             {
@@ -155,7 +165,7 @@ int libp2p_mplex_flush_writes(libp2p_mplex_ctx_t *ctx)
             }
             if (ctx->pending_write_off >= ctx->pending_write_len)
             {
-                fprintf(stderr, "[MPLEX_SEND] pending drained (loop) ctx=%p\n", (void *)ctx);
+                LP_LOGT("MPLEX_SEND", "pending drained (loop) ctx=%p", (void *)ctx);
                 free(ctx->pending_write_buf);
                 ctx->pending_write_buf = NULL;
                 ctx->pending_write_len = 0;

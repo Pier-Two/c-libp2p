@@ -7,6 +7,7 @@
 #include <time.h>
 
 #include "libp2p/io.h"
+#include "libp2p/log.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "protocol/multiselect/protocol_multiselect.h"
 /* Debug note: we only log conn pointer here to avoid cross‑module deps. */
@@ -159,7 +160,7 @@ static libp2p_multiselect_err_t io_read_exact(libp2p_io_t *io, uint8_t *buf, siz
 
 static libp2p_multiselect_err_t send_msg_io(libp2p_io_t *io, const char *msg, uint64_t deadline_ms)
 {
-    fprintf(stderr, "[MULTISELECT] >> %s\n", msg);
+    LP_LOGT("MULTISELECT", ">> %s", msg);
     if (!io || !msg)
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
 
@@ -226,13 +227,13 @@ static libp2p_multiselect_err_t recv_msg_io(libp2p_io_t *io, char **out, uint64_
     }
     payload[pl_len - 1] = '\0';
     *out = (char *)payload;
-    fprintf(stderr, "[MULTISELECT] << %s\n", *out);
+    LP_LOGT("MULTISELECT", "<< %s", *out);
     return LIBP2P_MULTISELECT_OK;
 }
 
 static libp2p_multiselect_err_t send_msg(libp2p_conn_t *c, const char *msg)
 {
-    fprintf(stderr, "[MULTISELECT] >> %s\n", msg);
+    LP_LOGT("MULTISELECT", ">> %s", msg);
     if (!c || !msg)
     {
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
@@ -297,7 +298,7 @@ static libp2p_multiselect_err_t send_msg_batch(libp2p_conn_t *c, const char *con
             return LIBP2P_MULTISELECT_ERR_INTERNAL;
         }
         total += vlen[i] + mlen;
-        fprintf(stderr, "[MULTISELECT] >> %s\n", msgs[i]);
+        LP_LOGT("MULTISELECT", ">> %s", msgs[i]);
     }
 
     uint8_t *frame = (uint8_t *)malloc(total);
@@ -377,7 +378,7 @@ static libp2p_multiselect_err_t recv_msg(libp2p_conn_t *c, char **out)
 
     payload[pl_len - 1] = '\0'; /* strip newline              */
     *out = (char *)payload;
-    fprintf(stderr, "[MULTISELECT] << %s\n", *out);
+    LP_LOGT("MULTISELECT", "<< %s", *out);
     return LIBP2P_MULTISELECT_OK;
 }
 
@@ -511,7 +512,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
     }
     /* Debug: trace conn pointer and phase to catch misuse post-muxer */
-    fprintf(stderr, "[MULTISELECT] dial: start; have_proto0=%d, proposals[0]=%s, conn=%p\n", proposals[0] != NULL,
+    LP_LOGT("MULTISELECT", "dial: start; have_proto0=%d, proposals[0]=%s, conn=%p", proposals[0] != NULL,
             proposals[0] ? proposals[0] : "(null)", (void *)conn);
     if (timeout_ms)
     {
@@ -520,7 +521,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
 
     bool have_proto0 = proposals[0] != NULL;
 
-    fprintf(stderr, "[MULTISELECT] dial: start; have_proto0=%d, proposals[0]=%s, proposals[1]=%s\n", have_proto0 ? 1 : 0,
+    LP_LOGT("MULTISELECT", "dial: start; have_proto0=%d, proposals[0]=%s, proposals[1]=%s", have_proto0 ? 1 : 0,
             proposals[0] ? proposals[0] : "(null)", proposals[1] ? proposals[1] : "(null)");
 
     /* Send header first (no pipelining) */
@@ -529,10 +530,10 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
     {
         goto done;
     }
-    fprintf(stderr, "[MULTISELECT] dial: sent header\n");
+    LP_LOGT("MULTISELECT", "dial: sent header");
 
     char *msg = NULL;
-    fprintf(stderr, "[MULTISELECT] dial: waiting for header echo\n");
+    LP_LOGT("MULTISELECT", "dial: waiting for header echo");
     rc = recv_msg(conn, &msg);
     if (rc)
     {
@@ -545,7 +546,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
         goto done;
     }
     free(msg);
-    fprintf(stderr, "[MULTISELECT] header echo received; proceeding to propose\n");
+    LP_LOGT("MULTISELECT", "header echo received; proceeding to propose");
 
     /* Propose protocols sequentially starting with index 0 */
     size_t idx = 0;
@@ -554,14 +555,14 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
         rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
         goto done;
     }
-    fprintf(stderr, "[MULTISELECT] proposing %s\n", proposals[idx]);
+    LP_LOGT("MULTISELECT", "proposing %s", proposals[idx]);
     rc = send_msg(conn, proposals[idx]);
     if (rc)
         goto done;
 
     while (proposals[idx])
     {
-        fprintf(stderr, "[MULTISELECT] dial: waiting response for idx=%zu (%s)\n", idx, proposals[idx]);
+        LP_LOGT("MULTISELECT", "dial: waiting response for idx=%zu (%s)", idx, proposals[idx]);
         rc = recv_msg(conn, &msg);
         if (rc)
             goto done;
@@ -580,7 +581,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
                 rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
                 goto done;
             }
-            fprintf(stderr, "[MULTISELECT] dial: NA again; advancing to idx=%zu (%s)\n", idx, proposals[idx]);
+            LP_LOGT("MULTISELECT", "dial: NA again; advancing to idx=%zu (%s)", idx, proposals[idx]);
             rc = send_msg(conn, proposals[idx]);
             if (rc)
                 goto done;
@@ -619,7 +620,7 @@ libp2p_multiselect_err_t libp2p_multiselect_listen(libp2p_conn_t *conn, const ch
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
     }
     /* Debug: trace conn pointer and phase to catch misuse post-muxer */
-    fprintf(stderr, "[MULTISELECT] listen: start; conn=%p\n", (void *)conn);
+    LP_LOGT("MULTISELECT", "listen: start; conn=%p", (void *)conn);
 
     libp2p_multiselect_config_t cfg = cfg_opt ? *cfg_opt : libp2p_multiselect_config_default();
 

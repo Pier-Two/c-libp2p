@@ -1,5 +1,6 @@
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol_mplex_internal.h"
+#include "libp2p/log.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +33,7 @@ int libp2p_mplex_run_event_loop(libp2p_mplex_ctx_t *ctx, int timeout_ms)
     if (fd < 0)
         return LIBP2P_MPLEX_ERR_AGAIN; // No event source; nothing to process
 
-    fprintf(stderr, "[MPLEX] event_loop enter ctx=%p fd=%d timeout=%d\n", (void *)ctx, fd, timeout_ms);
+    LP_LOGT("MPLEX", "event_loop enter ctx=%p fd=%d timeout=%d", (void *)ctx, fd, timeout_ms);
     const bool single_shot = (timeout_ms >= 0);
 #ifdef HAS_EPOLL
     // Create epoll instance
@@ -124,7 +125,7 @@ int libp2p_mplex_run_event_loop(libp2p_mplex_ctx_t *ctx, int timeout_ms)
     }
 
     close(epoll_fd);
-    fprintf(stderr, "[MPLEX] event_loop exit ctx=%p\n", (void *)ctx);
+    LP_LOGT("MPLEX", "event_loop exit ctx=%p", (void *)ctx);
     return LIBP2P_MPLEX_OK;
 
 #elif defined(HAS_KQUEUE)
@@ -195,7 +196,7 @@ int libp2p_mplex_run_event_loop(libp2p_mplex_ctx_t *ctx, int timeout_ms)
             if (events[i].flags & EV_EOF)
             {
                 close(kq);
-                fprintf(stderr, "[MPLEX] event_loop exit ctx=%p (EV_EOF)\n", (void *)ctx);
+                LP_LOGW("MPLEX", "event_loop exit ctx=%p (EV_EOF)", (void *)ctx);
                 return LIBP2P_MPLEX_ERR_EOF;
             }
             if (wake_fd >= 0 && events[i].filter == EVFILT_READ && (int)events[i].ident == wake_fd)
@@ -237,7 +238,7 @@ int libp2p_mplex_run_event_loop(libp2p_mplex_ctx_t *ctx, int timeout_ms)
     }
 
     close(kq);
-    fprintf(stderr, "[MPLEX] event_loop exit ctx=%p\n", (void *)ctx);
+    LP_LOGT("MPLEX", "event_loop exit ctx=%p", (void *)ctx);
     return LIBP2P_MPLEX_OK;
 
 #else // HAS_POLL
@@ -307,7 +308,7 @@ int libp2p_mplex_run_event_loop(libp2p_mplex_ctx_t *ctx, int timeout_ms)
             break;
     }
 
-    fprintf(stderr, "[MPLEX] event_loop exit ctx=%p\n", (void *)ctx);
+    LP_LOGT("MPLEX", "event_loop exit ctx=%p", (void *)ctx);
     return LIBP2P_MPLEX_OK;
 #endif
 }
