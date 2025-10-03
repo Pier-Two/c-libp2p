@@ -12,6 +12,7 @@
 #include <unistd.h>
 #ifndef _WIN32
 #include <ifaddrs.h>
+#include <net/if.h>
 #endif
 
 #include "libp2p/host.h"
@@ -277,6 +278,38 @@ static int ipv4_is_local(const char *ip)
 }
 #endif
 
+static int first_non_loopback_ipv4(char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+        return 0;
+#ifndef _WIN32
+    struct ifaddrs *ifaddr = NULL;
+    if (getifaddrs(&ifaddr) != 0)
+        return 0;
+    int found = 0;
+    for (struct ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next)
+    {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+            continue;
+        if ((ifa->ifa_flags & IFF_LOOPBACK) != 0)
+            continue;
+        const struct sockaddr_in *sa = (const struct sockaddr_in *)ifa->ifa_addr;
+        if (!inet_ntop(AF_INET, &sa->sin_addr, out, out_len))
+            continue;
+        if (strcmp(out, "127.0.0.1") == 0)
+            continue;
+        found = 1;
+        break;
+    }
+    freeifaddrs(ifaddr);
+    return found;
+#else
+    (void)out;
+    (void)out_len;
+    return 0;
+#endif
+}
+
 static int build_loopback_variant(const char *addr, char *out, size_t out_len)
 {
     if (!addr || !out || out_len == 0)
@@ -397,6 +430,32 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
         }
         char publish_buf[sizeof(sync->publish_addr)];
         snprintf(publish_buf, sizeof(publish_buf), "%s", publish_str);
+
+        if (strstr(publish_buf, "/ip4/0.0.0.0/") || strstr(publish_buf, "/ip4/127.0.0.1/"))
+        {
+            char ip_buf[INET_ADDRSTRLEN];
+            if (first_non_loopback_ipv4(ip_buf, sizeof(ip_buf)))
+            {
+                char *prefix = strstr(publish_buf, "/ip4/");
+                if (prefix)
+                {
+                    char *after = strchr(prefix + strlen("/ip4/"), '/');
+                    if (after)
+                    {
+                        char rewritten[sizeof(publish_buf)];
+                        if (snprintf(rewritten, sizeof(rewritten), "/ip4/%s%s", ip_buf, after) < (int)sizeof(rewritten))
+                        {
+                            snprintf(publish_buf, sizeof(publish_buf), "%s", rewritten);
+                            LP_LOGI("INTEROP", "listener replacing loopback address with %s", publish_buf);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                LP_LOGW("INTEROP", "listener failed to find non-loopback IPv4, publishing %s", publish_buf);
+            }
+        }
         replace_quic_separator(publish_buf, '_', '-');
 
         if (!strstr(publish_buf, "/p2p/") && sync->host)
