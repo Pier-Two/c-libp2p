@@ -290,6 +290,12 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
             /* Try again; deadline blocks until readable. */
             continue;
         }
+        if (n == 0 || n == LIBP2P_ERR_EOF || n == LIBP2P_ERR_CLOSED || n == LIBP2P_ERR_RESET || n == LIBP2P_ERR_NULL_PTR)
+        {
+            LP_LOGD("PING", "stream closed stream=%p rc=%zd", (void *)s, n);
+            (void)libp2p_stream_set_deadline(s, 0);
+            return LIBP2P_PING_OK;
+        }
         fprintf(stderr, "[PING] stream_read_exact error n=%zd\n", n);
         (void)libp2p_stream_set_deadline(s, 0);
         return map_stream_err(n);

@@ -70,7 +70,14 @@ ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len)
         return n;
     }
     if (!st->c)
+    {
+        fprintf(stderr, "[STREAM] missing conn backend: stream=%p proto=%s has_ops=%d closed=%d\n",
+                (void *)s,
+                st->proto ? st->proto : "(null)",
+                st->has_ops,
+                st->closed);
         return LIBP2P_ERR_NULL_PTR;
+    }
     {
         ssize_t n = libp2p_conn_write(st->c, buf, len);
         if (n > 0 && st->host && st->host->metrics)
