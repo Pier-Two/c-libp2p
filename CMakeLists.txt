@@ -266,6 +266,15 @@ if(TARGET libp2p_metrics)
     )
 endif()
 
+if(TARGET libp2p_log)
+    # Align the log shim with the rest of the shared objects so packaging can copy once.
+    set_target_properties(libp2p_log PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+        ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+endif()
+
 # Include public headers.
 include_directories(BEFORE ${PROJECT_SOURCE_DIR}/include/protocol/tcp)
 include_directories(${PROJECT_SOURCE_DIR}/include)
