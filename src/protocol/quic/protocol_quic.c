@@ -459,13 +459,47 @@ static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session
     }
 }
 
+static int quic_state_finished(picoquic_state_enum st)
+{
+    switch (st)
+    {
+        case picoquic_state_disconnected:
+        case picoquic_state_draining:
+        case picoquic_state_handshake_failure:
+        case picoquic_state_handshake_failure_resend:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static void quic_transport_session_close(libp2p_quic_session_t *session)
 {
     if (!session)
         return;
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
     if (cnx)
+    {
         (void)picoquic_close(cnx, 0);
+        libp2p__quic_session_wake(session);
+        picoquic_state_enum st = picoquic_get_cnx_state(cnx);
+        uint64_t elapsed = 0;
+        if (!quic_state_finished(st))
+        {
+            const uint64_t start = picoquic_current_time();
+            const uint64_t deadline = start + 2000000ULL; /* ~2 s */
+            while (!quic_state_finished(st))
+            {
+                quic_sleep_short();
+                libp2p__quic_session_wake(session);
+                st = picoquic_get_cnx_state(cnx);
+                if (picoquic_current_time() >= deadline)
+                    break;
+            }
+            elapsed = picoquic_current_time() - start;
+        }
+        LP_LOGD("QUIC", "conn close wait finished state=%d elapsed_us=%" PRIu64, (int)st, elapsed);
+    }
     libp2p__quic_session_wake(session);
 }
 

@@ -4,12 +4,14 @@
 #include <errno.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 #ifndef _WIN32
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -33,6 +35,22 @@ static inline uint64_t now_mono_ms(void)
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 #endif
+
+typedef struct host_stop_async_ctx
+{
+    libp2p_host_t *host;
+    atomic_int done;
+} host_stop_async_ctx_t;
+
+static void *interop_host_stop_thread(void *arg)
+{
+    host_stop_async_ctx_t *ctx = (host_stop_async_ctx_t *)arg;
+    if (ctx && ctx->host)
+        libp2p_host_stop(ctx->host);
+    if (ctx)
+        atomic_store(&ctx->done, 1);
+    return NULL;
+}
 
 /* Hard-coded private key (protobuf) for interop runs.
  * Taken from tests/host/test_host_identity.c (secp256k1).
@@ -729,7 +747,9 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
             (void)libp2p_host_builder_muxer(b, muxer_to_use);
         (void)libp2p_host_builder_multistream(b, 5000, false);
     }
-    uint32_t dialer_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+    uint32_t dialer_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
+    if (!is_quic)
+        dialer_flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
     (void)libp2p_host_builder_flags(b, dialer_flags);
 
     libp2p_host_t *host = NULL;
@@ -753,6 +773,7 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
 
     libp2p_protocol_server_t *ping_srv = NULL;
     int host_started = 0;
+    int host_stopped = 0;
     int ret = 1;
     libp2p_stream_t *ping_stream = NULL;
 
@@ -795,9 +816,6 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
     if (!is_quic)
         LP_LOGI("INTEROP", "negotiated muxer = %s", muxer_to_use ? muxer_to_use : "unknown");
 
-    /* Ensure the runtime delivers inbound data promptly on the ping stream. */
-    libp2p_stream_set_read_interest(ping_stream, true);
-
     uint64_t ping_ms = 0;
     libp2p_ping_err_t prc = libp2p_ping_roundtrip_stream(ping_stream, (uint64_t)timeout * 1000ULL, &ping_ms);
     if (prc != LIBP2P_PING_OK)
@@ -830,11 +848,46 @@ cleanup:
         if (!host_started)
             libp2p_stream_free(ping_stream);
     }
-    if (host_started)
-        libp2p_host_stop(host);
     if (ping_srv)
         (void)libp2p_ping_service_stop(host, ping_srv);
-    libp2p_host_free(host);
+    if (host_started)
+    {
+        host_stop_async_ctx_t stop_ctx = {.host = host};
+        atomic_init(&stop_ctx.done, 0);
+        LP_LOGD("INTEROP", "Stopping host runtime");
+        pthread_t stopper;
+        if (pthread_create(&stopper, NULL, interop_host_stop_thread, &stop_ctx) == 0)
+        {
+            const uint64_t stop_start = now_mono_ms();
+            const uint64_t stop_deadline = stop_start + 2000;
+            while (!atomic_load(&stop_ctx.done) && now_mono_ms() < stop_deadline)
+            {
+                struct timespec ts = {0, 5 * 1000 * 1000}; /* 5ms */
+                nanosleep(&ts, NULL);
+            }
+            if (atomic_load(&stop_ctx.done))
+            {
+                pthread_join(stopper, NULL);
+                host_stopped = 1;
+                LP_LOGD("INTEROP", "Host runtime stopped");
+            }
+            else
+            {
+                pthread_detach(stopper);
+                LP_LOGW("INTEROP", "host_stop timed out; continuing cleanup");
+            }
+        }
+        else
+        {
+            libp2p_host_stop(host);
+            host_stopped = 1;
+            LP_LOGD("INTEROP", "Host runtime stopped");
+        }
+    }
+    if (!host_started || host_stopped)
+        libp2p_host_free(host);
+    else
+        LP_LOGW("INTEROP", "Host stop still in progress; skipping host_free");
     libp2p_host_builder_free(b);
     free(addr_str);
     return ret;

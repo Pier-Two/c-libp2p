@@ -1531,13 +1531,7 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     if (len == 0)
         return 0;
     picoquic_cnx_t *cnx = st->mx->session->cnx;
-    int lock_rc = pthread_mutex_trylock(&st->mx->write_mtx);
-    if (lock_rc != 0)
-    {
-        if (lock_rc == EBUSY)
-            return LIBP2P_ERR_AGAIN;
-        return LIBP2P_ERR_INTERNAL;
-    }
+    pthread_mutex_lock(&st->mx->write_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, (const uint8_t *)buf, len, 0);
     pthread_mutex_unlock(&st->mx->write_mtx);
     libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);
@@ -1563,13 +1557,7 @@ static int quic_stream_backend_close(void *io_ctx)
     if (st->fin_local)
         return 0;
     picoquic_cnx_t *cnx = st->mx->session->cnx;
-    int lock_rc = pthread_mutex_trylock(&st->mx->write_mtx);
-    if (lock_rc != 0)
-    {
-        if (lock_rc == EBUSY)
-            return LIBP2P_ERR_AGAIN;
-        return LIBP2P_ERR_INTERNAL;
-    }
+    pthread_mutex_lock(&st->mx->write_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, NULL, 0, 1);
     pthread_mutex_unlock(&st->mx->write_mtx);
     libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);
@@ -1589,13 +1577,7 @@ static int quic_stream_backend_reset(void *io_ctx)
     if (!st || !st->mx || !st->mx->session)
         return LIBP2P_ERR_NULL_PTR;
     picoquic_cnx_t *cnx = st->mx->session->cnx;
-    int lock_rc = pthread_mutex_trylock(&st->mx->write_mtx);
-    if (lock_rc != 0)
-    {
-        if (lock_rc == EBUSY)
-            return LIBP2P_ERR_AGAIN;
-        return LIBP2P_ERR_INTERNAL;
-    }
+    pthread_mutex_lock(&st->mx->write_mtx);
     int rc = picoquic_reset_stream(cnx, st->stream_id, 0);
     pthread_mutex_unlock(&st->mx->write_mtx);
     libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);

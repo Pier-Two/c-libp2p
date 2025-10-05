@@ -184,6 +184,14 @@ add_library(libp2p_metrics
 )
 target_include_directories(libp2p_metrics PUBLIC ${PROJECT_SOURCE_DIR}/include)
 
+# ---------------------------------------------
+# libp2p_log (shared logging implementation)
+# ---------------------------------------------
+add_library(libp2p_log
+    src/util/log.c
+)
+target_include_directories(libp2p_log PUBLIC ${PROJECT_SOURCE_DIR}/include)
+
 if(ENABLE_CPPCHECK)
     find_program(CPPCHECK_EXE NAMES cppcheck)
     if(CPPCHECK_EXE)
@@ -434,6 +442,7 @@ function(add_module MODULE_NAME MODULE_SOURCE TEST_SOURCE BENCH_SOURCE PRIVATE_D
     if(NOT "${PRIVATE_DIR}" STREQUAL "")
         target_include_directories(${MODULE_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/${PRIVATE_DIR})
     endif()
+    target_link_libraries(${MODULE_NAME} PUBLIC libp2p_log)
 
     # Attach clang-tidy to project libraries only (not to tests/benchmarks).
     if(ENABLE_CLANG_TIDY AND LIBP2P_CLANG_TIDY)
@@ -523,7 +532,6 @@ add_library(libp2p_unified
     src/protocol/muxer/mplex/mplex_stream_adapter.c
     src/util/lpmsg.c
     src/util/debug_trace.c
-    src/util/log.c
     src/util/peerstore.c
     src/util/managers.c
     src/util/error_map.c
@@ -538,6 +546,7 @@ if(ENABLE_CLANG_TIDY AND LIBP2P_CLANG_TIDY)
 endif()
 target_link_libraries(libp2p_unified
     PUBLIC
+        libp2p_log
         libp2p_metrics
         protocol_tcp
         protocol_noise

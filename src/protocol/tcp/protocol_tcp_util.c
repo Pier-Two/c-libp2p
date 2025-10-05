@@ -9,37 +9,10 @@
 #include <netinet/in.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdarg.h>
-#include "libp2p/log.h"
-
-/*
- * Provide a weak fallback for libp2p_logf so protocol_tcp can link
- * independently of libp2p_unified. When the unified library is linked, its
- * strong definition in src/util/log.c overrides this weak one.
- */
-#if defined(__APPLE__) || defined(__GNUC__)
-__attribute__((weak)) void libp2p_logf(libp2p_log_level_t lvl, const char *fmt, ...)
-{
-    const char *prefix = "";
-    switch (lvl)
-    {
-        case LIBP2P_LOG_ERROR: prefix = "[ERROR] "; break;
-        case LIBP2P_LOG_WARN:  prefix = "[WARN ] "; break;
-        case LIBP2P_LOG_INFO:  prefix = "[INFO ] "; break;
-        case LIBP2P_LOG_DEBUG: prefix = "[DEBUG] "; break;
-        case LIBP2P_LOG_TRACE: prefix = "[TRACE] "; break;
-        default: break;
-    }
-    char buf[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    fprintf(stderr, "%s%s\n", prefix, buf);
-}
-#endif
 #include <stdlib.h>
 #include <string.h>
+#include "libp2p/log.h"
+
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>

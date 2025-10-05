@@ -18,8 +18,6 @@
 
 #include <inttypes.h>
 #include <stdbool.h>
-#include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -40,28 +38,6 @@
 #include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha256.h"
 
 #include "libp2p/crypto/ltc_compat.h"
-
-#if defined(__APPLE__) || defined(__GNUC__)
-__attribute__((weak)) void libp2p_logf(libp2p_log_level_t lvl, const char *fmt, ...)
-{
-    const char *prefix = "";
-    switch (lvl)
-    {
-        case LIBP2P_LOG_ERROR: prefix = "[ERROR] "; break;
-        case LIBP2P_LOG_WARN:  prefix = "[WARN ] "; break;
-        case LIBP2P_LOG_INFO:  prefix = "[INFO ] "; break;
-        case LIBP2P_LOG_DEBUG: prefix = "[DEBUG] "; break;
-        case LIBP2P_LOG_TRACE: prefix = "[TRACE] "; break;
-        default: break;
-    }
-    char buf[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    fprintf(stderr, "%s%s\n", prefix, buf);
-}
-#endif
 
 #define PEER_ID_RSA_KEY_TYPE 0
 #define PEER_ID_ED25519_KEY_TYPE 1
