@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sched.h>
 #include <string.h>
 #include <unistd.h>
 #ifdef __linux__
@@ -247,7 +248,9 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
         }
         if (n == LIBP2P_ERR_AGAIN)
         {
-            /* Try again; deadline blocks until writable. */
+            /* Give the transport loop a chance to progress before retrying. */
+            struct timespec ts = {0, 1 * 1000 * 1000}; /* 1ms */
+            nanosleep(&ts, NULL);
             continue;
         }
         fprintf(stderr, "[PING] stream_write_all error n=%zd\n", n);
@@ -287,7 +290,9 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
         if (n == LIBP2P_ERR_AGAIN)
         {
             LP_LOGD("PING", "read would-block stream=%p", (void *)s);
-            /* Try again; deadline blocks until readable. */
+            /* Yield so the network thread can deliver data before retrying. */
+            struct timespec ts = {0, 1 * 1000 * 1000}; /* 1ms */
+            nanosleep(&ts, NULL);
             continue;
         }
         if (n == 0 || n == LIBP2P_ERR_EOF || n == LIBP2P_ERR_CLOSED || n == LIBP2P_ERR_RESET || n == LIBP2P_ERR_NULL_PTR)

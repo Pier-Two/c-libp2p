@@ -729,9 +729,7 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
             (void)libp2p_host_builder_muxer(b, muxer_to_use);
         (void)libp2p_host_builder_multistream(b, 5000, false);
     }
-    uint32_t dialer_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND;
-    if (!is_quic)
-        dialer_flags |= LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
+    uint32_t dialer_flags = LIBP2P_HOST_F_AUTO_IDENTIFY_INBOUND | LIBP2P_HOST_F_AUTO_IDENTIFY_OUTBOUND;
     (void)libp2p_host_builder_flags(b, dialer_flags);
 
     libp2p_host_t *host = NULL;
@@ -796,6 +794,9 @@ static int run_dialer(const char *redis_host, const char *redis_port, int timeou
     LP_LOGI("INTEROP", "Dial successful (transport=%s)", transport_name ? transport_name : "unknown");
     if (!is_quic)
         LP_LOGI("INTEROP", "negotiated muxer = %s", muxer_to_use ? muxer_to_use : "unknown");
+
+    /* Ensure the runtime delivers inbound data promptly on the ping stream. */
+    libp2p_stream_set_read_interest(ping_stream, true);
 
     uint64_t ping_ms = 0;
     libp2p_ping_err_t prc = libp2p_ping_roundtrip_stream(ping_stream, (uint64_t)timeout * 1000ULL, &ping_ms);
