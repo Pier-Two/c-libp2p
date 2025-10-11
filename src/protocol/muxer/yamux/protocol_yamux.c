@@ -53,9 +53,10 @@ static libp2p_yamux_err_t conn_write_all(libp2p_conn_t *c, const uint8_t *buf, s
 
 static libp2p_yamux_err_t conn_read_exact(libp2p_conn_t *c, uint8_t *buf, size_t len)
 {
-    /* Bound per-chunk wait to a reasonable slice. Treat TIMEOUT
-     * as EAGAIN so callers can interleave other work. */
-    libp2p_conn_err_t rc = libp2p_conn_read_exact_timed(c, buf, len, 2000);
+    /* Bound per-chunk wait to a short slice so opportunistic pumps do not
+     * block callers after buffering a frame. Treat TIMEOUT as EAGAIN so
+     * callers can interleave other work. */
+    libp2p_conn_err_t rc = libp2p_conn_read_exact_timed(c, buf, len, 50);
     if (rc == LIBP2P_CONN_ERR_TIMEOUT)
         return LIBP2P_YAMUX_ERR_AGAIN;
     return (rc == LIBP2P_CONN_OK) ? LIBP2P_YAMUX_OK : map_conn_err(rc);
