@@ -1714,6 +1714,12 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
     if (mx->owner)
         libp2p_stream_set_parent(stream, NULL, mx->owner, 0);
 
+    pthread_mutex_lock(&st->lock);
+    st->handshake_started = 1;
+    st->handshake_running = 1;
+    pthread_mutex_unlock(&st->lock);
+    quic_stream_start_handshake(mx, st);
+
     return st;
 }
 
