@@ -1408,16 +1408,15 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
 {
     libp2p_quic_session_t *session = (libp2p_quic_session_t *)callback_ctx;
     quic_muxer_ctx_t *mx = session ? quic_session_muxer(session) : NULL;
-    quic_stream_ctx_t *st = (quic_stream_ctx_t *)stream_ctx;
+    quic_stream_ctx_t *known = mx ? quic_muxer_find_stream(mx, stream_id) : NULL;
+    quic_stream_ctx_t *st = known;
     switch (event)
     {
         case picoquic_callback_stream_data:
         case picoquic_callback_stream_fin:
             if (!st && mx)
             {
-                st = quic_muxer_find_stream(mx, stream_id);
-                if (!st)
-                    st = quic_accept_inbound_stream(mx, stream_id);
+                st = quic_accept_inbound_stream(mx, stream_id);
             }
             if (st)
             {
@@ -1453,9 +1452,7 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
         case picoquic_callback_stream_reset:
             if (!st && mx)
             {
-                st = quic_muxer_find_stream(mx, stream_id);
-                if (!st)
-                    st = quic_accept_inbound_stream(mx, stream_id);
+                st = quic_accept_inbound_stream(mx, stream_id);
             }
             if (st)
             {
