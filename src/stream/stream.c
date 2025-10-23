@@ -45,6 +45,8 @@ typedef struct stream_stub
     libp2p_stream_cleanup_fn cleanup;
     void *cleanup_ctx;
     atomic_int defer_destroy;
+    atomic_int pending_async;
+    atomic_int destroy_state;
 } stream_stub_t;
 
 static stream_stub_t *S(libp2p_stream_t *s) { return (stream_stub_t *)s; }
@@ -276,6 +278,12 @@ void libp2p_stream_free(libp2p_stream_t *s)
         atomic_store_explicit(&st->defer_destroy, 2, memory_order_release);
         return;
     }
+    int expected = 0;
+    if (!atomic_compare_exchange_strong_explicit(&st->destroy_state, &expected, 1, memory_order_acq_rel, memory_order_acquire))
+        return;
+    if (atomic_load_explicit(&st->pending_async, memory_order_acquire) > 0)
+        return;
+    atomic_store_explicit(&st->destroy_state, 2, memory_order_release);
     libp2p__stream_destroy(s);
 }
 
@@ -434,6 +442,8 @@ libp2p_stream_t *libp2p_stream_from_conn(struct libp2p_host *host, libp2p_conn_t
     memset(&ss->ops, 0, sizeof(ss->ops));
     ss->has_ops = 0;
     atomic_init(&ss->defer_destroy, 0);
+    atomic_init(&ss->pending_async, 0);
+    atomic_init(&ss->destroy_state, 0);
 
     /* Cache remote address string for reuse and register in host list */
     if (host)
@@ -603,6 +613,47 @@ void libp2p__stream_mark_deferred(libp2p_stream_t *s)
     }
 }
 
+int libp2p__stream_retain_async(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return 0;
+    atomic_fetch_add_explicit(&st->pending_async, 1, memory_order_acq_rel);
+    int state = atomic_load_explicit(&st->destroy_state, memory_order_acquire);
+    if (state != 0)
+    {
+        int prev = atomic_fetch_sub_explicit(&st->pending_async, 1, memory_order_acq_rel);
+        if (prev == 1 && state == 1)
+        {
+            int expected = 1;
+            if (atomic_compare_exchange_strong_explicit(&st->destroy_state, &expected, 2, memory_order_acq_rel, memory_order_acquire))
+            {
+                libp2p__stream_destroy(s);
+            }
+        }
+        return 0;
+    }
+    return 1;
+}
+
+void libp2p__stream_release_async(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    int prev = atomic_fetch_sub_explicit(&st->pending_async, 1, memory_order_acq_rel);
+    if (prev <= 0)
+        return;
+    if (prev == 1)
+    {
+        int expected = 1;
+        if (atomic_compare_exchange_strong_explicit(&st->destroy_state, &expected, 2, memory_order_acq_rel, memory_order_acquire))
+        {
+            libp2p__stream_destroy(s);
+        }
+    }
+}
+
 libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, const libp2p_stream_backend_ops_t *ops, const char *protocol_id,
                                         int initiator, peer_id_t *remote_peer)
 {
@@ -627,6 +678,8 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
     ss->has_ops = 1;
     ss->closed = 0;
     atomic_init(&ss->defer_destroy, 0);
+    atomic_init(&ss->pending_async, 0);
+    atomic_init(&ss->destroy_state, 0);
 
     if (host)
     {

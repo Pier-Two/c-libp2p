@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package libp2p.gossipsub;
+
+// Canonical protobuf definitions for the gossipsub RPC wire format.
+// The layout mirrors the upstream go-libp2p and rust-libp2p schemas and
+// incorporates the v1.1 Peer eXchange (PX) extensions.
+
+message RPC {
+  message SubOpts {
+    bool subscribe = 1;
+    string topic = 2;
+  }
+
+  repeated SubOpts subscriptions = 1;
+  repeated Message publish = 2;
+  ControlMessage control = 3;
+}
+
+message Message {
+  bytes from = 1;
+  bytes data = 2;
+  bytes seqno = 3;
+  string topic = 4;
+  bytes signature = 5;
+  bytes key = 6;
+}
+
+message ControlMessage {
+  repeated ControlIHave ihave = 1;
+  repeated ControlIWant iwant = 2;
+  repeated ControlGraft graft = 3;
+  repeated ControlPrune prune = 4;
+  repeated ControlIDontWant idontwant = 5;
+  ControlExtensions extensions = 6;
+}
+
+message ControlIHave {
+  string topic = 1;
+  repeated bytes message_ids = 2;
+}
+
+message ControlIWant {
+  repeated bytes message_ids = 1;
+}
+
+message ControlGraft {
+  string topic = 1;
+}
+
+message ControlPrune {
+  string topic = 1;
+  repeated PeerInfo peers = 2;
+  uint64 backoff = 3;
+}
+
+message ControlIDontWant {
+  repeated bytes message_ids = 1;
+}
+
+message ControlExtensions {
+  // Placeholder field to satisfy the generator; defaults to false and is not
+  // serialized on the wire.
+  bool placeholder = 1;
+}
+
+message PeerInfo {
+  bytes peer_id = 1;
+  bytes signed_peer_record = 2;
+}

@@ -122,8 +122,14 @@ libp2p_mplex_ssize_t libp2p_mplex_stream_read(libp2p_mplex_stream_t *stream, voi
     if (max_len == 0)
         return 0;
 
-    // Use per-stream mutex to guard local fields and avoid relying on ctx lifetime
     pthread_mutex_lock(&stream->lock);
+
+    libp2p_mplex_ctx_t *ctx = stream->ctx;
+    if (!ctx)
+    {
+        pthread_mutex_unlock(&stream->lock);
+        return LIBP2P_MPLEX_ERR_INTERNAL;
+    }
 
     // Check stream state
     if (stream->state & LIBP2P_MPLEX_STREAM_STATE_RESET)
@@ -139,11 +145,17 @@ libp2p_mplex_ssize_t libp2p_mplex_stream_read(libp2p_mplex_stream_t *stream, voi
     // still letting single-threaded runtimes progress handshakes.
     if (stream->queued == 0)
     {
-        if (!stream->ctx->loop_thread_started)
+        if (!ctx->loop_thread_started)
         {
             pthread_mutex_unlock(&stream->lock);
-            (void)libp2p_mplex_on_readable(stream->ctx);
+            (void)libp2p_mplex_on_readable(ctx);
             pthread_mutex_lock(&stream->lock);
+            ctx = stream->ctx;
+            if (!ctx)
+            {
+                pthread_mutex_unlock(&stream->lock);
+                return LIBP2P_MPLEX_ERR_INTERNAL;
+            }
         }
         if (stream->queued == 0)
         {

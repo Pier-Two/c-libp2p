@@ -45,6 +45,8 @@ static void cbexec_proto_on_open(void *ud)
     proto_on_open_task_t *t = (proto_on_open_task_t *)ud;
     if (t && t->def.on_open)
         t->def.on_open(t->s, t->def.user_data);
+    if (t && t->s)
+        libp2p__stream_release_async(t->s);
     free(t);
 }
 
@@ -949,12 +951,19 @@ static void mplex_stream_event_cb(libp2p_mplex_stream_t *stream, libp2p_mplex_ev
         }
         if (found && chosen.on_open)
         {
-            proto_on_open_task_t *t = (proto_on_open_task_t *)calloc(1, sizeof(*t));
-            if (t)
+            if (libp2p__stream_retain_async(stream_pub))
             {
-                t->s = stream_pub;
-                t->def = chosen; /* shallow copy of callbacks + user_data */
-                libp2p__exec_on_cb_thread(c->host, cbexec_proto_on_open, t);
+                proto_on_open_task_t *t = (proto_on_open_task_t *)calloc(1, sizeof(*t));
+                if (t)
+                {
+                    t->s = stream_pub;
+                    t->def = chosen; /* shallow copy of callbacks + user_data */
+                    libp2p__exec_on_cb_thread(c->host, cbexec_proto_on_open, t);
+                }
+                else
+                {
+                    libp2p__stream_release_async(stream_pub);
+                }
             }
         }
         else if (chosen.read_mode == LIBP2P_READ_PUSH && chosen.on_data)
@@ -1409,12 +1418,19 @@ static void *inbound_substream_worker(void *arg)
 
     if (found && chosen.on_open)
     {
-        proto_on_open_task_t *t = (proto_on_open_task_t *)calloc(1, sizeof(*t));
-        if (t)
+        if (libp2p__stream_retain_async(stream))
         {
-            t->s = stream;
-            t->def = chosen; /* shallow copy of callbacks + user_data */
-            libp2p__exec_on_cb_thread(c->host, cbexec_proto_on_open, t);
+            proto_on_open_task_t *t = (proto_on_open_task_t *)calloc(1, sizeof(*t));
+            if (t)
+            {
+                t->s = stream;
+                t->def = chosen; /* shallow copy of callbacks + user_data */
+                libp2p__exec_on_cb_thread(c->host, cbexec_proto_on_open, t);
+            }
+            else
+            {
+                libp2p__stream_release_async(stream);
+            }
         }
     }
     else if (chosen.read_mode == LIBP2P_READ_PUSH && chosen.on_data)

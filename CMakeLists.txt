@@ -11,6 +11,9 @@ project(libp2p
     LANGUAGES C
 )
 
+find_package(BISON REQUIRED)
+find_package(FLEX REQUIRED)
+
 # Default to Debug builds for better debugging experience unless explicitly overridden
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
@@ -429,6 +432,54 @@ if (TARGET noiseprotocol)
             COMPILE_DEFINITIONS "NEWHOPE_ABS_NO_IMPL"
     )
 endif()
+
+# ---------------------------------------------------------------------------
+# noise-protoc host generator for gossipsub protobuf schemas
+# ---------------------------------------------------------------------------
+set(NOISE_PROTOC_DIR ${PROJECT_SOURCE_DIR}/lib/noise-c/tools/protoc)
+set(NOISE_PROTOC_BUILD_DIR ${CMAKE_BINARY_DIR}/noise_protoc)
+file(MAKE_DIRECTORY ${NOISE_PROTOC_BUILD_DIR})
+
+BISON_TARGET(noise_protoc_parser
+    ${NOISE_PROTOC_DIR}/proto3-grammar.y
+    ${NOISE_PROTOC_BUILD_DIR}/proto3-grammar.c
+    DEFINES_FILE ${NOISE_PROTOC_BUILD_DIR}/proto3-grammar.h
+)
+FLEX_TARGET(noise_protoc_lexer
+    ${NOISE_PROTOC_DIR}/proto3-lexer.l
+    ${NOISE_PROTOC_BUILD_DIR}/proto3-lexer.c
+)
+ADD_FLEX_BISON_DEPENDENCY(noise_protoc_lexer noise_protoc_parser)
+
+add_executable(noise_protoc
+    ${NOISE_PROTOC_DIR}/main.c
+    ${NOISE_PROTOC_DIR}/proto3-ast.c
+    ${NOISE_PROTOC_DIR}/proto3-generate-c.c
+    ${BISON_noise_protoc_parser_OUTPUTS}
+    ${FLEX_noise_protoc_lexer_OUTPUTS}
+)
+target_include_directories(noise_protoc PRIVATE
+    ${NOISE_PROTOC_DIR}
+    ${NOISE_PROTOC_BUILD_DIR}
+)
+
+set(GOSSIPSUB_PROTO_SRC ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto/rpc.proto)
+set(GOSSIPSUB_PROTO_GEN_DIR ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto/gen)
+set(GOSSIPSUB_PROTO_C ${GOSSIPSUB_PROTO_GEN_DIR}/gossipsub_rpc.pb.c)
+set(GOSSIPSUB_PROTO_H ${GOSSIPSUB_PROTO_GEN_DIR}/gossipsub_rpc.pb.h)
+
+add_custom_command(
+    OUTPUT ${GOSSIPSUB_PROTO_C} ${GOSSIPSUB_PROTO_H}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${GOSSIPSUB_PROTO_GEN_DIR}
+    COMMAND $<TARGET_FILE:noise_protoc> --output-c ${GOSSIPSUB_PROTO_C} --output-h ${GOSSIPSUB_PROTO_H} ${GOSSIPSUB_PROTO_SRC}
+    DEPENDS ${GOSSIPSUB_PROTO_SRC} noise_protoc
+    COMMENT "Generating gossipsub RPC protobuf sources"
+    VERBATIM
+)
+
+add_custom_target(gossipsub_proto
+    DEPENDS ${GOSSIPSUB_PROTO_C} ${GOSSIPSUB_PROTO_H}
+)
 
 # Add libeddsa submodule.
 _add_subdirectory_no_tests(lib/libeddsa)
@@ -1273,6 +1324,73 @@ add_module(
     src/protocol/ping
 )
 target_link_libraries(protocol_ping PUBLIC libp2p_unified)
+
+# ---------------------------------------------
+# protocol/gossipsub
+# ---------------------------------------------
+add_module(
+    protocol_gossipsub
+    "src/protocol/gossipsub/core/gossipsub_service.c;src/protocol/gossipsub/core/gossipsub_cache.c;src/protocol/gossipsub/core/gossipsub_peer.c;src/protocol/gossipsub/core/gossipsub_internal.c;src/protocol/gossipsub/core/gossipsub_topic.c;src/protocol/gossipsub/core/gossipsub_validation.c;src/protocol/gossipsub/core/gossipsub_rpc.c;src/protocol/gossipsub/core/gossipsub_propagation.c;src/protocol/gossipsub/core/gossipsub_heartbeat.c;src/protocol/gossipsub/core/gossipsub_host_events.c;src/protocol/gossipsub/core/gossipsub_score.c;src/protocol/gossipsub/core/gossipsub_promises.c"
+    "tests/protocol/gossipsub/test_gossipsub_service.c;tests/protocol/gossipsub/test_gossipsub_service_common.c;tests/protocol/gossipsub/test_gossipsub_service_setup.c;tests/protocol/gossipsub/test_gossipsub_service_subscription_mesh.c;tests/protocol/gossipsub/test_gossipsub_service_heartbeat.c;tests/protocol/gossipsub/test_gossipsub_service_px.c;tests/protocol/gossipsub/test_gossipsub_service_scoring.c;tests/protocol/gossipsub/test_gossipsub_service_explicit.c;tests/protocol/gossipsub/test_gossipsub_service_cleanup.c"
+    ""
+    src/protocol/gossipsub/core
+)
+add_dependencies(protocol_gossipsub gossipsub_proto)
+target_sources(protocol_gossipsub PRIVATE
+    src/protocol/gossipsub/proto/gossipsub_proto.c
+    ${GOSSIPSUB_PROTO_C}
+)
+target_include_directories(protocol_gossipsub PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto
+    ${GOSSIPSUB_PROTO_GEN_DIR}
+)
+target_link_libraries(protocol_gossipsub
+    PUBLIC libp2p_unified
+    PRIVATE noiseprotocol noiseprotobufs
+)
+set_tests_properties(Testprotocol_gossipsub PROPERTIES TIMEOUT 30)
+
+add_executable(test_gossipsub_proto
+    tests/protocol/gossipsub/test_gossipsub_proto.c
+)
+target_link_libraries(test_gossipsub_proto PRIVATE protocol_gossipsub)
+set_target_properties(test_gossipsub_proto PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+)
+target_include_directories(test_gossipsub_proto PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto
+    ${GOSSIPSUB_PROTO_GEN_DIR}
+)
+add_test(NAME Testgossipsub_proto COMMAND test_gossipsub_proto)
+set_tests_properties(Testgossipsub_proto PROPERTIES TIMEOUT 10)
+
+add_executable(test_gossipsub_cache
+    tests/protocol/gossipsub/test_gossipsub_cache.c
+)
+target_link_libraries(test_gossipsub_cache PRIVATE protocol_gossipsub)
+target_include_directories(test_gossipsub_cache PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/core
+)
+set_target_properties(test_gossipsub_cache PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+)
+add_test(NAME Testgossipsub_cache COMMAND test_gossipsub_cache)
+set_tests_properties(Testgossipsub_cache PROPERTIES TIMEOUT 10)
+
+add_executable(test_gossipsub_validation
+    tests/protocol/gossipsub/test_gossipsub_validation.c
+)
+target_link_libraries(test_gossipsub_validation PRIVATE protocol_gossipsub)
+target_include_directories(test_gossipsub_validation PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/core
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto
+    ${GOSSIPSUB_PROTO_GEN_DIR}
+)
+set_target_properties(test_gossipsub_validation PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+)
+add_test(NAME Testgossipsub_validation COMMAND test_gossipsub_validation)
+set_tests_properties(Testgossipsub_validation PROPERTIES TIMEOUT 10)
 
 # ---------------------------------------------
 # protocol/quic (skeleton)

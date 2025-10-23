@@ -24,6 +24,10 @@
 #define SERVER_PRIVATE_KEY_HEX "0802122053DADF1D5A164D6B4ACDB15E24AA4C5B1D3461BDBD42ABEDB0A4404D56CED8FB"
 #define CLIENT_PRIVATE_KEY_HEX "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e"
 
+static const int k_short_wait_ms = 1500;
+static const int k_close_wait_ms = 500;
+static const int k_read_timeout_ms = 2000;
+
 static void sleep_ms(unsigned ms)
 {
 #ifndef _WIN32
@@ -247,11 +251,9 @@ int main(void)
         goto cleanup;
     fprintf(stderr, "[test] dial succeeded\n");
 
-    if (!wait_for_event_kind(client, LIBP2P_EVT_STREAM_OPENED, 2000))
+    if (!wait_for_event_kind(client, LIBP2P_EVT_STREAM_OPENED, k_short_wait_ms))
         goto cleanup;
-    if (!wait_for_event_kind(server, LIBP2P_EVT_STREAM_OPENED, 2000))
-        goto cleanup;
-    if (!wait_for_flag(server, &srv_ctx.open_seen, 2000))
+    if (!wait_for_flag(server, &srv_ctx.open_seen, k_short_wait_ms))
         goto cleanup;
     fprintf(stderr, "[test] stream opened events observed\n");
 
@@ -266,9 +268,8 @@ int main(void)
 
     uint8_t recv_buf[sizeof(PAYLOAD)] = {0};
     size_t received = 0;
-    const int read_timeout_ms = 4000;
     int waited = 0;
-    while (received < payload_len && waited < read_timeout_ms)
+    while (received < payload_len && waited < k_read_timeout_ms)
     {
         ssize_t n = libp2p_stream_read(stream, recv_buf + received, payload_len - received);
         if (n == LIBP2P_ERR_AGAIN)
@@ -289,7 +290,7 @@ int main(void)
         fprintf(stderr, "[test] payload mismatch or timeout (received=%zu waited=%d)\n", received, waited);
         goto cleanup;
     }
-    if (!wait_for_flag(server, &srv_ctx.echoed, 2000))
+    if (!wait_for_flag(server, &srv_ctx.echoed, k_short_wait_ms))
         goto cleanup;
     fprintf(stderr, "[test] payload echoed\n");
 
@@ -297,8 +298,8 @@ int main(void)
     libp2p_stream_free(stream);
     stream = NULL;
 
-    (void)wait_for_event_kind(client, LIBP2P_EVT_STREAM_CLOSED, 2000);
-    (void)wait_for_event_kind(server, LIBP2P_EVT_STREAM_CLOSED, 2000);
+    (void)wait_for_event_kind(client, LIBP2P_EVT_STREAM_CLOSED, k_close_wait_ms);
+    (void)wait_for_event_kind(server, LIBP2P_EVT_STREAM_CLOSED, k_close_wait_ms);
 
     exit_code = 0;
 

@@ -49,6 +49,10 @@ void libp2p_stream_set_parent(libp2p_stream_t *s, libp2p_conn_t *parent_conn, st
 /* Destroy a stream stub after it has been closed; pointer becomes invalid. */
 void libp2p__stream_destroy(libp2p_stream_t *s);
 
+/* Retain/release helpers for async callbacks executed off-thread. */
+int libp2p__stream_retain_async(libp2p_stream_t *s);
+void libp2p__stream_release_async(libp2p_stream_t *s);
+
 /* Optional callback invoked just before the stream storage is released. */
 typedef void (*libp2p_stream_cleanup_fn)(void *ctx, libp2p_stream_t *s);
 void libp2p__stream_set_cleanup(libp2p_stream_t *s, libp2p_stream_cleanup_fn fn, void *ctx);

@@ -69,6 +69,8 @@ static void cbexec_dial_on_open(void *ud)
     dial_on_open_task_t *t = (dial_on_open_task_t *)ud;
     if (t && t->cb)
         t->cb(t->s, t->ud, t->err);
+    if (t && t->s)
+        libp2p__stream_release_async(t->s);
     free(t);
 }
 
@@ -76,9 +78,20 @@ static void schedule_dial_on_open(libp2p_host_t *host, libp2p_on_stream_open_fn 
 {
     if (!host || !cb)
         return;
+    int retained = 0;
+    if (s)
+    {
+        if (!libp2p__stream_retain_async(s))
+            return;
+        retained = 1;
+    }
     dial_on_open_task_t *t = (dial_on_open_task_t *)calloc(1, sizeof(*t));
     if (!t)
+    {
+        if (retained)
+            libp2p__stream_release_async(s);
         return;
+    }
     t->cb = cb;
     t->s = s;
     t->ud = ud;
