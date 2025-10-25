@@ -11,6 +11,7 @@ ARG GO_VERSION
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         bison \
+        flex \
         build-essential \
         ca-certificates \
         cargo \
