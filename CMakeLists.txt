@@ -677,6 +677,22 @@ set_target_properties(interop-c PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
+add_executable(gossipsub-interop
+    src/interop/gossipsub/gossipsub_interop.c
+    src/interop/gossipsub/jsmn.c
+)
+target_link_libraries(gossipsub-interop PRIVATE libp2p_unified protocol_gossipsub)
+target_include_directories(gossipsub-interop PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/interop/gossipsub
+    ${PROJECT_SOURCE_DIR}/lib/libeddsa/lib
+)
+if(UNIX)
+    target_link_libraries(gossipsub-interop PRIVATE m)
+endif()
+set_target_properties(gossipsub-interop PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
 # ---------------------------------------------
 # host events tests
 # ---------------------------------------------

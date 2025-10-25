@@ -65,5 +65,8 @@ backup_tests*
 debug.plist
 .sandbox-logs
 
+# Ignore interal docs
+internal-docs*
+
 # IDE Settings
 .vscode/*
