@@ -374,7 +374,6 @@ set(USE_LIBSODIUM OFF CACHE BOOL "" FORCE)
 set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
 _add_subdirectory_no_tests(external/noise-c)
 set_target_properties(noiseprotocol PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_sources(noiseprotocol PRIVATE ${CMAKE_SOURCE_DIR}/cmake/newhope_abs_shim.c)
 
 if(LIBP2P_VENDOR_PICOQUIC)
     # Add picoquic QUIC stack with bundled picotls.
@@ -403,34 +402,6 @@ if(LIBP2P_VENDOR_PICOQUIC)
 
     add_library(libp2p_quic_vendor INTERFACE)
     target_link_libraries(libp2p_quic_vendor INTERFACE picoquic-core)
-endif()
-
-# ---------------------------------------------------------------------------
-# Workaround: MinGW/Windows build failure in Noise-C's NewHope implementation
-# ---------------------------------------------------------------------------
-# The file `error_correction.c` inside the Noise-C submodule defines a local
-#   static int32_t abs(int32_t v)
-# which collides with the standard C `abs()` declared in <math.h> on Windows
-# (and pulled in indirectly by system headers).  We cannot patch the submodule
-# in-place, so instead rename the local symbol *only for that translation
-# unit*.  Using a per-source compile definition avoids side-effects elsewhere.
-
-if (TARGET noiseprotocol)
-    # Inject helper header globally (provides macro + inline impl)
-    target_compile_options(noiseprotocol PRIVATE
-        "-include${CMAKE_SOURCE_DIR}/cmake/noise_newhope_abs_fix.h")
-
-    # Rename curve25519-donna helper fmul() to avoid libc conflict
-    target_compile_options(noiseprotocol PRIVATE
-        "-include${CMAKE_SOURCE_DIR}/cmake/noise_fmul_fix.h")
-
-    # For the original NewHope source file, keep the macro but suppress the
-    # inline implementation to avoid duplicate definitions.
-    set_source_files_properties(
-        ${PROJECT_SOURCE_DIR}/external/noise-c/src/crypto/newhope/error_correction.c
-        PROPERTIES
-            COMPILE_DEFINITIONS "NEWHOPE_ABS_NO_IMPL"
-    )
 endif()
 
 # ---------------------------------------------------------------------------

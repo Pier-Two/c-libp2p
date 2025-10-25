@@ -21,7 +21,7 @@
 	url = https://github.com/phlay/libeddsa.git
 [submodule "external/noise-c"]
 	path = external/noise-c
-	url = https://github.com/uink45/noise-c.git
+	url = https://github.com/Pier-Two/noise-c.git
 [submodule "external/picoquic"]
 	path = external/picoquic
 	url = https://github.com/Pier-Two/picoquic.git
