@@ -10,6 +10,7 @@ ARG GO_VERSION
 # Install build tools, runtime dependencies, Redis, Rust toolchain, and helpers such as curl/wget/unzip
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bison \
         build-essential \
         ca-certificates \
         cargo \
