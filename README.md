@@ -51,7 +51,7 @@ Detailed documentation is available under [docs/](docs/README.md).
 
 ## Third-party libraries
 
-c-libp2p bundles several third-party projects under `lib/`:
+c-libp2p bundles several third-party projects under `external/`:
 
 - [libtomcrypt](https://github.com/libtom/libtomcrypt) and [libtommath](https://github.com/libtom/libtommath) – [LibTom License](http://unlicense.org/)
 - [secp256k1](https://github.com/bitcoin-core/secp256k1) – [MIT License](https://opensource.org/licenses/MIT)

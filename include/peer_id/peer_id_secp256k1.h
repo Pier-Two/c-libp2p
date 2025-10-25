@@ -9,7 +9,7 @@ extern "C"
 #include <stddef.h>
 #include <stdint.h>
 
-#include "../../lib/secp256k1/include/secp256k1.h"
+#include "../../external/secp256k1/include/secp256k1.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 

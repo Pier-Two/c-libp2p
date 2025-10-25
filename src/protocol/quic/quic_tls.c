@@ -31,11 +31,11 @@
 #endif
 
 #define DH libeddsa_DH
-#include "../../../lib/libeddsa/lib/eddsa.h"
+#include "../../../external/libeddsa/lib/eddsa.h"
 #undef DH
 
-#include "../../../lib/secp256k1/include/secp256k1.h"
-#include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha256.h"
+#include "../../../external/secp256k1/include/secp256k1.h"
+#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
 
 #include "libp2p/crypto/ltc_compat.h"
 

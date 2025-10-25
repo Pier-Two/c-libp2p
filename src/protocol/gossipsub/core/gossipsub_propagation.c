@@ -11,7 +11,7 @@
 #include "peer_id/peer_id_proto.h"
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
-#include "../../../lib/noise-c/src/crypto/ed25519/ed25519.h"
+#include "../../../external/noise-c/src/crypto/ed25519/ed25519.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_ed25519.h"
 #include "../../../host/host_internal.h"

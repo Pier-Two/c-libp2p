@@ -12,7 +12,7 @@ cd c-libp2p
 ```
 
 The `--recursive` flag ensures that crypto primitives and other vendored
-components under `lib/` are checked out alongside the main tree.
+components under `external/` are checked out alongside the main tree.
 
 ## 2. Configure the build
 

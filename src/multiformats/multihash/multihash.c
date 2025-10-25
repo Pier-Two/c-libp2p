@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../lib/sha3/sha3.h"
-#include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha256.h"
-#include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha512.h"
+#include "../../../external/sha3/sha3.h"
+#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
+#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha512.h"
 
 #include "multiformats/multicodec/multicodec.h"
 #include "multiformats/multihash/multihash.h"

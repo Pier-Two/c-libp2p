@@ -13,7 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha256.h"
+#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
 
 #include "libp2p/log.h"
 #include "libp2p/runtime.h"

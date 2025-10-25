@@ -95,7 +95,7 @@ if(NOT LIBP2P_VENDOR_PICOQUIC)
     message(FATAL_ERROR "Bundled picoquic is required; configure with -DLIBP2P_VENDOR_PICOQUIC=ON.")
 endif()
 
-if(LIBP2P_VENDOR_PICOQUIC AND NOT EXISTS "${PROJECT_SOURCE_DIR}/lib/picoquic/CMakeLists.txt")
+if(LIBP2P_VENDOR_PICOQUIC AND NOT EXISTS "${PROJECT_SOURCE_DIR}/external/picoquic/CMakeLists.txt")
     message(FATAL_ERROR "LIBP2P_VENDOR_PICOQUIC is ON, but the picoquic submodule is missing. Run `git submodule update --init --recursive`.")
 endif()
 
@@ -323,7 +323,7 @@ function(_add_subdirectory_no_tests dir)
 endfunction()
 
 # Add secp256k1 submodule.
-_add_subdirectory_no_tests(lib/secp256k1)
+_add_subdirectory_no_tests(external/secp256k1)
 
 # Add libtommath submodule.
 #
@@ -333,9 +333,9 @@ _add_subdirectory_no_tests(lib/secp256k1)
 # and ensure it is position‑independent so it can be linked into shared libs.
 set(_saved_BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build using shared libraries" FORCE)
-_add_subdirectory_no_tests(lib/libtommath)
+_add_subdirectory_no_tests(external/libtommath)
 set(BUILD_SHARED_LIBS "${_saved_BUILD_SHARED_LIBS}" CACHE BOOL "Build using shared libraries" FORCE)
-set(libtommath_DIR "${CMAKE_BINARY_DIR}/lib/libtommath")
+set(libtommath_DIR "${CMAKE_BINARY_DIR}/external/libtommath")
 
 # Workarounds for libtommath build under our global -O0/-g settings.
 if(TARGET libtommath)
@@ -346,7 +346,7 @@ if(TARGET libtommath)
 endif()
 
 # Add libtomcrypt submodule.
-_add_subdirectory_no_tests(lib/libtomcrypt)
+_add_subdirectory_no_tests(external/libtomcrypt)
 target_compile_definitions(libtomcrypt PRIVATE
     USE_LTM
     LTM_DESC
@@ -372,7 +372,7 @@ target_compile_definitions(libtomcrypt PRIVATE
 # Add noise-c submodule with crypto backends disabled.
 set(USE_LIBSODIUM OFF CACHE BOOL "" FORCE)
 set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
-_add_subdirectory_no_tests(lib/noise-c)
+_add_subdirectory_no_tests(external/noise-c)
 set_target_properties(noiseprotocol PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_sources(noiseprotocol PRIVATE ${CMAKE_SOURCE_DIR}/cmake/newhope_abs_shim.c)
 
@@ -393,7 +393,7 @@ if(LIBP2P_VENDOR_PICOQUIC)
     set(BUILD_LOGREADER OFF CACHE BOOL "Build picoquic log reader" FORCE)
     set(WITH_OPENSSL ON CACHE BOOL "Use OpenSSL backend for picoquic" FORCE)
     set(WITH_MBEDTLS OFF CACHE BOOL "Disable mbedTLS backend for picoquic" FORCE)
-    _add_subdirectory_no_tests(lib/picoquic)
+    _add_subdirectory_no_tests(external/picoquic)
     # Restore pkg-config search path
     set(ENV{PKG_CONFIG_PATH} "${_SAVED_PKG_CONFIG_PATH}")
     set(ENV{PKG_CONFIG_LIBDIR} "${_SAVED_PKG_CONFIG_LIBDIR}")
@@ -427,7 +427,7 @@ if (TARGET noiseprotocol)
     # For the original NewHope source file, keep the macro but suppress the
     # inline implementation to avoid duplicate definitions.
     set_source_files_properties(
-        ${PROJECT_SOURCE_DIR}/lib/noise-c/src/crypto/newhope/error_correction.c
+        ${PROJECT_SOURCE_DIR}/external/noise-c/src/crypto/newhope/error_correction.c
         PROPERTIES
             COMPILE_DEFINITIONS "NEWHOPE_ABS_NO_IMPL"
     )
@@ -436,7 +436,7 @@ endif()
 # ---------------------------------------------------------------------------
 # noise-protoc host generator for gossipsub protobuf schemas
 # ---------------------------------------------------------------------------
-set(NOISE_PROTOC_DIR ${PROJECT_SOURCE_DIR}/lib/noise-c/tools/protoc)
+set(NOISE_PROTOC_DIR ${PROJECT_SOURCE_DIR}/external/noise-c/tools/protoc)
 set(NOISE_PROTOC_BUILD_DIR ${CMAKE_BINARY_DIR}/noise_protoc)
 file(MAKE_DIRECTORY ${NOISE_PROTOC_BUILD_DIR})
 
@@ -482,7 +482,7 @@ add_custom_target(gossipsub_proto
 )
 
 # Add libeddsa submodule.
-_add_subdirectory_no_tests(lib/libeddsa)
+_add_subdirectory_no_tests(external/libeddsa)
 
 # ---------------------------------------------
 # Helper function for adding a module.
@@ -684,7 +684,7 @@ add_executable(gossipsub-interop
 target_link_libraries(gossipsub-interop PRIVATE libp2p_unified protocol_gossipsub)
 target_include_directories(gossipsub-interop PRIVATE
     ${PROJECT_SOURCE_DIR}/src/interop/gossipsub
-    ${PROJECT_SOURCE_DIR}/lib/libeddsa/lib
+    ${PROJECT_SOURCE_DIR}/external/libeddsa/lib
 )
 if(UNIX)
     target_link_libraries(gossipsub-interop PRIVATE m)
@@ -1019,18 +1019,18 @@ target_link_libraries(multibase PRIVATE
 # wjcryptlib
 # ---------------------------------------------
 add_library(wjcryptlib
-    lib/wjcryptlib/lib/WjCryptLib_Sha256.c
-    lib/wjcryptlib/lib/WjCryptLib_Sha512.c
+    external/wjcryptlib/lib/WjCryptLib_Sha256.c
+    external/wjcryptlib/lib/WjCryptLib_Sha512.c
 )
-target_include_directories(wjcryptlib PUBLIC ${PROJECT_SOURCE_DIR}/lib/wjcryptlib/lib)
+target_include_directories(wjcryptlib PUBLIC ${PROJECT_SOURCE_DIR}/external/wjcryptlib/lib)
 
 # ---------------------------------------------
 # sha3
 # ---------------------------------------------
 add_library(sha3
-    lib/sha3/sha3.c
+    external/sha3/sha3.c
 )
-target_include_directories(sha3 PUBLIC ${PROJECT_SOURCE_DIR}/lib/sha3/lib)
+target_include_directories(sha3 PUBLIC ${PROJECT_SOURCE_DIR}/external/sha3/lib)
 
 
 # ---------------------------------------------
@@ -1528,7 +1528,7 @@ set_tests_properties(TestMplexBasic PROPERTIES TIMEOUT 20)
 add_executable(test_mplex_backpressure
     tests/protocol/muxer/mplex/test_mplex_backpressure.c
 )
-target_include_directories(test_mplex_backpressure PRIVATE ${PROJECT_SOURCE_DIR}/lib/noise-c/include)
+target_include_directories(test_mplex_backpressure PRIVATE ${PROJECT_SOURCE_DIR}/external/noise-c/include)
 target_link_libraries(test_mplex_backpressure PRIVATE
     protocol_mplex
     protocol_tcp
@@ -1694,7 +1694,7 @@ if (TARGET test_protocol_noise)
             Threads::Threads
     )
     # Provide access to eddsa public headers for the test source
-    target_include_directories(test_protocol_noise PRIVATE ${PROJECT_SOURCE_DIR}/lib/libeddsa/lib)
+    target_include_directories(test_protocol_noise PRIVATE ${PROJECT_SOURCE_DIR}/external/libeddsa/lib)
 
     # Noise handshake test suite can take a while on Windows CI – allow 60 s.
     set_tests_properties(Testprotocol_noise PROPERTIES TIMEOUT 60)
@@ -1723,5 +1723,5 @@ if (TARGET test_transport_upgrader)
             peer_id_ed25519
             Threads::Threads
     )
-    target_include_directories(test_transport_upgrader PRIVATE ${PROJECT_SOURCE_DIR}/lib/libeddsa/lib)
+    target_include_directories(test_transport_upgrader PRIVATE ${PROJECT_SOURCE_DIR}/external/libeddsa/lib)
 endif()

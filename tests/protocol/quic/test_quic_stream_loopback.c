@@ -38,7 +38,7 @@
 #include "picoquic_set_textlog.h"
 #include "picoquic_utils.h"
 #include "picotls.h"
-#include "lib/picoquic/loglib/autoqlog.h"
+#include "external/picoquic/loglib/autoqlog.h"
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>

@@ -7,21 +7,23 @@ if(TARGET libtommath)
     set(libtommath_LIBRARIES libtommath)
     get_target_property(libtommath_INCLUDE_DIRS libtommath INTERFACE_INCLUDE_DIRECTORIES)
     if(NOT libtommath_INCLUDE_DIRS)
-        set(libtommath_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/lib/libtommath)
+        set(libtommath_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/external/libtommath)
     endif()
     return()
 endif()
 
 # Find the headers
 find_path(libtommath_INCLUDE_DIR tommath.h
-    PATHS ${CMAKE_SOURCE_DIR}/lib/libtommath
+    PATHS ${CMAKE_SOURCE_DIR}/external/libtommath
     NO_DEFAULT_PATH
 )
 
 # Find the library
 find_library(libtommath_LIBRARY
     NAMES tommath libtommath
-    PATHS ${CMAKE_BINARY_DIR}/lib
+    PATHS
+        ${CMAKE_BINARY_DIR}/external/libtommath
+        ${CMAKE_BINARY_DIR}/lib
     NO_DEFAULT_PATH
 )
 

@@ -20,6 +20,6 @@
 #define x25519_make_key ltc_x25519_make_key
 #define x25519_shared_secret ltc_x25519_shared_secret
 
-#include "../../lib/libtomcrypt/src/headers/tomcrypt.h"
+#include "../../external/libtomcrypt/src/headers/tomcrypt.h"
 
 #endif /* LIBP2P_CRYPTO_LTC_COMPAT_H */

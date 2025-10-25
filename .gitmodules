@@ -1,27 +1,27 @@
-[submodule "lib/secp256k1"]
-	path = lib/secp256k1
+[submodule "external/secp256k1"]
+	path = external/secp256k1
 	url = https://github.com/bitcoin-core/secp256k1.git
-[submodule "lib/wjcryptlib"]
-	path = lib/wjcryptlib
+[submodule "external/wjcryptlib"]
+	path = external/wjcryptlib
 	url = https://github.com/WaterJuice/WjCryptLib.git
-[submodule "lib/sha3"]
-	path = lib/sha3
+[submodule "external/sha3"]
+	path = external/sha3
 	url = https://github.com/pablotron/sha3.git
-[submodule "lib/libtomcrypt"]
-	path = lib/libtomcrypt
+[submodule "external/libtomcrypt"]
+	path = external/libtomcrypt
 	url = https://github.com/libtom/libtomcrypt.git
-[submodule "lib/libtommath"]
-	path = lib/libtommath
+[submodule "external/libtommath"]
+	path = external/libtommath
 	url = https://github.com/libtom/libtommath.git
-[submodule "lib/c20p1305"]
-	path = lib/c20p1305
+[submodule "external/c20p1305"]
+	path = external/c20p1305
 	url = https://github.com/wg/c20p1305.git
-[submodule "lib/libeddsa"]
-	path = lib/libeddsa
+[submodule "external/libeddsa"]
+	path = external/libeddsa
 	url = https://github.com/phlay/libeddsa.git
-[submodule "lib/noise-c"]
-	path = lib/noise-c
+[submodule "external/noise-c"]
+	path = external/noise-c
 	url = https://github.com/uink45/noise-c.git
-[submodule "lib/picoquic"]
-	path = lib/picoquic
+[submodule "external/picoquic"]
+	path = external/picoquic
 	url = https://github.com/Pier-Two/picoquic.git

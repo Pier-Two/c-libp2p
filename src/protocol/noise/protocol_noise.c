@@ -10,9 +10,9 @@
 #include <string.h>
 #include <time.h>
 #define PEER_ID_ED25519_KEY_TYPE 1
-#include "../../../lib/libeddsa/lib/eddsa.h"
-#include "../../../lib/secp256k1/include/secp256k1.h"
-#include "../../../lib/wjcryptlib/lib/WjCryptLib_Sha256.h"
+#include "../../../external/libeddsa/lib/eddsa.h"
+#include "../../../external/secp256k1/include/secp256k1.h"
+#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "peer_id/peer_id_secp256k1.h"
 #define PEER_ID_RSA_KEY_TYPE 0
