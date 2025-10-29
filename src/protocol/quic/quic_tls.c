@@ -457,16 +457,23 @@ static int sign_identity_key(uint64_t key_type,
             secp256k1_context_destroy(ctx);
             return LIBP2P_ERR_INTERNAL;
         }
-        uint8_t *sig = (uint8_t *)malloc(64);
+        size_t der_len = 72;
+        uint8_t der_buf[72];
+        if (!secp256k1_ecdsa_signature_serialize_der(ctx, der_buf, &der_len, &sig_obj))
+        {
+            secp256k1_context_destroy(ctx);
+            return LIBP2P_ERR_INTERNAL;
+        }
+        uint8_t *sig = (uint8_t *)malloc(der_len);
         if (!sig)
         {
             secp256k1_context_destroy(ctx);
             return LIBP2P_ERR_INTERNAL;
         }
-        secp256k1_ecdsa_signature_serialize_compact(ctx, sig, &sig_obj);
+        memcpy(sig, der_buf, der_len);
         secp256k1_context_destroy(ctx);
         *out_sig = sig;
-        *out_sig_len = 64;
+        *out_sig_len = der_len;
         return LIBP2P_ERR_OK;
     }
 
