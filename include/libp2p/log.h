@@ -20,6 +20,7 @@ typedef enum
 /* Runtime controls */
 void libp2p_log_set_level(libp2p_log_level_t lvl);
 void libp2p_log_set_writer(void (*writer)(libp2p_log_level_t lvl, const char *msg, void *ud), void *ud);
+int libp2p_log_is_enabled(libp2p_log_level_t lvl);
 
 /* Internal convenience for library use; applications shouldn't rely on it. */
 void libp2p_logf(libp2p_log_level_t lvl, const char *fmt, ...);

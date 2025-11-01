@@ -1,3 +1,7 @@
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "gossipsub_host_events.h"
 
 #include "gossipsub_peer.h"
@@ -101,6 +105,10 @@ void gossipsub_on_stream_data(struct libp2p_stream *s, const uint8_t *data, size
         .peer = entry
     };
 
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "stream data entry=%p len=%zu",
+            (void *)entry,
+            len);
     libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&entry->decoder, data, len, gossipsub_decoder_cb, &ctx);
     if (rc != LIBP2P_ERR_OK)
     {

@@ -15,12 +15,135 @@
 
 #include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
 
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "libp2p/log.h"
 #include "libp2p/runtime.h"
 #include "../../../host/host_internal.h"
 #include "../proto/gossipsub_proto.h"
 
 #define GOSSIPSUB_MODULE "gossipsub"
+
+#if LIBP2P_LOGGING_ENABLED
+static void gossipsub_trace_publish_frame(const libp2p_gossipsub_message_t *msg,
+                                          const uint8_t *frame,
+                                          size_t frame_len,
+                                          const uint8_t *message_id,
+                                          size_t message_id_len)
+{
+    if (!frame || frame_len == 0)
+        return;
+
+    libp2p_log_level_t log_level = LIBP2P_LOG_TRACE;
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+    {
+        log_level = LIBP2P_LOG_TRACE;
+    }
+    else if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+    {
+        log_level = LIBP2P_LOG_DEBUG;
+    }
+    else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
+    {
+        log_level = LIBP2P_LOG_INFO;
+    }
+    else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
+    {
+        log_level = LIBP2P_LOG_WARN;
+    }
+    else
+    {
+        return;
+    }
+
+    static const char hex_digits[] = "0123456789abcdef";
+    const size_t preview_cap = 48;
+    char preview[(preview_cap * 2) + 4];
+    size_t preview_len = frame_len < preview_cap ? frame_len : preview_cap;
+    for (size_t i = 0; i < preview_len; ++i)
+    {
+        preview[(i * 2) + 0] = hex_digits[(frame[i] >> 4) & 0xF];
+        preview[(i * 2) + 1] = hex_digits[frame[i] & 0xF];
+    }
+    size_t preview_idx = preview_len * 2;
+    preview[preview_idx] = '\0';
+    if (frame_len > preview_cap)
+    {
+        preview[preview_idx++] = '.';
+        preview[preview_idx++] = '.';
+        preview[preview_idx++] = '.';
+        preview[preview_idx] = '\0';
+    }
+
+    char msg_id_hex[65];
+    const int has_msg_id = (message_id && message_id_len && message_id_len <= 32);
+    if (has_msg_id)
+    {
+        for (size_t i = 0; i < message_id_len; ++i)
+        {
+            msg_id_hex[(i * 2) + 0] = hex_digits[(message_id[i] >> 4) & 0xF];
+            msg_id_hex[(i * 2) + 1] = hex_digits[message_id[i] & 0xF];
+        }
+        msg_id_hex[message_id_len * 2] = '\0';
+    }
+
+    const char *topic = (msg && msg->topic.topic) ? msg->topic.topic : "(null)";
+    size_t data_len = msg ? msg->data_len : 0;
+    size_t seqno_len = msg ? msg->seqno_len : 0;
+
+    size_t publish_count = 0;
+    size_t encoded_data_len = 0;
+    const char *encoded_topic = NULL;
+    libp2p_gossipsub_RPC *decoded = NULL;
+    libp2p_err_t decode_rc = libp2p_gossipsub_rpc_decode_frame(frame, frame_len, &decoded);
+    if (decode_rc == LIBP2P_ERR_OK && decoded)
+    {
+        publish_count = libp2p_gossipsub_RPC_count_publish(decoded);
+        if (publish_count > 0)
+        {
+            libp2p_gossipsub_Message *first = libp2p_gossipsub_RPC_get_at_publish(decoded, 0);
+            if (first)
+            {
+                encoded_data_len = libp2p_gossipsub_Message_get_size_data(first);
+                encoded_topic = libp2p_gossipsub_Message_get_topic(first);
+            }
+        }
+    }
+
+    LP_LOGF(log_level,
+            GOSSIPSUB_MODULE,
+            "publish frame topic=%s encoded_topic=%s frame_len=%zu publish_count=%zu data_len=%zu seqno_len=%zu "
+            "msg_id=%s preview=%s decode_rc=%d encoded_data_len=%zu",
+            topic,
+            encoded_topic ? encoded_topic : "(null)",
+            frame_len,
+            publish_count,
+            data_len,
+            seqno_len,
+            has_msg_id ? msg_id_hex : "(none)",
+            preview,
+            decode_rc,
+            encoded_data_len);
+
+    if (decoded)
+        libp2p_gossipsub_RPC_free(decoded);
+}
+#else
+static void gossipsub_trace_publish_frame(const libp2p_gossipsub_message_t *msg,
+                                          const uint8_t *frame,
+                                          size_t frame_len,
+                                          const uint8_t *message_id,
+                                          size_t message_id_len)
+{
+    (void)msg;
+    (void)frame;
+    (void)frame_len;
+    (void)message_id;
+    (void)message_id_len;
+}
+#endif
 
 typedef struct gossipsub_async_task
 {
@@ -485,6 +608,8 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
         }
         frame = encoded_frame;
     }
+
+    gossipsub_trace_publish_frame(&ctx->message, frame, frame_len, message_id, message_id_len);
 
     int duplicate = 0;
     if (message_id && message_id_len)

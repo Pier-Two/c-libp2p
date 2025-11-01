@@ -1,4 +1,7 @@
 #include "transport/listener.h"
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
 #include "libp2p/log.h"
 
 #include "quic_listener.h"
@@ -6,9 +9,14 @@
 
 #include "libp2p/errors.h"
 
+#include <inttypes.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "multiformats/multiaddr/multiaddr.h"
+#include "multiformats/multicodec/multicodec_codes.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -68,6 +76,98 @@ struct quic_listener_ctx
     _Atomic int closing;
     _Atomic int loop_stop;
 };
+
+static bool multiaddr_is_unspecified_or_loopback(const multiaddr_t *addr)
+{
+    if (!addr)
+        return false;
+    uint64_t proto = 0;
+    if (multiaddr_get_protocol_code(addr, 0, &proto) != MULTIADDR_SUCCESS)
+        return false;
+    if (proto == MULTICODEC_IP4)
+    {
+        uint8_t bytes[4] = {0};
+        size_t len = sizeof(bytes);
+        if (multiaddr_get_address_bytes(addr, 0, bytes, &len) != MULTIADDR_SUCCESS || len != sizeof(bytes))
+            return false;
+        if ((bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0) ||
+            (bytes[0] == 127 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 1))
+            return true;
+    }
+    else if (proto == MULTICODEC_IP6)
+    {
+        uint8_t bytes[16] = {0};
+        size_t len = sizeof(bytes);
+        if (multiaddr_get_address_bytes(addr, 0, bytes, &len) != MULTIADDR_SUCCESS || len != sizeof(bytes))
+            return false;
+        bool all_zero = true;
+        bool loopback = true;
+        for (size_t i = 0; i < len; i++)
+        {
+            if (bytes[i] != 0)
+            {
+                all_zero = false;
+                if (i != len - 1 || bytes[i] != 1)
+                    loopback = false;
+            }
+            else if (i == len - 1)
+            {
+                loopback = false;
+            }
+        }
+        if (all_zero || loopback)
+            return true;
+    }
+    return false;
+}
+
+static multiaddr_t *multiaddr_copy_without_quic(const multiaddr_t *addr)
+{
+    if (!addr)
+        return NULL;
+    int err = MULTIADDR_SUCCESS;
+    multiaddr_t *copy = multiaddr_copy(addr, &err);
+    if (!copy || err != MULTIADDR_SUCCESS)
+    {
+        if (copy)
+            multiaddr_free(copy);
+        return NULL;
+    }
+
+    size_t protocols = multiaddr_nprotocols(copy);
+    if (protocols == 0)
+        return copy;
+
+    uint64_t last_code = 0;
+    if (multiaddr_get_protocol_code(copy, protocols - 1, &last_code) != MULTIADDR_SUCCESS)
+        return copy;
+
+    if (last_code == MULTICODEC_QUIC || last_code == MULTICODEC_QUIC_V1)
+    {
+        const char *suffix = (last_code == MULTICODEC_QUIC) ? "/quic" : "/quic_v1";
+        int dec_err = MULTIADDR_SUCCESS;
+        multiaddr_t *suffix_ma = multiaddr_new_from_str(suffix, &dec_err);
+        if (!suffix_ma || dec_err != MULTIADDR_SUCCESS)
+        {
+            if (suffix_ma)
+                multiaddr_free(suffix_ma);
+            multiaddr_free(copy);
+            return NULL;
+        }
+        multiaddr_t *decapped = multiaddr_decapsulate(copy, suffix_ma, &dec_err);
+        multiaddr_free(suffix_ma);
+        multiaddr_free(copy);
+        if (!decapped || dec_err != MULTIADDR_SUCCESS)
+        {
+            if (decapped)
+                multiaddr_free(decapped);
+            return NULL;
+        }
+        copy = decapped;
+    }
+
+    return copy;
+}
 
 static void quic_listener_wake(quic_listener_ctx_t *ctx)
 {
@@ -316,6 +416,13 @@ static libp2p_listener_err_t quic_listener_local_addr(libp2p_listener_t *l, mult
     pthread_mutex_lock(&ctx->lock);
     multiaddr_t *base = ctx->bound_addr ? multiaddr_copy(ctx->bound_addr, NULL) : NULL;
     pthread_mutex_unlock(&ctx->lock);
+
+    if ((!base || multiaddr_is_unspecified_or_loopback(base)) && ctx->requested_addr)
+    {
+        if (base)
+            multiaddr_free(base);
+        base = multiaddr_copy_without_quic(ctx->requested_addr);
+    }
 
     if (!base)
         return LIBP2P_LISTENER_ERR_INTERNAL;
@@ -665,6 +772,21 @@ void quic_listener_handle_connection_closed(quic_listener_ctx_t *ctx, picoquic_c
 {
     if (!ctx || !cnx)
         return;
+    picoquic_state_enum st = picoquic_get_cnx_state(cnx);
+    uint64_t local_err = picoquic_get_local_error(cnx);
+    uint64_t remote_err = picoquic_get_remote_error(cnx);
+    uint64_t app_err = picoquic_get_application_error(cnx);
+    LP_LOGW("QUIC",
+            "listener connection_closed cnx=%p state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
+            (void *)cnx,
+            libp2p__quic_state_name(st),
+            (int)st,
+            picoquic_is_client(cnx),
+            local_err,
+            picoquic_error_name(local_err),
+            remote_err,
+            picoquic_error_name(remote_err),
+            app_err);
     quic_listener_remove_verified_peer(ctx, quic_listener_tls_handle(cnx));
 }
 
@@ -814,7 +936,7 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     /* Ensure the context accepts inbound connections now that TLS material is installed. */
     picoquic_enforce_client_only(quic, 0);
     picoquic_set_client_authentication(quic, 1);
-    picoquic_set_textlog(quic, "-");
+    libp2p__quic_configure_textlog(quic);
     picoquic_set_default_padding(quic, 0, 1200);
     quic->dont_coalesce_init = 1; /* keep Initial datagrams padded instead of relying on coalescing */
 

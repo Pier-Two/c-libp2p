@@ -1,3 +1,7 @@
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "gossipsub_peer.h"
 
 #include <stdlib.h>
@@ -245,6 +249,10 @@ gossipsub_peer_entry_t *gossipsub_peer_find_or_add_locked(libp2p_gossipsub_t *gs
     entry->connected = 0;
     entry->score = 0.0;
     libp2p_gossipsub_rpc_decoder_init(&entry->decoder);
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "peer entry initialized entry=%p decoder_max=%zu",
+            (void *)entry,
+            entry->decoder.max_frame_len);
     entry->next = gs->peers;
     gs->peers = entry;
     return entry;
@@ -279,6 +287,10 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
     entry->stream = s;
     entry->write_backpressure = 0;
     libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "peer attach stream entry=%p decoder_max=%zu",
+            (void *)entry,
+            entry->decoder.max_frame_len);
     if (entry->explicit_peering)
         gossipsub_peer_explicit_cancel_timer_locked(gs, entry);
     if (s)
@@ -487,6 +499,77 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     while (entry->stream && entry->sendq_head)
     {
         gossipsub_sendq_item_t *item = entry->sendq_head;
+        if (item && item->payload && item->payload_len && item->payload_sent == 0 && item->header_sent == 0)
+        {
+            libp2p_log_level_t log_level;
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                log_level = LIBP2P_LOG_TRACE;
+            else if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+                log_level = LIBP2P_LOG_DEBUG;
+            else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
+                log_level = LIBP2P_LOG_INFO;
+            else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
+                log_level = LIBP2P_LOG_WARN;
+            else
+                log_level = (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1);
+
+            if (log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
+            {
+                static const char hex_digits[] = "0123456789abcdef";
+                const size_t preview_cap = 64;
+                uint8_t combined[preview_cap];
+                size_t combined_len = 0;
+                size_t header_copy = item->header_len < preview_cap ? item->header_len : preview_cap;
+                if (header_copy)
+                {
+                    memcpy(combined, item->header, header_copy);
+                    combined_len += header_copy;
+                }
+                if (combined_len < preview_cap)
+                {
+                    size_t remaining = preview_cap - combined_len;
+                    size_t payload_copy = item->payload_len < remaining ? item->payload_len : remaining;
+                    if (payload_copy)
+                    {
+                        memcpy(combined + combined_len, item->payload, payload_copy);
+                        combined_len += payload_copy;
+                    }
+                }
+                char preview[(preview_cap * 2) + 4];
+                size_t preview_idx = 0;
+                for (size_t i = 0; i < combined_len; ++i)
+                {
+                    preview[preview_idx++] = hex_digits[(combined[i] >> 4) & 0xF];
+                    preview[preview_idx++] = hex_digits[combined[i] & 0xF];
+                }
+                preview[preview_idx] = '\0';
+                if ((item->header_len + item->payload_len) > preview_cap)
+                {
+                    preview[preview_idx++] = '.';
+                    preview[preview_idx++] = '.';
+                    preview[preview_idx++] = '.';
+                    preview[preview_idx] = '\0';
+                }
+
+                char peer_buf[128];
+                const char *peer_repr = "-";
+                if (entry->peer)
+                {
+                    int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+                    if (rc > 0)
+                        peer_repr = peer_buf;
+                }
+
+                LP_LOGF(log_level,
+                        GOSSIPSUB_MODULE,
+                        "flush frame peer=%s header_len=%zu payload_len=%zu preview=%s",
+                        peer_repr,
+                        item->header_len,
+                        item->payload_len,
+                        preview);
+            }
+        }
+
         while (item && item->header_sent < item->header_len)
         {
             ssize_t n = libp2p_stream_write(entry->stream, item->header + item->header_sent, item->header_len - item->header_sent);
@@ -603,6 +686,79 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
 {
     if (!gs || !entry || !frame)
         return LIBP2P_ERR_NULL_PTR;
+
+    libp2p_log_level_t log_level = (libp2p_log_is_enabled(LIBP2P_LOG_TRACE)
+                                        ? LIBP2P_LOG_TRACE
+                                        : (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG)
+                                               ? LIBP2P_LOG_DEBUG
+                                               : (libp2p_log_is_enabled(LIBP2P_LOG_INFO)
+                                                      ? LIBP2P_LOG_INFO
+                                                      : (libp2p_log_is_enabled(LIBP2P_LOG_WARN)
+                                                             ? LIBP2P_LOG_WARN
+                                                             : (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1)))));
+    if (frame_len && log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
+    {
+        static const char hex_digits[] = "0123456789abcdef";
+        const size_t preview_cap = 64;
+        char preview[(preview_cap * 2) + 4];
+        size_t preview_len = frame_len < preview_cap ? frame_len : preview_cap;
+        for (size_t i = 0; i < preview_len; ++i)
+        {
+            preview[(i * 2) + 0] = hex_digits[(frame[i] >> 4) & 0xF];
+            preview[(i * 2) + 1] = hex_digits[frame[i] & 0xF];
+        }
+        size_t preview_idx = preview_len * 2;
+        preview[preview_idx] = '\0';
+        if (frame_len > preview_cap)
+        {
+            preview[preview_idx++] = '.';
+            preview[preview_idx++] = '.';
+            preview[preview_idx++] = '.';
+            preview[preview_idx] = '\0';
+        }
+
+        char peer_buf[128];
+        const char *peer_repr = "-";
+        if (entry->peer)
+        {
+            int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+            if (rc > 0)
+                peer_repr = peer_buf;
+        }
+
+        libp2p_gossipsub_RPC *decoded = NULL;
+        libp2p_err_t decode_rc = libp2p_gossipsub_rpc_decode_frame(frame, frame_len, &decoded);
+        size_t publish_count = 0;
+        size_t data_len = 0;
+        const char *topic_name = NULL;
+        if (decode_rc == LIBP2P_ERR_OK && decoded)
+        {
+            publish_count = libp2p_gossipsub_RPC_count_publish(decoded);
+            if (publish_count > 0)
+            {
+                libp2p_gossipsub_Message *first = libp2p_gossipsub_RPC_get_at_publish(decoded, 0);
+                if (first)
+                {
+                    data_len = libp2p_gossipsub_Message_get_size_data(first);
+                    topic_name = libp2p_gossipsub_Message_get_topic(first);
+                }
+            }
+        }
+
+        LP_LOGF(log_level,
+                GOSSIPSUB_MODULE,
+                "enqueue frame peer=%s frame_len=%zu topics=%zu first_topic=%s first_data_len=%zu preview=%s decode_rc=%d",
+                peer_repr,
+                frame_len,
+                publish_count,
+                topic_name ? topic_name : "(null)",
+                data_len,
+                preview,
+                decode_rc);
+
+        if (decoded)
+            libp2p_gossipsub_RPC_free(decoded);
+    }
 
     gossipsub_sendq_item_t *item = gossipsub_sendq_item_new(frame, frame_len);
     if (!item)

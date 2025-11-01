@@ -16,6 +16,11 @@ void libp2p_log_set_writer(void (*writer)(libp2p_log_level_t lvl, const char *ms
     g_ud = ud;
 }
 
+int libp2p_log_is_enabled(libp2p_log_level_t lvl)
+{
+    return lvl <= g_level;
+}
+
 void libp2p_logf(libp2p_log_level_t lvl, const char *fmt, ...)
 {
     if (lvl > g_level)

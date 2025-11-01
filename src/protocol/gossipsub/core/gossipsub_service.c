@@ -1,3 +1,7 @@
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "gossipsub_internal.h"
 #include "gossipsub_heartbeat.h"
 #include "gossipsub_host_events.h"
@@ -69,6 +73,20 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
         gossipsub_rpc_parsed_clear(&parsed);
         libp2p_gossipsub_RPC_free(rpc);
         return rc;
+    }
+
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+    {
+        size_t publish_count = libp2p_gossipsub_RPC_has_publish(rpc) ? libp2p_gossipsub_RPC_count_publish(rpc) : 0;
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "rpc frame entry=%p len=%zu publish=%zu ihave=%zu iwant=%zu graft=%zu prune=%zu",
+                (void *)entry,
+                frame_len,
+                publish_count,
+                parsed.ihave_len,
+                parsed.iwant_len,
+                parsed.graft_len,
+                parsed.prune_len);
     }
 
     rc = gossipsub_propagation_handle_subscriptions(gs, entry, parsed.subscriptions, parsed.subscriptions_len);
@@ -887,6 +905,7 @@ libp2p_err_t libp2p_gossipsub_peering_add(libp2p_gossipsub_t *gs, const peer_id_
         entry->peer = dup;
         entry->explicit_peering = 1;
         entry->connected = 0;
+        libp2p_gossipsub_rpc_decoder_init(&entry->decoder);
         entry->next = gs->peers;
         gs->peers = entry;
     }

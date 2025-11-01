@@ -20,6 +20,7 @@
 #include "peer_id/peer_id_secp256k1.h"
 #include "protocol/identify/protocol_identify.h"
 #include "libp2p/stream.h"
+#include "libp2p/stream_internal.h"
 
 typedef struct identify_srv_ctx
 {
@@ -27,27 +28,44 @@ typedef struct identify_srv_ctx
     struct libp2p_host *host;
 } identify_srv_ctx_t;
 
-static void *identify_srv_thread(void *arg)
+static void identify_srv_handle(identify_srv_ctx_t *ctx)
 {
-    identify_srv_ctx_t *ctx = (identify_srv_ctx_t *)arg;
     if (!ctx)
-        return NULL;
+        return;
     libp2p_stream_t *s = ctx->s;
     struct libp2p_host *host = ctx->host;
-    free(ctx);
+    const peer_id_t *remote = libp2p_stream_remote_peer(s);
+    char peer_buf[128] = {0};
+    if (remote && peer_id_to_string(remote, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) < 0)
+        peer_buf[0] = '\0';
+    const char *proto_id = libp2p_stream_protocol_id(s);
+    LIBP2P_TRACE("identify", "serving identify stream=%p peer=%s proto=%s", (void *)s, peer_buf, proto_id ? proto_id : "(unknown)");
 
     uint8_t *buf = NULL;
     size_t blen = 0;
     if (libp2p_identify_encode_local(host, s, 1, &buf, &blen) == 0 && buf && blen > 0)
     {
-        (void)libp2p_lp_send(s, buf, blen);
+        ssize_t written = libp2p_lp_send(s, buf, blen);
+        if (written < 0)
+        {
+            LIBP2P_TRACE("identify", "lp_send failed stream=%p rc=%zd proto=%s", (void *)s, written, proto_id ? proto_id : "(unknown)");
+        }
+        else
+        {
+            LIBP2P_TRACE("identify", "lp_send ok stream=%p bytes=%zd peer=%s", (void *)s, written, peer_buf);
+        }
+    }
+    else
+    {
+        LIBP2P_TRACE("identify", "encode failed stream=%p peer=%s", (void *)s, peer_buf);
     }
     free(buf);
     (void)libp2p_stream_close(s);
+    libp2p__stream_release_async(s);
     libp2p_stream_free(s);
     if (host)
         libp2p__worker_dec(host);
-    return NULL;
+    free(ctx);
 }
 
 static void identify_on_open(libp2p_stream_t *s, void *ud)
@@ -57,19 +75,19 @@ static void identify_on_open(libp2p_stream_t *s, void *ud)
         return;
     ctx->s = s;
     ctx->host = (struct libp2p_host *)ud;
-    pthread_t th;
+    if (!libp2p__stream_retain_async(s))
+    {
+        free(ctx);
+        if (s)
+        {
+            libp2p_stream_close(s);
+            libp2p_stream_free(s);
+        }
+        return;
+    }
     if (ctx->host)
         libp2p__worker_inc(ctx->host);
-    if (pthread_create(&th, NULL, identify_srv_thread, ctx) == 0)
-    {
-        pthread_detach(th);
-    }
-    else
-    {
-        if (ctx->host)
-            libp2p__worker_dec(ctx->host);
-        free(ctx);
-    }
+    identify_srv_handle(ctx);
 }
 
 int libp2p_identify_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server)
@@ -420,6 +438,7 @@ static void *identify_push_thread(void *arg)
     {
         LIBP2P_TRACE("identify_push", "stream_close rc=%d stream=%p", close_rc, (void *)s);
     }
+    libp2p__stream_release_async(s);
     libp2p_stream_free(s);
 
     if (host)
@@ -435,6 +454,18 @@ static void identify_push_on_open(libp2p_stream_t *s, void *ud)
         return;
     ctx->stream = s;
     ctx->host = (struct libp2p_host *)ud;
+    if (!libp2p__stream_retain_async(s))
+    {
+        if (ctx->host)
+            libp2p__worker_dec(ctx->host);
+        free(ctx);
+        if (s)
+        {
+            libp2p_stream_close(s);
+            libp2p_stream_free(s);
+        }
+        return;
+    }
     if (ctx->host)
         libp2p__worker_inc(ctx->host);
     libp2p_stream_set_read_interest(s, true);
@@ -446,10 +477,16 @@ static void identify_push_on_open(libp2p_stream_t *s, void *ud)
     }
     else
     {
+        libp2p__stream_release_async(s);
         if (ctx->host)
             libp2p__worker_dec(ctx->host);
         free(ctx);
         LIBP2P_TRACE("identify_push", "thread spawn failed stream=%p", (void *)s);
+        if (s)
+        {
+            libp2p_stream_close(s);
+            libp2p_stream_free(s);
+        }
     }
 }
 

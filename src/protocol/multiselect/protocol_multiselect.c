@@ -5,6 +5,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "libp2p/io.h"
 #include "libp2p/log.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
@@ -818,6 +822,41 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
 {
     if (!io || !supported)
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
+
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+    {
+        char scratch[512];
+        size_t off = 0;
+        scratch[0] = '\0';
+        for (size_t i = 0; supported[i] && off + 4 < sizeof(scratch); i++)
+        {
+            const char *pid = supported[i];
+            if (!pid)
+                continue;
+            size_t len = strlen(pid);
+            if (len == 0)
+                continue;
+            if (off > 0)
+            {
+                scratch[off++] = ',';
+                if (off < sizeof(scratch))
+                    scratch[off++] = ' ';
+            }
+            if (off + len >= sizeof(scratch))
+            {
+                size_t avail = sizeof(scratch) - off - 1;
+                memcpy(&scratch[off], pid, avail);
+                off += avail;
+                scratch[off++] = '+';
+                break;
+            }
+            memcpy(&scratch[off], pid, len);
+            off += len;
+        }
+        scratch[off < sizeof(scratch) ? off : sizeof(scratch) - 1] = '\0';
+        LP_LOGT("MULTISELECT", "listen: supported protocols: [%s]", scratch);
+    }
+
     libp2p_multiselect_config_t cfg = cfg_opt ? *cfg_opt : libp2p_multiselect_config_default();
     if (cfg.handshake_timeout_ms)
         libp2p_io_set_deadline(io, cfg.handshake_timeout_ms);
@@ -830,6 +869,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
         rc = recv_msg_io(io, &msg, deadline_ms);
         if (rc)
             goto fail;
+        if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+            LP_LOGT("MULTISELECT", "listen: received msg=\"%s\"", msg ? msg : "(null)");
         if (!header_received)
         {
             if (strcmp(msg, LIBP2P_MULTISELECT_PROTO_ID) != 0)
@@ -846,6 +887,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 if (rc)
                     goto fail;
                 header_sent = true;
+                if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                    LP_LOGT("MULTISELECT", "listen: sent protocol header");
             }
             continue;
         }
@@ -858,6 +901,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 if (rc)
                     goto fail;
                 header_sent = true;
+                if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                    LP_LOGT("MULTISELECT", "listen: re-sent protocol header");
             }
             continue;
         }
@@ -867,6 +912,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
             rc = cfg.enable_ls ? send_ls_response_io(io, supported) : send_msg_io(io, LIBP2P_MULTISELECT_NA, deadline_ms);
             if (rc)
                 goto fail;
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                LP_LOGT("MULTISELECT", "listen: served ls response");
             continue;
         }
         if (str_in_list(msg, supported))
@@ -877,6 +924,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 free(msg);
                 goto fail;
             }
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                LP_LOGT("MULTISELECT", "listen: accepted protocol \"%s\"", msg);
             if (accepted_out)
                 *accepted_out = msg;
             else
@@ -885,6 +934,8 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 libp2p_io_set_deadline(io, 0);
             return LIBP2P_MULTISELECT_OK;
         }
+        if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+            LP_LOGT("MULTISELECT", "listen: rejecting protocol \"%s\"", msg);
         rc = send_msg_io(io, LIBP2P_MULTISELECT_NA, deadline_ms);
         free(msg);
         if (rc)

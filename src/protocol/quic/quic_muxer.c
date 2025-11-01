@@ -3,6 +3,9 @@
 
 #include "../../host/host_internal.h"
 #include "libp2p/errors.h"
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
 #include "libp2p/io.h"
 #include "libp2p/log.h"
 #include "protocol/multiselect/protocol_multiselect.h"
@@ -1649,6 +1652,44 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
     libp2p_quic_session_t *session = (libp2p_quic_session_t *)callback_ctx;
     if (!session)
         return 0;
+
+    int log_state_event = (event == picoquic_callback_close ||
+                           event == picoquic_callback_application_close ||
+                           event == picoquic_callback_stateless_reset ||
+                           event == picoquic_callback_ready ||
+                           event == picoquic_callback_almost_ready ||
+                           event == picoquic_callback_version_negotiation);
+    if (log_state_event && cnx)
+    {
+        picoquic_state_enum st = picoquic_get_cnx_state(cnx);
+        uint64_t local_err = picoquic_get_local_error(cnx);
+        uint64_t remote_err = picoquic_get_remote_error(cnx);
+        uint64_t app_err = picoquic_get_application_error(cnx);
+        LP_LOGW("QUIC",
+                "session_event=%s session=%p cnx=%p stream=%" PRIu64 " state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
+                libp2p__quic_event_name(event),
+                (void *)session,
+                (void *)cnx,
+                stream_id,
+                libp2p__quic_state_name(st),
+                (int)st,
+                picoquic_is_client(cnx),
+                local_err,
+                picoquic_error_name(local_err),
+                remote_err,
+                picoquic_error_name(remote_err),
+                app_err);
+        if (st < picoquic_state_client_ready_start &&
+            (event == picoquic_callback_close || event == picoquic_callback_application_close || event == picoquic_callback_stateless_reset))
+        {
+            LP_LOGW("QUIC",
+                    "session event closed before ready session=%p cnx=%p state=%s(%d)",
+                    (void *)session,
+                    (void *)cnx,
+                    libp2p__quic_state_name(st),
+                    (int)st);
+        }
+    }
 
     int bufferable = (event == picoquic_callback_stream_data ||
                       event == picoquic_callback_stream_fin ||

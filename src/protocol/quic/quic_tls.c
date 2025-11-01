@@ -1,5 +1,9 @@
 #include "protocol/quic/protocol_quic.h"
 
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "libp2p/errors.h"
 #include "libp2p/log.h"
 #include "peer_id/peer_id_proto.h"
@@ -145,17 +149,29 @@ static int verify_signed_key(uint64_t key_type,
                              size_t msg_len)
 {
     if (!key_data || !sig || !msg)
+    {
+        LP_LOGE("quic-tls", "verify_signed_key received null input (key=%p sig=%p msg=%p)", (void *)key_data, (void *)sig, (void *)msg);
         return LIBP2P_ERR_NULL_PTR;
+    }
 
     if (ensure_ltc_ready() != LIBP2P_ERR_OK)
+    {
+        LP_LOGE("quic-tls", "verify_signed_key failed to initialise libtomcrypt (type=%" PRIu64 ")", key_type);
         return LIBP2P_ERR_INTERNAL;
+    }
 
     if (key_type == PEER_ID_ED25519_KEY_TYPE)
     {
         if (sig_len != 64)
+        {
+            LP_LOGW("quic-tls", "verify_signed_key ed25519 signature length mismatch len=%zu", sig_len);
             return LIBP2P_ERR_INTERNAL;
+        }
         if (!eddsa_verify(sig, key_data, msg, msg_len))
+        {
+            LP_LOGW("quic-tls", "verify_signed_key ed25519 signature verification failed");
             return LIBP2P_ERR_INTERNAL;
+        }
         return LIBP2P_ERR_OK;
     }
 
@@ -166,13 +182,17 @@ static int verify_signed_key(uint64_t key_type,
 
         secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
         if (!ctx)
+        {
+            LP_LOGE("quic-tls", "verify_signed_key secp256k1 context creation failed");
             return LIBP2P_ERR_INTERNAL;
+        }
 
         secp256k1_pubkey pk;
         int pk_ok = secp256k1_ec_pubkey_parse(ctx, &pk, key_data, key_len);
         if (!pk_ok)
         {
             secp256k1_context_destroy(ctx);
+            LP_LOGW("quic-tls", "verify_signed_key secp256k1 pubkey parse failed (len=%zu)", key_len);
             return LIBP2P_ERR_INTERNAL;
         }
 
@@ -184,11 +204,14 @@ static int verify_signed_key(uint64_t key_type,
         if (!sig_ok)
         {
             secp256k1_context_destroy(ctx);
+            LP_LOGW("quic-tls", "verify_signed_key secp256k1 signature parse failed (len=%zu)", sig_len);
             return LIBP2P_ERR_INTERNAL;
         }
 
         int ver_ok = secp256k1_ecdsa_verify(ctx, &sig_obj, hash.bytes, &pk);
         secp256k1_context_destroy(ctx);
+        if (!ver_ok)
+            LP_LOGW("quic-tls", "verify_signed_key secp256k1 signature verification failed");
         return ver_ok ? LIBP2P_ERR_OK : LIBP2P_ERR_INTERNAL;
     }
 
@@ -199,13 +222,19 @@ static int verify_signed_key(uint64_t key_type,
 
         rsa_key rsa;
         if (rsa_import(key_data, (unsigned long)key_len, &rsa) != CRYPT_OK)
+        {
+            LP_LOGW("quic-tls", "verify_signed_key rsa_import failed (len=%zu)", key_len);
             return LIBP2P_ERR_INTERNAL;
+        }
         int sha_idx = find_hash("sha256");
         int stat = 0;
         int rc = rsa_verify_hash_ex(sig, (unsigned long)sig_len, hash.bytes, sizeof(hash.bytes), LTC_PKCS_1_V1_5, sha_idx, 0, &stat, &rsa);
         rsa_free(&rsa);
         if (rc != CRYPT_OK || stat == 0)
+        {
+            LP_LOGW("quic-tls", "verify_signed_key RSA signature verification failed (rc=%d stat=%d)", rc, stat);
             return LIBP2P_ERR_INTERNAL;
+        }
         return LIBP2P_ERR_OK;
     }
 
@@ -216,15 +245,22 @@ static int verify_signed_key(uint64_t key_type,
 
         ecc_key ecdsa;
         if (ecc_import_openssl(key_data, (unsigned long)key_len, &ecdsa) != CRYPT_OK)
+        {
+            LP_LOGW("quic-tls", "verify_signed_key ecc_import_openssl failed (len=%zu)", key_len);
             return LIBP2P_ERR_INTERNAL;
+        }
         int stat = 0;
         int rc = ecc_verify_hash(sig, (unsigned long)sig_len, hash.bytes, sizeof(hash.bytes), &stat, &ecdsa);
         ecc_free(&ecdsa);
         if (rc != CRYPT_OK || stat == 0)
+        {
+            LP_LOGW("quic-tls", "verify_signed_key ECDSA verification failed (rc=%d stat=%d)", rc, stat);
             return LIBP2P_ERR_INTERNAL;
+        }
         return LIBP2P_ERR_OK;
     }
 
+    LP_LOGW("quic-tls", "verify_signed_key unsupported key type %" PRIu64, key_type);
     return LIBP2P_ERR_UNSUPPORTED;
 }
 
@@ -235,14 +271,21 @@ static int parse_signed_key(const ASN1_OCTET_STRING *raw, LIBP2P_TLS_SIGNED_KEY 
     const unsigned char *ptr = ASN1_STRING_get0_data(raw);
     long len = ASN1_STRING_length(raw);
     if (ptr == NULL || len <= 0)
+    {
+        LP_LOGW("quic-tls", "parse_signed_key invalid ASN1 data (ptr=%p len=%ld)", (const void *)ptr, len);
         return LIBP2P_ERR_INTERNAL;
+    }
     const unsigned char *tmp = ptr;
     LIBP2P_TLS_SIGNED_KEY *sk = d2i_LIBP2P_TLS_SIGNED_KEY(NULL, &tmp, len);
     if (!sk)
+    {
+        LP_LOGW("quic-tls", "parse_signed_key failed to decode signed key (len=%ld)", len);
         return LIBP2P_ERR_INTERNAL;
+    }
     if (tmp != ptr + len)
     {
         LIBP2P_TLS_SIGNED_KEY_free(sk);
+        LP_LOGW("quic-tls", "parse_signed_key trailing bytes (consumed=%td len=%ld)", (ptrdiff_t)(tmp - ptr), len);
         return LIBP2P_ERR_INTERNAL;
     }
     *out = sk;
@@ -982,6 +1025,12 @@ int libp2p_quic_tls_identity_from_certificate(const uint8_t *cert_der,
     OPENSSL_free(spki_der);
     if (verify_rc != LIBP2P_ERR_OK)
     {
+        LP_LOGW("quic-tls",
+                "verify_signed_key failed during certificate check (type=%" PRIu64 " key_len=%zu sig_len=%zu rc=%d)",
+                key_type,
+                raw_key_len,
+                signature_len,
+                verify_rc);
         LIBP2P_TLS_SIGNED_KEY_free(signed_key);
         X509_free(cert);
         return verify_rc;

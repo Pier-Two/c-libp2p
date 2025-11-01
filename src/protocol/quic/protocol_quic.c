@@ -3,6 +3,9 @@
 #include "quic_listener.h"
 
 #include "libp2p/errors.h"
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
 #include "libp2p/log.h"
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/multicodec/multicodec_codes.h"
@@ -63,6 +66,57 @@ static const uint16_t VERIFY_ALGOS[] = {
     PTLS_SIGNATURE_ECDSA_SECP256R1_SHA256,
     PTLS_SIGNATURE_RSA_PKCS1_SHA256,
     UINT16_MAX};
+
+static void quic_log_handshake_diag(const char *reason,
+                                    picoquic_cnx_t *cnx,
+                                    picoquic_state_enum st,
+                                    uint64_t local_err,
+                                    uint64_t remote_err)
+{
+    char initial_cid_buf[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1] = {0};
+    char local_cid_buf[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1] = {0};
+    char remote_cid_buf[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1] = {0};
+    char *remote_addr = NULL;
+    char *local_addr = NULL;
+
+    if (cnx)
+    {
+        picoquic_connection_id_t initial_cid = picoquic_get_initial_cnxid(cnx);
+        picoquic_connection_id_t local_cid = picoquic_get_local_cnxid(cnx);
+        picoquic_connection_id_t remote_cid = picoquic_get_remote_cnxid(cnx);
+
+        libp2p__quic_format_cid(&initial_cid, initial_cid_buf, sizeof(initial_cid_buf));
+        libp2p__quic_format_cid(&local_cid, local_cid_buf, sizeof(local_cid_buf));
+        libp2p__quic_format_cid(&remote_cid, remote_cid_buf, sizeof(remote_cid_buf));
+
+        struct sockaddr *sa_remote = NULL;
+        struct sockaddr *sa_local = NULL;
+        picoquic_get_peer_addr(cnx, &sa_remote);
+        picoquic_get_local_addr(cnx, &sa_local);
+        remote_addr = libp2p__quic_sockaddr_to_string(sa_remote);
+        local_addr = libp2p__quic_sockaddr_to_string(sa_local);
+    }
+
+    LP_LOGE("QUIC",
+            "%s state=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) "
+            "initial_cid=%s local_cid=%s remote_cid=%s local_addr=%s remote_addr=%s",
+            reason ? reason : "handshake diagnostic",
+            st,
+            local_err,
+            picoquic_error_name(local_err),
+            remote_err,
+            picoquic_error_name(remote_err),
+            initial_cid_buf[0] ? initial_cid_buf : "-",
+            local_cid_buf[0] ? local_cid_buf : "-",
+            remote_cid_buf[0] ? remote_cid_buf : "-",
+            local_addr ? local_addr : "-",
+            remote_addr ? remote_addr : "-");
+
+    if (remote_addr)
+        free(remote_addr);
+    if (local_addr)
+        free(local_addr);
+}
 
 int libp2p__quic_transport_copy_identity(quic_transport_ctx_t *ctx,
                                          uint8_t **out_key,
@@ -439,18 +493,15 @@ static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session
         {
             uint64_t local_err = picoquic_get_local_error(cnx);
             uint64_t remote_err = picoquic_get_remote_error(cnx);
-            LP_LOGE("QUIC", "handshake failed state=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s)",
-                    st,
-                    local_err,
-                    picoquic_error_name(local_err),
-                    remote_err,
-                    picoquic_error_name(remote_err));
+            quic_log_handshake_diag("handshake failed", cnx, st, local_err, remote_err);
             return LIBP2P_TRANSPORT_ERR_DIAL_FAIL;
         }
 
         if (picoquic_current_time() > deadline)
         {
-            LP_LOGE("QUIC", "handshake timeout state=%d", st);
+            uint64_t local_err = picoquic_get_local_error(cnx);
+            uint64_t remote_err = picoquic_get_remote_error(cnx);
+            quic_log_handshake_diag("handshake timeout", cnx, st, local_err, remote_err);
             return LIBP2P_TRANSPORT_ERR_TIMEOUT;
         }
 
@@ -480,6 +531,22 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
     if (cnx)
     {
+        picoquic_state_enum state_before = picoquic_get_cnx_state(cnx);
+        uint64_t local_err = picoquic_get_local_error(cnx);
+        uint64_t remote_err = picoquic_get_remote_error(cnx);
+        uint64_t app_err = picoquic_get_application_error(cnx);
+        LP_LOGW("QUIC",
+                "session_close begin session=%p cnx=%p state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
+                (void *)session,
+                (void *)cnx,
+                libp2p__quic_state_name(state_before),
+                (int)state_before,
+                picoquic_is_client(cnx),
+                local_err,
+                picoquic_error_name(local_err),
+                remote_err,
+                picoquic_error_name(remote_err),
+                app_err);
         (void)picoquic_close(cnx, 0);
         libp2p__quic_session_wake(session);
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
@@ -498,7 +565,21 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
             }
             elapsed = picoquic_current_time() - start;
         }
-        LP_LOGD("QUIC", "conn close wait finished state=%d elapsed_us=%" PRIu64, (int)st, elapsed);
+        uint64_t final_local = picoquic_get_local_error(cnx);
+        uint64_t final_remote = picoquic_get_remote_error(cnx);
+        uint64_t final_app = picoquic_get_application_error(cnx);
+        LP_LOGD("QUIC",
+                "session_close end session=%p cnx=%p state=%s(%d) elapsed_us=%" PRIu64 " local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
+                (void *)session,
+                (void *)cnx,
+                libp2p__quic_state_name(st),
+                (int)st,
+                elapsed,
+                final_local,
+                picoquic_error_name(final_local),
+                final_remote,
+                picoquic_error_name(final_remote),
+                final_app);
     }
     libp2p__quic_session_wake(session);
 }
@@ -746,7 +827,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     verify_ctx->conn = conn;
     picoquic_set_verify_certificate_callback(quic, &verify_ctx->super, quic_transport_verify_ctx_free);
     picoquic_set_client_authentication(quic, 1);
-    picoquic_set_textlog(quic, "-");
+    libp2p__quic_configure_textlog(quic);
     picoquic_set_default_padding(quic, 0, 1200);
     quic->dont_coalesce_init = 1; /* keep Initial datagrams padded instead of relying on coalescing */
 

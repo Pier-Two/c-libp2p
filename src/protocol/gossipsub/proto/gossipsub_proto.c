@@ -1,8 +1,13 @@
 #include "gossipsub_proto.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
 
 #include "libp2p/log.h"
 #include "libp2p/lpmsg.h"
@@ -134,6 +139,54 @@ libp2p_err_t libp2p_gossipsub_rpc_encode_publish(const libp2p_gossipsub_message_
     *out_len = encoded_len;
     buffer = NULL; /* ownership transferred */
     result = LIBP2P_ERR_OK;
+
+    if (encoded && encoded_len)
+    {
+        libp2p_log_level_t log_level;
+        if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+            log_level = LIBP2P_LOG_TRACE;
+        else if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+            log_level = LIBP2P_LOG_DEBUG;
+        else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
+            log_level = LIBP2P_LOG_INFO;
+        else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
+            log_level = LIBP2P_LOG_WARN;
+        else
+            log_level = (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1);
+
+        if (log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
+        {
+            static const char hex_digits[] = "0123456789abcdef";
+            const size_t preview_cap = 48;
+            char preview[(preview_cap * 2) + 4];
+            size_t preview_len = encoded_len < preview_cap ? encoded_len : preview_cap;
+            for (size_t i = 0; i < preview_len; ++i)
+            {
+                preview[(i * 2) + 0] = hex_digits[(encoded[i] >> 4) & 0xF];
+                preview[(i * 2) + 1] = hex_digits[encoded[i] & 0xF];
+            }
+            size_t preview_idx = preview_len * 2;
+            preview[preview_idx] = '\0';
+            if (encoded_len > preview_cap)
+            {
+                preview[preview_idx++] = '.';
+                preview[preview_idx++] = '.';
+                preview[preview_idx++] = '.';
+                preview[preview_idx] = '\0';
+            }
+
+            size_t from_len = (msg->from && msg->from->bytes) ? msg->from->size : 0;
+            LP_LOGF(log_level,
+                    GOSSIPSUB_PROTO_MODULE,
+                    "encode publish topic=%s data_len=%zu seqno_len=%zu from_len=%zu frame_len=%zu preview=%s",
+                    msg->topic.topic ? msg->topic.topic : "(null)",
+                    msg->data_len,
+                    msg->seqno_len,
+                    from_len,
+                    encoded_len,
+                    preview);
+        }
+    }
 
 cleanup:
     if (buffer)
@@ -274,6 +327,7 @@ void libp2p_gossipsub_rpc_decoder_init(libp2p_gossipsub_rpc_decoder_t *dec)
         return;
     memset(dec, 0, sizeof(*dec));
     dec->max_frame_len = GOSSIPSUB_RPC_DEFAULT_MAX;
+    LP_LOGT(GOSSIPSUB_PROTO_MODULE, "decoder init max=%zu", dec->max_frame_len);
 }
 
 void libp2p_gossipsub_rpc_decoder_reset(libp2p_gossipsub_rpc_decoder_t *dec)
@@ -371,7 +425,14 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
             if (!varint_is_minimal(frame_len64, consumed))
                 return LIBP2P_ERR_INTERNAL;
             if (frame_len64 > dec->max_frame_len || frame_len64 > SIZE_MAX)
+            {
+                LP_LOGW(GOSSIPSUB_PROTO_MODULE,
+                        "decoder frame too large (len=%" PRIu64 " max=%zu header_used=%zu)",
+                        frame_len64,
+                        dec->max_frame_len,
+                        dec->header_used);
                 return LIBP2P_ERR_MSG_TOO_LARGE;
+            }
 
             dec->frame_len = (size_t)frame_len64;
             dec->frame_used = 0;

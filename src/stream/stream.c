@@ -73,11 +73,17 @@ ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len)
     }
     if (!st->c)
     {
-        fprintf(stderr, "[STREAM] missing conn backend: stream=%p proto=%s has_ops=%d closed=%d\n",
+        void *proto_ptr = (void *)st->proto;
+        void *write_cb = st->has_ops ? (void *)st->ops.write : NULL;
+        const char *remote_addr = st->remote_addr_str ? st->remote_addr_str : "(unknown)";
+        fprintf(stderr,
+                "[STREAM] missing conn backend: stream=%p proto_ptr=%p remote_addr=%s has_ops=%d closed=%d write_cb=%p\n",
                 (void *)s,
-                st->proto ? st->proto : "(null)",
+                proto_ptr,
+                remote_addr,
                 st->has_ops,
-                st->closed);
+                st->closed,
+                write_cb);
         return LIBP2P_ERR_NULL_PTR;
     }
     {
