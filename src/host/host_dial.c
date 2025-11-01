@@ -520,9 +520,30 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         }
 
         libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+        int emit_ms_error = 1;
+        int proposals_only_idpush = 0;
         if (ms != LIBP2P_MULTISELECT_OK)
         {
             rc = libp2p_error_from_multiselect(ms);
+            if (ms == LIBP2P_MULTISELECT_ERR_UNAVAIL && proposals)
+            {
+                size_t proposal_count = 0;
+                proposals_only_idpush = 1;
+                for (const char *const *p = proposals; p && *p; ++p)
+                {
+                    proposal_count++;
+                    if (strcmp(*p, LIBP2P_IDENTIFY_PUSH_PROTO_ID) != 0)
+                    {
+                        proposals_only_idpush = 0;
+                        break;
+                    }
+                }
+                if (proposal_count == 0)
+                    proposals_only_idpush = 0;
+            }
+            if (proposals_only_idpush)
+                emit_ms_error = 0;
+            if (emit_ms_error)
             {
                 libp2p_event_t evt = {0};
                 evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
@@ -694,6 +715,23 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         return LIBP2P_ERR_CANCELED;
     }
     libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+    int emit_ms_error = 1;
+    if (ms == LIBP2P_MULTISELECT_ERR_UNAVAIL && proposals)
+    {
+        size_t proposal_count = 0;
+        int only_idpush = 1;
+        for (const char *const *p = proposals; p && *p; ++p)
+        {
+            proposal_count++;
+            if (strcmp(*p, LIBP2P_IDENTIFY_PUSH_PROTO_ID) != 0)
+            {
+                only_idpush = 0;
+                break;
+            }
+        }
+        if (proposal_count > 0 && only_idpush)
+            emit_ms_error = 0;
+    }
     if (ms != LIBP2P_MULTISELECT_OK)
     {
         libp2p_io_close_free(subio);
@@ -702,12 +740,15 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             peer_id_destroy(remote_peer);
         free(uc);
         /* Emit protocol negotiation error */
-        libp2p_event_t evt = {0};
-        evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
-        evt.u.outgoing_conn_error.peer = NULL; /* peer exists but stream not built yet */
-        evt.u.outgoing_conn_error.code = libp2p_error_from_multiselect(ms);
-        evt.u.outgoing_conn_error.msg = "multistream negotiation failed";
-        libp2p_event_publish(host, &evt);
+        if (emit_ms_error)
+        {
+            libp2p_event_t evt = {0};
+            evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
+            evt.u.outgoing_conn_error.peer = NULL; /* peer exists but stream not built yet */
+            evt.u.outgoing_conn_error.code = libp2p_error_from_multiselect(ms);
+            evt.u.outgoing_conn_error.msg = "multistream negotiation failed";
+            libp2p_event_publish(host, &evt);
+        }
         return libp2p_error_from_multiselect(ms);
     }
 

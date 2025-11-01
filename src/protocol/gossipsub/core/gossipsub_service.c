@@ -63,13 +63,25 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
     libp2p_gossipsub_RPC *rpc = NULL;
     libp2p_err_t rc = libp2p_gossipsub_rpc_decode_frame(frame, frame_len, &rpc);
     if (rc != LIBP2P_ERR_OK)
+    {
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "rpc decode failed entry=%p len=%zu rc=%d",
+                (void *)entry,
+                frame_len,
+                rc);
         return rc;
+    }
 
     gossipsub_rpc_parsed_t parsed;
     gossipsub_rpc_parsed_init(&parsed);
     rc = gossipsub_rpc_parse(rpc, &parsed);
     if (rc != LIBP2P_ERR_OK)
     {
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "rpc parse failed entry=%p len=%zu rc=%d",
+                (void *)entry,
+                frame_len,
+                rc);
         gossipsub_rpc_parsed_clear(&parsed);
         libp2p_gossipsub_RPC_free(rpc);
         return rc;
@@ -92,6 +104,12 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
     rc = gossipsub_propagation_handle_subscriptions(gs, entry, parsed.subscriptions, parsed.subscriptions_len);
     if (rc != LIBP2P_ERR_OK)
     {
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "rpc subscription handling failed entry=%p len=%zu rc=%d subs=%zu",
+                (void *)entry,
+                frame_len,
+                rc,
+                parsed.subscriptions_len);
         gossipsub_rpc_parsed_clear(&parsed);
         libp2p_gossipsub_RPC_free(rpc);
         return rc;
@@ -132,6 +150,24 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
     if (ctrl_rc != LIBP2P_ERR_OK && final_rc == LIBP2P_ERR_OK)
         final_rc = ctrl_rc;
 
+    if (final_rc != LIBP2P_ERR_OK)
+    {
+        size_t ihave_len = parsed.ihave_len;
+        size_t iwant_len = parsed.iwant_len;
+        size_t graft_len = parsed.graft_len;
+        size_t prune_len = parsed.prune_len;
+        gossipsub_rpc_parsed_clear(&parsed);
+        libp2p_gossipsub_RPC_free(rpc);
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "rpc handling error entry=%p rc=%d ihave=%zu iwant=%zu graft=%zu prune=%zu",
+                (void *)entry,
+                final_rc,
+                ihave_len,
+                iwant_len,
+                graft_len,
+                prune_len);
+        return final_rc;
+    }
     gossipsub_rpc_parsed_clear(&parsed);
     libp2p_gossipsub_RPC_free(rpc);
     return final_rc;
