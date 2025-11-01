@@ -62,7 +62,6 @@ static void identify_srv_handle(identify_srv_ctx_t *ctx)
     free(buf);
     (void)libp2p_stream_close(s);
     libp2p__stream_release_async(s);
-    libp2p_stream_free(s);
     if (host)
         libp2p__worker_dec(host);
     free(ctx);
@@ -439,7 +438,6 @@ static void *identify_push_thread(void *arg)
         LIBP2P_TRACE("identify_push", "stream_close rc=%d stream=%p", close_rc, (void *)s);
     }
     libp2p__stream_release_async(s);
-    libp2p_stream_free(s);
 
     if (host)
         libp2p__worker_dec(host);
@@ -477,7 +475,6 @@ static void identify_push_on_open(libp2p_stream_t *s, void *ud)
     }
     else
     {
-        libp2p__stream_release_async(s);
         if (ctx->host)
             libp2p__worker_dec(ctx->host);
         free(ctx);
@@ -485,7 +482,7 @@ static void identify_push_on_open(libp2p_stream_t *s, void *ud)
         if (s)
         {
             libp2p_stream_close(s);
-            libp2p_stream_free(s);
+            libp2p__stream_release_async(s);
         }
     }
 }

@@ -376,7 +376,7 @@ static void *ping_srv_thread(void *arg)
     if (s)
     {
         libp2p_stream_close(s);
-        libp2p_stream_free(s);
+        libp2p__stream_release_async(s);
     }
     if (host)
     {
@@ -401,6 +401,16 @@ static void ping_on_open(libp2p_stream_t *s, void *ud)
     ctx->s = s;
     struct libp2p_host *host = libp2p__stream_host(s);
     ctx->host = host;
+    if (!libp2p__stream_retain_async(s))
+    {
+        free(ctx);
+        if (s)
+        {
+            libp2p_stream_close(s);
+            libp2p_stream_free(s);
+        }
+        return;
+    }
     /* Ensure inbound QUIC streams start delivering payload bytes immediately. */
     libp2p_stream_set_read_interest(s, true);
     /* account for detached worker lifetimes so host_free waits safely */
@@ -414,12 +424,12 @@ static void ping_on_open(libp2p_stream_t *s, void *ud)
     }
     if (host)
         libp2p__worker_dec(host);
-    free(ctx);
     if (s)
     {
         libp2p_stream_close(s);
-        libp2p_stream_free(s);
+        libp2p__stream_release_async(s);
     }
+    free(ctx);
 
 }
 int libp2p_ping_service_start(struct libp2p_host *host, libp2p_protocol_server_t **out_server)

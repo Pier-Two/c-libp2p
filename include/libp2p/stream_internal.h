@@ -51,7 +51,7 @@ void libp2p__stream_destroy(libp2p_stream_t *s);
 
 /* Retain/release helpers for async callbacks executed off-thread. */
 int libp2p__stream_retain_async(libp2p_stream_t *s);
-void libp2p__stream_release_async(libp2p_stream_t *s);
+int libp2p__stream_release_async(libp2p_stream_t *s);
 
 /* Optional callback invoked just before the stream storage is released. */
 typedef void (*libp2p_stream_cleanup_fn)(void *ctx, libp2p_stream_t *s);

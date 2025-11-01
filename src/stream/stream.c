@@ -642,22 +642,26 @@ int libp2p__stream_retain_async(libp2p_stream_t *s)
     return 1;
 }
 
-void libp2p__stream_release_async(libp2p_stream_t *s)
+int libp2p__stream_release_async(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);
     if (!st)
-        return;
+        return 0;
     int prev = atomic_fetch_sub_explicit(&st->pending_async, 1, memory_order_acq_rel);
     if (prev <= 0)
-        return;
+        return 0;
     if (prev == 1)
     {
         int expected = 1;
         if (atomic_compare_exchange_strong_explicit(&st->destroy_state, &expected, 2, memory_order_acq_rel, memory_order_acquire))
         {
             libp2p__stream_destroy(s);
+            return 1;
         }
+        if (expected == 2)
+            return 1;
     }
+    return 0;
 }
 
 libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, const libp2p_stream_backend_ops_t *ops, const char *protocol_id,
