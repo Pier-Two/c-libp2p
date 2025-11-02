@@ -29,7 +29,7 @@ libp2p_host_builder_build(b, &host);
 libp2p_host_builder_free(b);
 
 libp2p_stream_t *stream = NULL;
-/* Replace the default address with /ip4/127.0.0.1/udp/4001/quic_v1 to ping over QUIC */
+/* Replace the default address with /ip4/127.0.0.1/udp/4001/quic-v1 to ping over QUIC */
 if (libp2p_host_dial_protocol_blocking(host, "/ip4/127.0.0.1/tcp/4001",
                                        LIBP2P_PING_PROTO_ID,
                                        5000 /* ms timeout */, &stream) == 0) {

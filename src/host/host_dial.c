@@ -519,6 +519,12 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             goto quic_fail;
         }
 
+        if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+        {
+            const char *first = (proposals && proposals[0]) ? proposals[0] : "(none)";
+            LP_LOGT("HOST_DIAL", "do_dial_and_select: remote=%s proposals_first=%s timeout_ms=%d",
+                    remote_multiaddr ? remote_multiaddr : "(unknown)", first, host->opts.multiselect_handshake_timeout_ms);
+        }
         libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
         int emit_ms_error = 1;
         int proposals_only_idpush = 0;
@@ -542,7 +548,42 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
                     proposals_only_idpush = 0;
             }
             if (proposals_only_idpush)
+            {
                 emit_ms_error = 0;
+                if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+                    LP_LOGD("HOST_DIAL", "do_dial_and_select: remote=%s lacks identify-push support", remote_multiaddr ? remote_multiaddr : "(unknown)");
+                if (subio)
+                {
+                    libp2p_io_close_free(subio);
+                    subio = NULL;
+                }
+                if (dial_stream)
+                {
+                    libp2p_stream_free(dial_stream);
+                    dial_stream = NULL;
+                }
+                if (remote_peer)
+                {
+                    peer_id_destroy(remote_peer);
+                    free(remote_peer);
+                    remote_peer = NULL;
+                }
+                if (mx)
+                {
+                    libp2p_muxer_free(mx);
+                    mx = NULL;
+                }
+                if (secured)
+                {
+                    libp2p_conn_free(secured);
+                    secured = NULL;
+                }
+                free(uc_q);
+                if (accepted && !accepted_out)
+                    free((void *)accepted);
+                rc = LIBP2P_ERR_UNSUPPORTED;
+                return rc;
+            }
             if (emit_ms_error)
             {
                 libp2p_event_t evt = {0};
@@ -716,6 +757,7 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     }
     libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
     int emit_ms_error = 1;
+    int proposals_only_idpush = 0;
     if (ms == LIBP2P_MULTISELECT_ERR_UNAVAIL && proposals)
     {
         size_t proposal_count = 0;
@@ -730,10 +772,24 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             }
         }
         if (proposal_count > 0 && only_idpush)
+        {
             emit_ms_error = 0;
+            proposals_only_idpush = 1;
+        }
     }
     if (ms != LIBP2P_MULTISELECT_OK)
     {
+        if (proposals_only_idpush)
+        {
+            if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+                LP_LOGD("HOST_DIAL", "do_dial_and_select: remote=%s lacks identify-push support (yamux/mplex)", remote_multiaddr ? remote_multiaddr : "(unknown)");
+            libp2p_io_close_free(subio);
+            libp2p_conn_free(secured);
+            if (remote_peer)
+                peer_id_destroy(remote_peer);
+            free(uc);
+            return LIBP2P_ERR_UNSUPPORTED;
+        }
         libp2p_io_close_free(subio);
         libp2p_conn_free(secured);
         if (remote_peer)

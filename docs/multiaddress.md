@@ -16,7 +16,7 @@ if (!addr || err != MULTIADDR_SUCCESS) {
     /* handle parse error */
 }
 
-multiaddr_t *quic = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic_v1", &err);
+multiaddr_t *quic = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic-v1", &err);
 if (!quic || err != MULTIADDR_SUCCESS) {
     /* QUIC multiaddress parse error */
 }

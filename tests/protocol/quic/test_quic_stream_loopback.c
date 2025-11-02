@@ -537,7 +537,7 @@ static void test_session_free(libp2p_quic_session_t *session)
 static multiaddr_t *make_remote_multiaddr(uint16_t port)
 {
     char addr[80];
-    snprintf(addr, sizeof(addr), "/ip4/127.0.0.1/udp/%" PRIu16 "/quic_v1", port);
+    snprintf(addr, sizeof(addr), "/ip4/127.0.0.1/udp/%" PRIu16 "/quic-v1", port);
     int err = 0;
     multiaddr_t *ma = multiaddr_new_from_str(addr, &err);
     if (err != 0)

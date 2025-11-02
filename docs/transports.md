@@ -57,11 +57,11 @@ The host builder performs this wiring automatically by copying the host
 identity into any QUIC transports it instantiates. Manual setups should call
 `libp2p_quic_transport_set_identity()` once after creating the transport.
 
-When constructing QUIC multiaddresses, use UDP plus either `/quic_v1` (preferred
+When constructing QUIC multiaddresses, use UDP plus either `/quic-v1` (preferred
 for IETF QUIC) or `/quic`:
 
 ```c
-multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic_v1", &err);
+multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/4001/quic-v1", &err);
 ```
 
 Because QUIC already provides authenticated encryption and stream support, the

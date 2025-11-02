@@ -385,7 +385,7 @@ static int build_loopback_variant(const char *addr, char *out, size_t out_len)
     if (!p2p_suffix)
         p2p_suffix = "";
 
-    if (snprintf(out, out_len, "/ip4/127.0.0.1/udp/%u/quic_v1%s", (unsigned)port, p2p_suffix) >= (int)out_len)
+    if (snprintf(out, out_len, "/ip4/127.0.0.1/udp/%u/quic-v1%s", (unsigned)port, p2p_suffix) >= (int)out_len)
     {
         out[0] = '\0';
         return 0;
@@ -537,7 +537,7 @@ static int run_listener(const char *ip, const char *redis_host, const char *redi
     const char *listen_ip = ip ? ip : "0.0.0.0";
     const char *ip_proto = (listen_ip && strchr(listen_ip, ':')) ? "ip6" : "ip4";
     const int is_quic = (transport_name && ((strcmp(transport_name, "quic") == 0) || (strcmp(transport_name, "quic-v1") == 0)));
-    const char *quic_internal = (transport_name && strcmp(transport_name, "quic") == 0) ? "quic" : "quic_v1";
+    const char *quic_internal = (transport_name && strcmp(transport_name, "quic") == 0) ? "quic" : "quic-v1";
     const char *builder_transport = is_quic ? "quic" : "tcp";
     const char *security_to_use = (!is_quic && security_name && security_name[0]) ? security_name : (!is_quic ? "noise" : NULL);
     const char *muxer_to_use = (!is_quic && muxer_name && muxer_name[0]) ? muxer_name : (!is_quic ? "yamux" : NULL);

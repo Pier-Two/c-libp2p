@@ -154,7 +154,7 @@ int main(void)
     TEST_CHECK("Client identity setup", libp2p_quic_transport_set_identity(client, &client_opts) == 0, "set identity failed");
 
     int addr_err = 0;
-    multiaddr_t *listen_addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/0/quic_v1", &addr_err);
+    multiaddr_t *listen_addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/0/quic-v1", &addr_err);
     TEST_CHECK("Listen multiaddr parse", listen_addr != NULL && addr_err == 0, "parse err=%d", addr_err);
 
     libp2p_listener_t *listener = NULL;

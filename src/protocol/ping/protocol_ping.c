@@ -2,6 +2,8 @@
 #include "../../host/host_internal.h"
 #include "libp2p/stream_internal.h"
 #include "libp2p/log.h"
+#include "multiformats/multiaddr/multiaddr.h"
+#include "peer_id/peer_id.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -214,6 +216,29 @@ static inline libp2p_ping_err_t map_stream_err(ssize_t v)
     }
 }
 
+static const char *stream_err_name(ssize_t v)
+{
+    switch ((int)v)
+    {
+        case LIBP2P_ERR_NULL_PTR:
+            return "LIBP2P_ERR_NULL_PTR";
+        case LIBP2P_ERR_AGAIN:
+            return "LIBP2P_ERR_AGAIN";
+        case LIBP2P_ERR_EOF:
+            return "LIBP2P_ERR_EOF";
+        case LIBP2P_ERR_TIMEOUT:
+            return "LIBP2P_ERR_TIMEOUT";
+        case LIBP2P_ERR_CLOSED:
+            return "LIBP2P_ERR_CLOSED";
+        case LIBP2P_ERR_RESET:
+            return "LIBP2P_ERR_RESET";
+        case LIBP2P_ERR_INTERNAL:
+            return "LIBP2P_ERR_INTERNAL";
+        default:
+            return "LIBP2P_ERR_UNKNOWN";
+    }
+}
+
 /* Event-driven variant: avoid sleeping on EAGAIN by arming per-iteration
  * deadlines. If overall_deadline_ms is non-zero, it is treated as an
  * absolute CLOCK_MONOTONIC timestamp; otherwise a modest per-iteration
@@ -250,7 +275,29 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
             /* Try again; deadline blocks until writable. */
             continue;
         }
-        fprintf(stderr, "[PING] stream_write_all error n=%zd\n", n);
+        const peer_id_t *p = libp2p_stream_remote_peer(s);
+        char peer_buf[128];
+        const char *peer_str = "<unknown>";
+        if (p && peer_id_to_string(p, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) >= 0)
+            peer_str = peer_buf;
+        const multiaddr_t *remote_addr = libp2p_stream_remote_addr(s);
+        char addr_buf[256];
+        const char *addr_str = "<unknown>";
+        if (remote_addr)
+        {
+            int serr = 0;
+            char *tmp = multiaddr_to_str(remote_addr, &serr);
+            if (tmp && serr == MULTIADDR_SUCCESS)
+            {
+                size_t copy = sizeof(addr_buf) - 1;
+                strncpy(addr_buf, tmp, copy);
+                addr_buf[copy] = '\0';
+                addr_str = addr_buf;
+            }
+            if (tmp)
+                free(tmp);
+        }
+        LP_LOGE("PING", "stream_write_all failed stream=%p peer=%s addr=%s n=%zd err=%s", (void *)s, peer_str, addr_str, n, stream_err_name(n));
         (void)libp2p_stream_set_deadline(s, 0);
         return map_stream_err(n);
     }
@@ -388,6 +435,29 @@ static void *ping_srv_thread(void *arg)
 static void ping_on_open(libp2p_stream_t *s, void *ud)
 {
     (void)ud;
+    const peer_id_t *p = s ? libp2p_stream_remote_peer(s) : NULL;
+    char peer_buf[128];
+    const char *peer_str = "<unknown>";
+    if (p && peer_id_to_string(p, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) >= 0)
+        peer_str = peer_buf;
+    const multiaddr_t *remote_addr = s ? libp2p_stream_remote_addr(s) : NULL;
+    char addr_buf[256];
+    const char *addr_str = "<unknown>";
+    if (remote_addr)
+    {
+        int serr = 0;
+        char *tmp = multiaddr_to_str(remote_addr, &serr);
+        if (tmp && serr == MULTIADDR_SUCCESS)
+        {
+            size_t copy = sizeof(addr_buf) - 1;
+            strncpy(addr_buf, tmp, copy);
+            addr_buf[copy] = '\0';
+            addr_str = addr_buf;
+        }
+        if (tmp)
+            free(tmp);
+    }
+    LP_LOGD("PING", "inbound stream open stream=%p peer=%s addr=%s", (void *)s, peer_str, addr_str);
     ping_srv_ctx_t *ctx = (ping_srv_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
     {

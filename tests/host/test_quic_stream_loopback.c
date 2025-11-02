@@ -513,7 +513,7 @@ int main(void)
     }
 
     char addr_str[64];
-    snprintf(addr_str, sizeof(addr_str), "/ip4/127.0.0.1/udp/%" PRIu16 "/quic_v1", server_port);
+    snprintf(addr_str, sizeof(addr_str), "/ip4/127.0.0.1/udp/%" PRIu16 "/quic-v1", server_port);
     int ma_err = 0;
     remote_ma = multiaddr_new_from_str(addr_str, &ma_err);
     if (!remote_ma || ma_err != 0)

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 
 #ifndef LIBP2P_LOGGING_FORCE
 #define LIBP2P_LOGGING_FORCE 1
@@ -745,6 +746,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
 {
     if (!io || !proposals)
         return LIBP2P_MULTISELECT_ERR_NULL_PTR;
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+        LP_LOGT("MULTISELECT", "dial: start io=%p timeout_ms=%" PRIu64, (void *)io, (unsigned long long)timeout_ms);
     if (timeout_ms)
         libp2p_io_set_deadline(io, timeout_ms);
 
@@ -757,6 +760,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
     rc = recv_msg_io(io, &msg, deadline_ms);
     if (rc)
         goto done;
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+        LP_LOGT("MULTISELECT", "dial: received header=\"%s\"", msg ? msg : "(null)");
     if (strcmp(msg, LIBP2P_MULTISELECT_PROTO_ID) != 0)
     {
         free(msg);
@@ -770,6 +775,36 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
         goto done;
     }
+    if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+    {
+        char scratch[512];
+        size_t off = 0;
+        scratch[0] = '\0';
+        for (size_t i = 0; proposals[i] && off + 4 < sizeof(scratch); i++)
+        {
+            size_t len = strlen(proposals[i]);
+            if (len == 0)
+                continue;
+            if (off > 0)
+            {
+                scratch[off++] = ',';
+                if (off < sizeof(scratch))
+                    scratch[off++] = ' ';
+            }
+            if (off + len >= sizeof(scratch))
+            {
+                size_t avail = sizeof(scratch) - off - 1;
+                memcpy(&scratch[off], proposals[i], avail);
+                off += avail;
+                scratch[off++] = '+';
+                break;
+            }
+            memcpy(&scratch[off], proposals[i], len);
+            off += len;
+        }
+        scratch[off < sizeof(scratch) ? off : sizeof(scratch) - 1] = '\0';
+        LP_LOGT("MULTISELECT", "dial: proposals=[%s]", scratch);
+    }
     rc = send_msg_io(io, proposals[idx], deadline_ms);
     if (rc)
         goto done;
@@ -778,6 +813,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         rc = recv_msg_io(io, &msg, deadline_ms);
         if (rc)
             goto done;
+        if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+            LP_LOGT("MULTISELECT", "dial: received msg=\"%s\"", msg ? msg : "(null)");
         if (!strcmp(msg, LIBP2P_MULTISELECT_PROTO_ID))
         {
             free(msg);
@@ -785,6 +822,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         }
         if (!strcmp(msg, LIBP2P_MULTISELECT_NA))
         {
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                LP_LOGT("MULTISELECT", "dial: peer returned NA for proposal[%zu]=%s", idx, proposals[idx]);
             free(msg);
             ++idx;
             if (!proposals[idx])
@@ -792,6 +831,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
                 rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
                 goto done;
             }
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                LP_LOGT("MULTISELECT", "dial: retry with proposal[%zu]=%s", idx, proposals[idx] ? proposals[idx] : "(null)");
             rc = send_msg_io(io, proposals[idx], deadline_ms);
             if (rc)
                 goto done;
@@ -799,6 +840,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         }
         if (!strcmp(msg, proposals[idx]))
         {
+            if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+                LP_LOGT("MULTISELECT", "dial: negotiated protocol=%s", proposals[idx]);
             if (accepted_out)
                 *accepted_out = msg;
             else

@@ -78,6 +78,7 @@ static void quic_log_handshake_diag(const char *reason,
     char remote_cid_buf[2 * PICOQUIC_CONNECTION_ID_MAX_SIZE + 1] = {0};
     char *remote_addr = NULL;
     char *local_addr = NULL;
+    const char *state_name = libp2p__quic_state_name(st);
 
     if (cnx)
     {
@@ -98,9 +99,10 @@ static void quic_log_handshake_diag(const char *reason,
     }
 
     LP_LOGE("QUIC",
-            "%s state=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) "
+            "%s state=%s(%d) local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) "
             "initial_cid=%s local_cid=%s remote_cid=%s local_addr=%s remote_addr=%s",
             reason ? reason : "handshake diagnostic",
+            state_name ? state_name : "unknown",
             st,
             local_err,
             picoquic_error_name(local_err),
@@ -481,7 +483,7 @@ static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
         if (st != last_state)
         {
-            fprintf(stderr, "[QUIC WAIT] state=%d\n", st);
+            fprintf(stderr, "[QUIC WAIT] state=%s(%d)\n", libp2p__quic_state_name(st), st);
             fflush(stderr);
             last_state = st;
         }
@@ -754,6 +756,22 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
         libp2p_quic_tls_certificate_clear(&cert);
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
+
+    picoquic_set_default_lossbit_policy(quic, picoquic_lossbit_none);
+
+    picoquic_tp_t client_tp = *picoquic_get_default_tp(quic);
+    client_tp.enable_loss_bit = 0;
+    client_tp.min_ack_delay = 0;
+    if (picoquic_set_default_tp(quic, &client_tp) != 0)
+    {
+        picoquic_free(quic);
+        libp2p_quic_tls_certificate_clear(&cert);
+        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+    }
+    LP_LOGD("QUIC",
+            "client transport params configured loss_bit=%d min_ack_delay=%" PRIu64,
+            client_tp.enable_loss_bit,
+            client_tp.min_ack_delay);
 
     ptls_iovec_t *chain = (ptls_iovec_t *)calloc(1, sizeof(*chain));
     if (!chain)

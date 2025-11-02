@@ -144,7 +144,7 @@ static multiaddr_t *multiaddr_copy_without_quic(const multiaddr_t *addr)
 
     if (last_code == MULTICODEC_QUIC || last_code == MULTICODEC_QUIC_V1)
     {
-        const char *suffix = (last_code == MULTICODEC_QUIC) ? "/quic" : "/quic_v1";
+        const char *suffix = (last_code == MULTICODEC_QUIC) ? "/quic" : "/quic-v1";
         int dec_err = MULTIADDR_SUCCESS;
         multiaddr_t *suffix_ma = multiaddr_new_from_str(suffix, &dec_err);
         if (!suffix_ma || dec_err != MULTIADDR_SUCCESS)
@@ -428,7 +428,7 @@ static libp2p_listener_err_t quic_listener_local_addr(libp2p_listener_t *l, mult
         return LIBP2P_LISTENER_ERR_INTERNAL;
 
     int err = 0;
-    multiaddr_t *quic_proto = multiaddr_new_from_str("/quic_v1", &err);
+    multiaddr_t *quic_proto = multiaddr_new_from_str("/quic-v1", &err);
     if (!quic_proto || err != 0)
     {
         multiaddr_free(base);
@@ -588,7 +588,7 @@ static int quic_listener_make_conn(quic_listener_ctx_t *ctx,
         return -1;
 
     int err = 0;
-    multiaddr_t *quic_proto = multiaddr_new_from_str("/quic_v1", &err);
+    multiaddr_t *quic_proto = multiaddr_new_from_str("/quic-v1", &err);
     if (!quic_proto || err != 0)
     {
         multiaddr_free(remote_base);
@@ -631,7 +631,7 @@ static int quic_listener_make_conn(quic_listener_ctx_t *ctx,
         multiaddr_free(remote);
         return -1;
     }
-    quic_proto = multiaddr_new_from_str("/quic_v1", &err);
+    quic_proto = multiaddr_new_from_str("/quic-v1", &err);
     if (!quic_proto || err != 0)
     {
         multiaddr_free(local_base);
@@ -909,6 +909,23 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
 
+    picoquic_set_default_lossbit_policy(quic, picoquic_lossbit_none);
+
+    picoquic_tp_t listener_tp = *picoquic_get_default_tp(quic);
+    listener_tp.enable_loss_bit = 0;
+    listener_tp.min_ack_delay = 0;
+    if (picoquic_set_default_tp(quic, &listener_tp) != 0)
+    {
+        picoquic_free(quic);
+        quic_listener_free_ctx(ctx);
+        libp2p_quic_tls_certificate_clear(&cert);
+        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+    }
+    LP_LOGD("QUIC",
+            "listener transport params configured loss_bit=%d min_ack_delay=%" PRIu64,
+            listener_tp.enable_loss_bit,
+            listener_tp.min_ack_delay);
+
     ptls_iovec_t *chain = (ptls_iovec_t *)calloc(1, sizeof(*chain));
     if (!chain)
     {
@@ -962,7 +979,7 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
         {
             int derr = 0;
             multiaddr_t *decap = NULL;
-            multiaddr_t *proto = multiaddr_new_from_str("/quic_v1", &derr);
+            multiaddr_t *proto = multiaddr_new_from_str("/quic-v1", &derr);
             if (proto && derr == 0)
             {
                 decap = multiaddr_decapsulate(base, proto, &derr);

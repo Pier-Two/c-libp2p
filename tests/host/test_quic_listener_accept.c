@@ -151,7 +151,7 @@ int main(void)
     }
 
     int ma_err = 0;
-    multiaddr_t *local_addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/7000/quic_v1", &ma_err);
+    multiaddr_t *local_addr = multiaddr_new_from_str("/ip4/127.0.0.1/udp/7000/quic-v1", &ma_err);
     if (!local_addr || ma_err != 0)
     {
         free(session);
@@ -160,7 +160,7 @@ int main(void)
         return 1;
     }
 
-    multiaddr_t *remote_addr = multiaddr_new_from_str("/ip4/203.0.113.5/udp/4001/quic_v1", &ma_err);
+    multiaddr_t *remote_addr = multiaddr_new_from_str("/ip4/203.0.113.5/udp/4001/quic-v1", &ma_err);
     if (!remote_addr || ma_err != 0)
     {
         multiaddr_free(local_addr);

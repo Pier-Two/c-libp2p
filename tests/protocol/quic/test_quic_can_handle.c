@@ -64,16 +64,16 @@ int main(void)
         return 1;
 
     run_case(transport, "Null address", NULL, 0);
-    run_case(transport, "IPv4 QUIC v1", "/ip4/127.0.0.1/udp/4001/quic_v1", 1);
+    run_case(transport, "IPv4 QUIC v1", "/ip4/127.0.0.1/udp/4001/quic-v1", 1);
     run_case(transport, "IPv4 QUIC legacy", "/ip4/127.0.0.1/udp/4001/quic", 1);
     run_case(transport, "IPv6 QUIC", "/ip6/::1/udp/4001/quic", 1);
-    run_case(transport, "Trailing p2p allowed", "/ip4/203.0.113.9/udp/4444/quic_v1/p2p/12D3KooWK99", 1);
-    run_case(transport, "Too few protocols", "/ip4/127.0.0.1/quic_v1", 0);
+    run_case(transport, "Trailing p2p allowed", "/ip4/203.0.113.9/udp/4444/quic-v1/p2p/12D3KooWK99", 1);
+    run_case(transport, "Too few protocols", "/ip4/127.0.0.1/quic-v1", 0);
     run_case(transport, "Missing quic", "/ip4/127.0.0.1/udp/4001", 0);
-    run_case(transport, "Wrong transport code", "/ip4/127.0.0.1/tcp/4001/quic_v1", 0);
+    run_case(transport, "Wrong transport code", "/ip4/127.0.0.1/tcp/4001/quic-v1", 0);
     run_case(transport, "Disallow extra transport layering", "/ip4/127.0.0.1/udp/4001/quic/ws", 0);
-    run_case(transport, "Disallow extra transport layering (wss)", "/ip4/127.0.0.1/udp/4001/quic_v1/wss", 0);
-    run_case(transport, "Reject DNS addresses", "/dns4/example.com/udp/4001/quic_v1", 0);
+    run_case(transport, "Disallow extra transport layering (wss)", "/ip4/127.0.0.1/udp/4001/quic-v1/wss", 0);
+    run_case(transport, "Reject DNS addresses", "/dns4/example.com/udp/4001/quic-v1", 0);
 
     libp2p_transport_free(transport);
 

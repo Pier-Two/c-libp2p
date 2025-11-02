@@ -99,7 +99,7 @@ Subscribe with `libp2p_event_subscribe()` or poll via
 `libp2p_host_next_event()` to observe and react to these transitions.
 
 > **Note**
-> QUIC multiaddresses (`/ip*/.../udp/.../quic_v1`) bundle TLS 1.3 and stream
+> QUIC multiaddresses (`/ip*/.../udp/.../quic-v1`) bundle TLS 1.3 and stream
 > multiplexing directly into the transport. When the host detects such an
 > address it executes the transport dial and protocol negotiation stages, but
 > skips the separate Noise and Yamux/Mplex steps described above. This keeps the

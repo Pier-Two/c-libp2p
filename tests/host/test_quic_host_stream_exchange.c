@@ -192,7 +192,7 @@ int main(void)
     srv_builder = libp2p_host_builder_new();
     if (!srv_builder)
         goto cleanup;
-    (void)libp2p_host_builder_listen_addr(srv_builder, "/ip4/127.0.0.1/udp/0/quic_v1");
+    (void)libp2p_host_builder_listen_addr(srv_builder, "/ip4/127.0.0.1/udp/0/quic-v1");
     (void)libp2p_host_builder_transport(srv_builder, "quic");
     (void)libp2p_host_builder_flags(srv_builder, 0);
 

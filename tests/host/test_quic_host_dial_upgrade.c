@@ -320,7 +320,7 @@ int main(void)
 
     libp2p__host_set_quic_muxer_factory(stub_muxer_factory);
 
-    const char *remote_addr = "/ip4/127.0.0.1/udp/4242/quic_v1";
+    const char *remote_addr = "/ip4/127.0.0.1/udp/4242/quic-v1";
     libp2p_dial_opts_t dial_opts = {0};
     dial_opts.struct_size = sizeof(dial_opts);
     dial_opts.remote_multiaddr = remote_addr;

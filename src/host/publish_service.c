@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "host_internal.h"
+#include "libp2p/host.h"
 #include "libp2p/stream.h"
 #include "libp2p/debug_trace.h"
 #include "libp2p/events.h"
@@ -35,6 +36,49 @@ static void free_string_list(char **list, size_t len)
     for (size_t i = 0; i < len; i++)
         free(list[i]);
     free(list);
+}
+
+static int peer_supports_identify_push(libp2p_host_t *host, const peer_id_t *peer)
+{
+    if (!host || !peer)
+        return 0;
+    const char **protocols = NULL;
+    size_t len = 0;
+    int rc = libp2p_host_peer_protocols(host, peer, &protocols, &len);
+    if (rc != 0 || !protocols || len == 0)
+    {
+        if (protocols)
+            libp2p_host_free_peer_protocols(protocols, len);
+        return 0;
+    }
+    int supported = 0;
+    for (size_t i = 0; i < len; i++)
+    {
+        if (protocols[i] && strcmp(protocols[i], LIBP2P_IDENTIFY_PUSH_PROTO_ID) == 0)
+        {
+            supported = 1;
+            break;
+        }
+    }
+    libp2p_host_free_peer_protocols(protocols, len);
+    return supported;
+}
+
+static int addr_supports_identify_push(libp2p_host_t *host, const char *addr)
+{
+    if (!host || !addr)
+        return 0;
+    const char *needle = strstr(addr, "/p2p/");
+    if (!needle || needle[5] == '\0')
+        return 0;
+    const char *peer_part = needle + 5;
+    peer_id_t tmp = {0};
+    peer_id_error_t perr = peer_id_create_from_string(peer_part, &tmp);
+    if (perr != PEER_ID_SUCCESS)
+        return 0;
+    int supported = peer_supports_identify_push(host, &tmp);
+    peer_id_destroy(&tmp);
+    return supported;
 }
 
 static void free_peer_list(peer_id_t *peers, size_t len)
@@ -226,6 +270,11 @@ static void *__libp2p__publisher_async(void *arg)
 
     for (size_t i = 0; i < peers_len && atomic_load_explicit(&host->running, memory_order_acquire); i++)
     {
+        if (!peer_supports_identify_push(host, &peers[i]))
+        {
+            LIBP2P_TRACE("idpush", "skip peer without identify-push support");
+            continue;
+        }
         if (host->peerstore)
         {
             const multiaddr_t **chk = NULL;
@@ -268,6 +317,11 @@ static void *__libp2p__publisher_async(void *arg)
             const char *addr = addr_list[j];
             if (!addr)
                 continue;
+            if (!addr_supports_identify_push(host, addr))
+            {
+                LIBP2P_TRACE("idpush", "skip addr without identify-push support");
+                continue;
+            }
             __libp2p__idpush_ctx_t *ctx = (__libp2p__idpush_ctx_t *)calloc(1, sizeof(*ctx));
             if (!ctx)
                 continue;
