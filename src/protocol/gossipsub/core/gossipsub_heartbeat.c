@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "libp2p/log.h"
 
@@ -37,6 +38,16 @@ static size_t gossipsub_topic_count_outbound(const gossipsub_topic_state_t *topi
     return count;
 }
 
+static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer, size_t length)
+{
+    if (!peer || !buffer || length == 0)
+        return "-";
+    int rc = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
+    if (rc > 0)
+        return buffer;
+    return "-";
+}
+
 static gossipsub_peer_entry_t **gossipsub_heartbeat_collect_candidates(libp2p_gossipsub_t *gs,
                                                                        gossipsub_topic_state_t *topic,
                                                                        uint64_t now_ms,
@@ -56,8 +67,6 @@ static gossipsub_peer_entry_t **gossipsub_heartbeat_collect_candidates(libp2p_go
     for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next)
     {
         if (!entry->connected)
-            continue;
-        if (entry->explicit_peering)
             continue;
         if (!gossipsub_peer_topic_find(entry->topics, topic->name))
             continue;
@@ -149,6 +158,15 @@ static void gossipsub_heartbeat_try_graft_from_candidates(libp2p_gossipsub_t *gs
         }
 
         libp2p_err_t send_rc = gossipsub_peer_enqueue_frame_locked(gs, entry, frame.frame, frame.frame_len);
+        if (send_rc == LIBP2P_ERR_OK)
+        {
+            char peer_buf[128];
+            const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+            fprintf(stderr,
+                    "[gossipsub] send_graft peer=%s topic=%s\n",
+                    peer_repr,
+                    topic && topic->name ? topic->name : "(null)");
+        }
         gossipsub_rpc_out_clear(&frame);
         if (send_rc != LIBP2P_ERR_OK)
         {

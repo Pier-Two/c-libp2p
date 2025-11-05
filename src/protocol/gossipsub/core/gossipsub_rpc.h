@@ -16,6 +16,7 @@ typedef struct gossipsub_rpc_out
 typedef struct gossipsub_rpc_subscription
 {
     char *topic;
+    char *topic_id;
     int subscribe;
 } gossipsub_rpc_subscription_t;
 
@@ -29,6 +30,7 @@ typedef struct gossipsub_rpc_control_iwant
 typedef struct gossipsub_rpc_control_ihave
 {
     char *topic;
+    char *topic_id;
     uint8_t **ids;
     size_t *lengths;
     size_t count;
@@ -37,6 +39,7 @@ typedef struct gossipsub_rpc_control_ihave
 typedef struct gossipsub_rpc_control_graft
 {
     char *topic;
+    char *topic_id;
 } gossipsub_rpc_control_graft_t;
 
 typedef struct gossipsub_rpc_px_record
@@ -49,6 +52,7 @@ typedef struct gossipsub_rpc_px_record
 typedef struct gossipsub_rpc_control_prune
 {
     char *topic;
+    char *topic_id;
     uint64_t backoff;
     gossipsub_rpc_px_record_t *px;
     size_t px_count;
@@ -88,6 +92,10 @@ libp2p_err_t gossipsub_rpc_encode_control_prune(const gossipsub_prune_target_t *
 libp2p_err_t gossipsub_rpc_encode_control_graft(const char *const *topics,
                                                 size_t count,
                                                 gossipsub_rpc_out_t *out);
+
+libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic,
+                                               int subscribe,
+                                               gossipsub_rpc_out_t *out);
 
 libp2p_err_t gossipsub_rpc_encode_control_ihave(const char *topic,
                                                 uint8_t **ids,

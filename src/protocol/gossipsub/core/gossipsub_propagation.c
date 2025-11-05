@@ -1,9 +1,14 @@
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "gossipsub_propagation.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "libp2p/log.h"
 #include "libp2p/stream.h"
@@ -32,6 +37,53 @@ static const char GOSSIPSUB_PX_ENVELOPE_DOMAIN[] = "libp2p-peer-record";
 
 size_t gossipsub_debug_last_eligible = 0;
 size_t gossipsub_debug_last_limit = 0;
+
+static const char *gossipsub_px_protocol_at(const libp2p_gossipsub_t *gs, size_t index)
+{
+    if (!gs || index >= gs->num_protocol_defs)
+        return NULL;
+    const char *protocol = gs->protocol_defs[index].protocol_id;
+    if (!protocol || protocol[0] == '\0')
+        return NULL;
+    return protocol;
+}
+
+static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer, size_t length)
+{
+    if (!peer || !buffer || length == 0)
+        return "-";
+    int rc = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
+    if (rc > 0)
+        return buffer;
+    return "-";
+}
+
+static void gossipsub_px_ctx_destroy(gossipsub_px_dial_ctx_t *ctx)
+{
+    if (!ctx)
+        return;
+    if (ctx->peer)
+        gossipsub_peer_free(ctx->peer);
+    free(ctx);
+}
+
+static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_dial_ctx_t *ctx);
+static void gossipsub_px_dial_cb(libp2p_stream_t *s, void *user_data, int err);
+
+static int gossipsub_px_should_retry_protocol(libp2p_err_t err)
+{
+    switch (err)
+    {
+        case LIBP2P_ERR_PROTO_NEGOTIATION_FAILED:
+        case LIBP2P_ERR_TIMEOUT:
+        case LIBP2P_ERR_INTERNAL:
+        case LIBP2P_ERR_CLOSED:
+        case LIBP2P_ERR_RESET:
+            return 1;
+        default:
+            return 0;
+    }
+}
 
 static double gossipsub_topic_publish_threshold(const libp2p_gossipsub_t *gs,
                                                 const gossipsub_topic_state_t *topic)
@@ -558,6 +610,73 @@ static void gossipsub_propagation_ingest_px_record(libp2p_gossipsub_t *gs,
     gossipsub_px_free_addr_list(addr_list, addr_count);
 }
 
+static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_dial_ctx_t *ctx)
+{
+    if (!ctx)
+        return;
+
+    if (!gs || !gs->host)
+    {
+        gossipsub_px_ctx_destroy(ctx);
+        return;
+    }
+
+    peer_id_t *peer = ctx->peer;
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(peer, peer_buf, sizeof(peer_buf));
+
+    fprintf(stderr,
+            "[gossipsub] PX dial schedule start peer=%s index=%zu count=%zu\n",
+            peer_repr,
+            ctx->protocol_index,
+            ctx->protocol_count);
+
+    while (ctx->protocol_index < ctx->protocol_count)
+    {
+        const char *protocol = gossipsub_px_protocol_at(gs, ctx->protocol_index);
+        if (!protocol)
+        {
+            ctx->protocol_index++;
+            continue;
+        }
+
+        ctx->current_protocol = protocol;
+        fprintf(stderr,
+                "[gossipsub] PX dial attempting peer=%s protocol=%s\n",
+                peer_repr,
+                protocol);
+
+        int rc = libp2p_host_open_stream_async(gs->host, ctx->peer, protocol, gossipsub_px_dial_cb, ctx);
+        if (rc == LIBP2P_ERR_OK)
+            return;
+
+        fprintf(stderr,
+                "[gossipsub] PX dial immediate failure peer=%s protocol=%s rc=%d\n",
+                peer_repr,
+                protocol,
+                rc);
+
+        ctx->protocol_index++;
+        ctx->current_protocol = NULL;
+    }
+
+    if (peer)
+    {
+        pthread_mutex_lock(&gs->lock);
+        gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, peer);
+        if (entry)
+            entry->connected = 0;
+        pthread_mutex_unlock(&gs->lock);
+    }
+
+    fprintf(stderr,
+            "[gossipsub] PX dial exhausted protocols peer=%s attempts=%zu\n",
+            peer_repr,
+            ctx->protocol_count);
+
+    gossipsub_px_ctx_destroy(ctx);
+}
+
 static void gossipsub_px_dial_cb(libp2p_stream_t *s, void *user_data, int err)
 {
     gossipsub_px_dial_ctx_t *ctx = (gossipsub_px_dial_ctx_t *)user_data;
@@ -566,35 +685,51 @@ static void gossipsub_px_dial_cb(libp2p_stream_t *s, void *user_data, int err)
 
     libp2p_gossipsub_t *gs = ctx->gs;
     peer_id_t *peer = ctx->peer;
-
     if (!gs)
     {
-        if (peer)
-            gossipsub_peer_free(peer);
-        free(ctx);
+        gossipsub_px_ctx_destroy(ctx);
         return;
     }
 
-    if (err == 0 && s)
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(peer, peer_buf, sizeof(peer_buf));
+    const char *protocol = ctx->current_protocol ? ctx->current_protocol : "(unknown)";
+
+    if (err == LIBP2P_ERR_OK && s)
     {
+        fprintf(stderr,
+                "[gossipsub] PX dial succeeded peer=%s protocol=%s\n",
+                peer_repr,
+                protocol);
         gossipsub_on_stream_open(s, gs);
+        gossipsub_px_ctx_destroy(ctx);
+        return;
     }
-    else
+
+    fprintf(stderr,
+            "[gossipsub] PX dial failed peer=%s protocol=%s err=%d\n",
+            peer_repr,
+            protocol,
+            err);
+
+    if (gossipsub_px_should_retry_protocol(err) && ctx->protocol_index + 1 < ctx->protocol_count)
     {
-        LP_LOGW(GOSSIPSUB_MODULE, "PX dial failed (err=%d)", err);
-        if (peer)
-        {
-            pthread_mutex_lock(&gs->lock);
-            gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, peer);
-            if (entry)
-                entry->connected = 0;
-            pthread_mutex_unlock(&gs->lock);
-        }
+        ctx->protocol_index++;
+        ctx->current_protocol = NULL;
+        gossipsub_px_schedule_attempt(gs, ctx);
+        return;
     }
 
     if (peer)
-        gossipsub_peer_free(peer);
-    free(ctx);
+    {
+        pthread_mutex_lock(&gs->lock);
+        gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, peer);
+        if (entry)
+            entry->connected = 0;
+        pthread_mutex_unlock(&gs->lock);
+    }
+
+    gossipsub_px_ctx_destroy(ctx);
 }
 
 void gossipsub_propagation_try_connect_px(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry)
@@ -618,19 +753,18 @@ void gossipsub_propagation_try_connect_peer(libp2p_gossipsub_t *gs,
         return;
     ctx->gs = gs;
     ctx->peer = gossipsub_peer_clone(peer);
+    ctx->protocol_index = 0;
+    ctx->protocol_count = gs->num_protocol_defs;
+    ctx->current_protocol = NULL;
     if (!ctx->peer)
     {
-        free(ctx);
+        gossipsub_px_ctx_destroy(ctx);
         return;
     }
+    if (ctx->protocol_count == 0)
+        ctx->protocol_count = 1;
 
-    int rc = libp2p_host_open_stream_async(gs->host, ctx->peer, GOSSIPSUB_PRIMARY_PROTOCOL, gossipsub_px_dial_cb, ctx);
-    if (rc != LIBP2P_ERR_OK)
-    {
-        LP_LOGW(GOSSIPSUB_MODULE, "failed to initiate PX dial (rc=%d)", rc);
-        gossipsub_peer_free(ctx->peer);
-        free(ctx);
-    }
+    gossipsub_px_schedule_attempt(gs, ctx);
 }
 
 void gossipsub_propagation_propagate_frame(libp2p_gossipsub_t *gs,
@@ -835,11 +969,18 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
     if (!gs || !entry || !proto_msg)
         return LIBP2P_ERR_NULL_PTR;
 
-    if (!libp2p_gossipsub_Message_has_topic(proto_msg))
-        return LIBP2P_ERR_UNSUPPORTED;
-
-    size_t topic_len = libp2p_gossipsub_Message_get_size_topic(proto_msg);
-    const char *topic_raw = libp2p_gossipsub_Message_get_topic(proto_msg);
+    const char *topic_raw = NULL;
+    size_t topic_len = 0;
+    if (libp2p_gossipsub_Message_has_topic(proto_msg))
+    {
+        topic_raw = libp2p_gossipsub_Message_get_topic(proto_msg);
+        topic_len = libp2p_gossipsub_Message_get_size_topic(proto_msg);
+    }
+    if ((!topic_raw || topic_len == 0) && libp2p_gossipsub_Message_count_topic_ids(proto_msg) > 0)
+    {
+        topic_raw = libp2p_gossipsub_Message_get_at_topic_ids(proto_msg, 0);
+        topic_len = libp2p_gossipsub_Message_get_size_at_topic_ids(proto_msg, 0);
+    }
     if (!topic_raw || topic_len == 0)
         return LIBP2P_ERR_UNSUPPORTED;
 
@@ -867,6 +1008,22 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
     msg.from = entry->peer;
     msg.raw_message = frame;
     msg.raw_message_len = frame_len;
+    if (topic_str)
+    {
+        char peer_buf[128];
+        const char *peer_repr = "-";
+        if (entry && entry->peer)
+        {
+            int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+            if (rc > 0)
+                peer_repr = peer_buf;
+        }
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "inbound publish topic=%s peer=%s data_len=%zu",
+                topic_str,
+                peer_repr,
+                msg.data_len);
+    }
 
     gossipsub_topic_state_t *topic = NULL;
     libp2p_gossipsub_validator_handle_t **validators = NULL;
@@ -888,6 +1045,12 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
                                                          gossipsub_rpc_subscription_t *subs,
                                                          size_t count)
 {
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+    fprintf(stderr,
+            "[gossipsub] handle_subscriptions peer=%s count=%zu\n",
+            peer_repr,
+            count);
     if (!gs || !entry)
         return LIBP2P_ERR_NULL_PTR;
     if (!subs || count == 0)
@@ -902,12 +1065,26 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
 
         if (sub->subscribe)
         {
+            char peer_buf[128];
+            const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+            fprintf(stderr,
+                    "[gossipsub] subscription peer=%s topic=%s topic_id=%s subscribe=1\n",
+                    peer_repr,
+                    sub->topic ? sub->topic : "(null)",
+                    sub->topic_id ? sub->topic_id : "(null)");
             libp2p_err_t rc = gossipsub_peer_topic_subscribe(gs, entry, &sub->topic);
             if (rc != LIBP2P_ERR_OK && result == LIBP2P_ERR_OK)
                 result = rc;
         }
         else
         {
+            char peer_buf[128];
+            const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+            fprintf(stderr,
+                    "[gossipsub] subscription peer=%s topic=%s topic_id=%s subscribe=0\n",
+                    peer_repr,
+                    sub->topic ? sub->topic : "(null)",
+                    sub->topic_id ? sub->topic_id : "(null)");
             gossipsub_peer_topic_unsubscribe(gs, entry, sub->topic);
         }
     }

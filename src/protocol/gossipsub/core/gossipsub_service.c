@@ -810,7 +810,22 @@ libp2p_err_t libp2p_gossipsub_subscribe(libp2p_gossipsub_t *gs, const libp2p_gos
     gossipsub_topic_state_t *topic = NULL;
     libp2p_err_t rc = gossipsub_topic_ensure(gs, topic_cfg, &topic);
     if (rc == LIBP2P_ERR_OK && topic)
-        topic->subscribed = 1;
+    {
+        int already_subscribed = topic->subscribed ? 1 : 0;
+        if (!already_subscribed)
+        {
+            topic->subscribed = 1;
+            if (topic->name)
+            {
+                for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next)
+                {
+                    if (!entry->connected)
+                        continue;
+                    (void)gossipsub_peer_send_subscription_locked(gs, entry, topic->name, 1);
+                }
+            }
+        }
+    }
     pthread_mutex_unlock(&gs->lock);
 
     if (rc == LIBP2P_ERR_OK)
@@ -829,7 +844,17 @@ libp2p_err_t libp2p_gossipsub_unsubscribe(libp2p_gossipsub_t *gs, const char *to
         pthread_mutex_unlock(&gs->lock);
         return LIBP2P_ERR_INTERNAL;
     }
+    int was_subscribed = topic->subscribed ? 1 : 0;
     topic->subscribed = 0;
+    if (was_subscribed)
+    {
+        for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next)
+        {
+            if (!entry->connected)
+                continue;
+            (void)gossipsub_peer_send_subscription_locked(gs, entry, topic_name, 0);
+        }
+    }
     pthread_mutex_unlock(&gs->lock);
     LP_LOGD(GOSSIPSUB_MODULE, "unsubscribed from topic %s", topic_name);
     return LIBP2P_ERR_OK;

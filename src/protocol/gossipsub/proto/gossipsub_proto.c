@@ -67,6 +67,10 @@ libp2p_err_t libp2p_gossipsub_rpc_encode_publish(const libp2p_gossipsub_message_
     if (noise_rc != NOISE_ERROR_NONE)
         goto cleanup;
 
+    noise_rc = libp2p_gossipsub_Message_add_topic_ids(proto_msg, topic, topic_len);
+    if (noise_rc != NOISE_ERROR_NONE)
+        goto cleanup;
+
     if (msg->data && msg->data_len)
     {
         noise_rc = libp2p_gossipsub_Message_set_data(proto_msg, msg->data, msg->data_len);

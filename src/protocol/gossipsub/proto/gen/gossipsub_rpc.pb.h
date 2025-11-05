@@ -53,6 +53,11 @@ int libp2p_gossipsub_RPC_SubOpts_has_topic(const libp2p_gossipsub_RPC_SubOpts *o
 const char *libp2p_gossipsub_RPC_SubOpts_get_topic(const libp2p_gossipsub_RPC_SubOpts *obj);
 size_t libp2p_gossipsub_RPC_SubOpts_get_size_topic(const libp2p_gossipsub_RPC_SubOpts *obj);
 int libp2p_gossipsub_RPC_SubOpts_set_topic(libp2p_gossipsub_RPC_SubOpts *obj, const char *value, size_t size);
+int libp2p_gossipsub_RPC_SubOpts_clear_topic_id(libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_has_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
+const char *libp2p_gossipsub_RPC_SubOpts_get_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
+size_t libp2p_gossipsub_RPC_SubOpts_get_size_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_set_topic_id(libp2p_gossipsub_RPC_SubOpts *obj, const char *value, size_t size);
 
 int libp2p_gossipsub_Message_new(libp2p_gossipsub_Message **obj);
 int libp2p_gossipsub_Message_free(libp2p_gossipsub_Message *obj);
@@ -78,6 +83,12 @@ int libp2p_gossipsub_Message_has_topic(const libp2p_gossipsub_Message *obj);
 const char *libp2p_gossipsub_Message_get_topic(const libp2p_gossipsub_Message *obj);
 size_t libp2p_gossipsub_Message_get_size_topic(const libp2p_gossipsub_Message *obj);
 int libp2p_gossipsub_Message_set_topic(libp2p_gossipsub_Message *obj, const char *value, size_t size);
+int libp2p_gossipsub_Message_clear_topic_ids(libp2p_gossipsub_Message *obj);
+int libp2p_gossipsub_Message_has_topic_ids(const libp2p_gossipsub_Message *obj);
+size_t libp2p_gossipsub_Message_count_topic_ids(const libp2p_gossipsub_Message *obj);
+const char *libp2p_gossipsub_Message_get_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index);
+size_t libp2p_gossipsub_Message_get_size_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index);
+int libp2p_gossipsub_Message_add_topic_ids(libp2p_gossipsub_Message *obj, const char *value, size_t size);
 int libp2p_gossipsub_Message_clear_signature(libp2p_gossipsub_Message *obj);
 int libp2p_gossipsub_Message_has_signature(const libp2p_gossipsub_Message *obj);
 const void *libp2p_gossipsub_Message_get_signature(const libp2p_gossipsub_Message *obj);
@@ -137,6 +148,11 @@ int libp2p_gossipsub_ControlIHave_has_topic(const libp2p_gossipsub_ControlIHave 
 const char *libp2p_gossipsub_ControlIHave_get_topic(const libp2p_gossipsub_ControlIHave *obj);
 size_t libp2p_gossipsub_ControlIHave_get_size_topic(const libp2p_gossipsub_ControlIHave *obj);
 int libp2p_gossipsub_ControlIHave_set_topic(libp2p_gossipsub_ControlIHave *obj, const char *value, size_t size);
+int libp2p_gossipsub_ControlIHave_clear_topic_id(libp2p_gossipsub_ControlIHave *obj);
+int libp2p_gossipsub_ControlIHave_has_topic_id(const libp2p_gossipsub_ControlIHave *obj);
+const char *libp2p_gossipsub_ControlIHave_get_topic_id(const libp2p_gossipsub_ControlIHave *obj);
+size_t libp2p_gossipsub_ControlIHave_get_size_topic_id(const libp2p_gossipsub_ControlIHave *obj);
+int libp2p_gossipsub_ControlIHave_set_topic_id(libp2p_gossipsub_ControlIHave *obj, const char *value, size_t size);
 int libp2p_gossipsub_ControlIHave_clear_message_ids(libp2p_gossipsub_ControlIHave *obj);
 int libp2p_gossipsub_ControlIHave_has_message_ids(const libp2p_gossipsub_ControlIHave *obj);
 size_t libp2p_gossipsub_ControlIHave_count_message_ids(const libp2p_gossipsub_ControlIHave *obj);
@@ -164,6 +180,11 @@ int libp2p_gossipsub_ControlGraft_has_topic(const libp2p_gossipsub_ControlGraft 
 const char *libp2p_gossipsub_ControlGraft_get_topic(const libp2p_gossipsub_ControlGraft *obj);
 size_t libp2p_gossipsub_ControlGraft_get_size_topic(const libp2p_gossipsub_ControlGraft *obj);
 int libp2p_gossipsub_ControlGraft_set_topic(libp2p_gossipsub_ControlGraft *obj, const char *value, size_t size);
+int libp2p_gossipsub_ControlGraft_clear_topic_id(libp2p_gossipsub_ControlGraft *obj);
+int libp2p_gossipsub_ControlGraft_has_topic_id(const libp2p_gossipsub_ControlGraft *obj);
+const char *libp2p_gossipsub_ControlGraft_get_topic_id(const libp2p_gossipsub_ControlGraft *obj);
+size_t libp2p_gossipsub_ControlGraft_get_size_topic_id(const libp2p_gossipsub_ControlGraft *obj);
+int libp2p_gossipsub_ControlGraft_set_topic_id(libp2p_gossipsub_ControlGraft *obj, const char *value, size_t size);
 
 int libp2p_gossipsub_ControlPrune_new(libp2p_gossipsub_ControlPrune **obj);
 int libp2p_gossipsub_ControlPrune_free(libp2p_gossipsub_ControlPrune *obj);
@@ -174,6 +195,11 @@ int libp2p_gossipsub_ControlPrune_has_topic(const libp2p_gossipsub_ControlPrune 
 const char *libp2p_gossipsub_ControlPrune_get_topic(const libp2p_gossipsub_ControlPrune *obj);
 size_t libp2p_gossipsub_ControlPrune_get_size_topic(const libp2p_gossipsub_ControlPrune *obj);
 int libp2p_gossipsub_ControlPrune_set_topic(libp2p_gossipsub_ControlPrune *obj, const char *value, size_t size);
+int libp2p_gossipsub_ControlPrune_clear_topic_id(libp2p_gossipsub_ControlPrune *obj);
+int libp2p_gossipsub_ControlPrune_has_topic_id(const libp2p_gossipsub_ControlPrune *obj);
+const char *libp2p_gossipsub_ControlPrune_get_topic_id(const libp2p_gossipsub_ControlPrune *obj);
+size_t libp2p_gossipsub_ControlPrune_get_size_topic_id(const libp2p_gossipsub_ControlPrune *obj);
+int libp2p_gossipsub_ControlPrune_set_topic_id(libp2p_gossipsub_ControlPrune *obj, const char *value, size_t size);
 int libp2p_gossipsub_ControlPrune_clear_peers(libp2p_gossipsub_ControlPrune *obj);
 int libp2p_gossipsub_ControlPrune_has_peers(const libp2p_gossipsub_ControlPrune *obj);
 size_t libp2p_gossipsub_ControlPrune_count_peers(const libp2p_gossipsub_ControlPrune *obj);

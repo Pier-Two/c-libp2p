@@ -134,6 +134,9 @@ typedef struct gossipsub_px_dial_ctx
 {
     libp2p_gossipsub_t *gs;
     peer_id_t *peer;
+    size_t protocol_index;
+    size_t protocol_count;
+    const char *current_protocol;
 } gossipsub_px_dial_ctx_t;
 
 struct libp2p_gossipsub_validator_handle

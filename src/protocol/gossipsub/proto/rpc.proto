@@ -10,6 +10,7 @@ message RPC {
   message SubOpts {
     bool subscribe = 1;
     string topic = 2;
+    string topic_id = 3;
   }
 
   repeated SubOpts subscriptions = 1;
@@ -22,6 +23,7 @@ message Message {
   bytes data = 2;
   bytes seqno = 3;
   string topic = 4;
+  repeated string topic_ids = 7;
   bytes signature = 5;
   bytes key = 6;
 }
@@ -38,6 +40,7 @@ message ControlMessage {
 message ControlIHave {
   string topic = 1;
   repeated bytes message_ids = 2;
+  string topic_id = 3;
 }
 
 message ControlIWant {
@@ -46,12 +49,14 @@ message ControlIWant {
 
 message ControlGraft {
   string topic = 1;
+  string topic_id = 2;
 }
 
 message ControlPrune {
   string topic = 1;
   repeated PeerInfo peers = 2;
   uint64 backoff = 3;
+  string topic_id = 4;
 }
 
 message ControlIDontWant {

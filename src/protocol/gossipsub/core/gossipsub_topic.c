@@ -1,10 +1,17 @@
+#ifndef LIBP2P_LOGGING_FORCE
+#define LIBP2P_LOGGING_FORCE 1
+#endif
+
 #include "gossipsub_topic.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "libp2p/log.h"
 #include "gossipsub_score.h"
+
+#define GOSSIPSUB_MODULE "gossipsub"
 static void gossipsub_mesh_member_free(gossipsub_mesh_member_t *node)
 {
     if (!node)

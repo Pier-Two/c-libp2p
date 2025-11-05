@@ -15,6 +15,10 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
                                                  gossipsub_peer_entry_t *entry,
                                                  const uint8_t *frame,
                                                  size_t frame_len);
+libp2p_err_t gossipsub_peer_send_subscription_locked(libp2p_gossipsub_t *gs,
+                                                     gossipsub_peer_entry_t *entry,
+                                                     const char *topic,
+                                                     int subscribe);
 void gossipsub_peer_topics_clear(gossipsub_peer_entry_t *entry);
 gossipsub_peer_topic_t *gossipsub_peer_topic_find(gossipsub_peer_topic_t *head, const char *topic);
 libp2p_err_t gossipsub_peer_topic_subscribe(libp2p_gossipsub_t *gs,
