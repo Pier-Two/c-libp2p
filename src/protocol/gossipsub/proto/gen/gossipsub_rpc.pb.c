@@ -29,14 +29,14 @@ struct _libp2p_gossipsub_Message {
     size_t seqno_size_;
     char *topic;
     size_t topic_size_;
-    char **topic_ids;
-    size_t *topic_ids_size_;
-    size_t topic_ids_count_;
-    size_t topic_ids_max_;
     void *signature;
     size_t signature_size_;
     void *key;
     size_t key_size_;
+    char **topic_ids;
+    size_t *topic_ids_size_;
+    size_t topic_ids_count_;
+    size_t topic_ids_max_;
 };
 
 struct _libp2p_gossipsub_ControlMessage {
@@ -61,12 +61,12 @@ struct _libp2p_gossipsub_ControlMessage {
 struct _libp2p_gossipsub_ControlIHave {
     char *topic;
     size_t topic_size_;
-    char *topic_id;
-    size_t topic_id_size_;
     void **message_ids;
     size_t *message_ids_size_;
     size_t message_ids_count_;
     size_t message_ids_max_;
+    char *topic_id;
+    size_t topic_id_size_;
 };
 
 struct _libp2p_gossipsub_ControlIWant {
@@ -86,12 +86,12 @@ struct _libp2p_gossipsub_ControlGraft {
 struct _libp2p_gossipsub_ControlPrune {
     char *topic;
     size_t topic_size_;
-    char *topic_id;
-    size_t topic_id_size_;
     libp2p_gossipsub_PeerInfo **peers;
     size_t peers_count_;
     size_t peers_max_;
     uint64_t backoff;
+    char *topic_id;
+    size_t topic_id_size_;
 };
 
 struct _libp2p_gossipsub_ControlIDontWant {
@@ -385,10 +385,10 @@ int libp2p_gossipsub_RPC_SubOpts_write(NoiseProtobuf *pbuf, int tag, const libp2
     if (!pbuf || !obj)
         return NOISE_ERROR_INVALID_PARAM;
     noise_protobuf_write_end_element(pbuf, &end_posn);
-    if (obj->topic)
-        noise_protobuf_write_string(pbuf, 2, obj->topic, obj->topic_size_);
     if (obj->topic_id)
         noise_protobuf_write_string(pbuf, 3, obj->topic_id, obj->topic_id_size_);
+    if (obj->topic)
+        noise_protobuf_write_string(pbuf, 2, obj->topic, obj->topic_size_);
     if (obj->subscribe)
         noise_protobuf_write_bool(pbuf, 1, obj->subscribe);
     return noise_protobuf_write_start_element(pbuf, tag, end_posn);
@@ -572,12 +572,12 @@ int libp2p_gossipsub_Message_free(libp2p_gossipsub_Message *obj)
     noise_protobuf_free_memory(obj->data, obj->data_size_);
     noise_protobuf_free_memory(obj->seqno, obj->seqno_size_);
     noise_protobuf_free_memory(obj->topic, obj->topic_size_);
+    noise_protobuf_free_memory(obj->signature, obj->signature_size_);
+    noise_protobuf_free_memory(obj->key, obj->key_size_);
     for (index = 0; index < obj->topic_ids_count_; ++index)
         noise_protobuf_free_memory(obj->topic_ids[index], obj->topic_ids_size_[index]);
     noise_protobuf_free_memory(obj->topic_ids, obj->topic_ids_max_ * sizeof(char *));
     noise_protobuf_free_memory(obj->topic_ids_size_, obj->topic_ids_max_ * sizeof(size_t));
-    noise_protobuf_free_memory(obj->signature, obj->signature_size_);
-    noise_protobuf_free_memory(obj->key, obj->key_size_);
     noise_protobuf_free_memory(obj, sizeof(libp2p_gossipsub_Message));
     return NOISE_ERROR_NONE;
 }
@@ -660,7 +660,7 @@ int libp2p_gossipsub_Message_read(NoiseProtobuf *pbuf, int tag, libp2p_gossipsub
             case 7: {
                 char *value = 0;
                 size_t len = 0;
-                noise_protobuf_read_alloc_string(pbuf, 7, &value, 0, &len);
+noise_protobuf_read_alloc_string(pbuf, 7, &value, 0, &len);
                 libp2p_gossipsub_Message_add_topic_ids(*obj, value, len);
             } break;
             default: {
@@ -849,55 +849,6 @@ int libp2p_gossipsub_Message_set_topic(libp2p_gossipsub_Message *obj, const char
     return NOISE_ERROR_INVALID_PARAM;
 }
 
-int libp2p_gossipsub_Message_clear_topic_ids(libp2p_gossipsub_Message *obj)
-{
-    size_t index;
-    if (obj) {
-        for (index = 0; index < obj->topic_ids_count_; ++index)
-            noise_protobuf_free_memory(obj->topic_ids[index], obj->topic_ids_size_[index]);
-        noise_protobuf_free_memory(obj->topic_ids, obj->topic_ids_max_ * sizeof(char *));
-        noise_protobuf_free_memory(obj->topic_ids_size_, obj->topic_ids_max_ * sizeof(size_t));
-        obj->topic_ids = 0;
-        obj->topic_ids_count_ = 0;
-        obj->topic_ids_max_ = 0;
-        return NOISE_ERROR_NONE;
-    }
-    return NOISE_ERROR_INVALID_PARAM;
-}
-
-int libp2p_gossipsub_Message_has_topic_ids(const libp2p_gossipsub_Message *obj)
-{
-    return obj ? (obj->topic_ids_count_ != 0) : 0;
-}
-
-size_t libp2p_gossipsub_Message_count_topic_ids(const libp2p_gossipsub_Message *obj)
-{
-    return obj ? obj->topic_ids_count_ : 0;
-}
-
-const char *libp2p_gossipsub_Message_get_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index)
-{
-    if (obj && index < obj->topic_ids_count_)
-        return obj->topic_ids[index];
-    else
-        return 0;
-}
-
-size_t libp2p_gossipsub_Message_get_size_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index)
-{
-    if (obj && index < obj->topic_ids_count_)
-        return obj->topic_ids_size_[index];
-    else
-        return 0;
-}
-
-int libp2p_gossipsub_Message_add_topic_ids(libp2p_gossipsub_Message *obj, const char *value, size_t size)
-{
-    if (!obj)
-        return NOISE_ERROR_INVALID_PARAM;
-    return noise_protobuf_add_to_string_array(&(obj->topic_ids), &(obj->topic_ids_size_), &(obj->topic_ids_count_), &(obj->topic_ids_max_), value, size);
-}
-
 int libp2p_gossipsub_Message_clear_signature(libp2p_gossipsub_Message *obj)
 {
     if (obj) {
@@ -982,6 +933,55 @@ int libp2p_gossipsub_Message_set_key(libp2p_gossipsub_Message *obj, const void *
         }
     }
     return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_Message_clear_topic_ids(libp2p_gossipsub_Message *obj)
+{
+    size_t index;
+    if (obj) {
+        for (index = 0; index < obj->topic_ids_count_; ++index)
+            noise_protobuf_free_memory(obj->topic_ids[index], obj->topic_ids_size_[index]);
+        noise_protobuf_free_memory(obj->topic_ids, obj->topic_ids_max_ * sizeof(char *));
+        noise_protobuf_free_memory(obj->topic_ids_size_, obj->topic_ids_max_ * sizeof(size_t));
+        obj->topic_ids = 0;
+        obj->topic_ids_count_ = 0;
+        obj->topic_ids_max_ = 0;
+        return NOISE_ERROR_NONE;
+    }
+    return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_Message_has_topic_ids(const libp2p_gossipsub_Message *obj)
+{
+    return obj ? (obj->topic_ids_count_ != 0) : 0;
+}
+
+size_t libp2p_gossipsub_Message_count_topic_ids(const libp2p_gossipsub_Message *obj)
+{
+    return obj ? obj->topic_ids_count_ : 0;
+}
+
+const char *libp2p_gossipsub_Message_get_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index)
+{
+    if (obj && index < obj->topic_ids_count_)
+        return obj->topic_ids[index];
+    else
+        return 0;
+}
+
+size_t libp2p_gossipsub_Message_get_size_at_topic_ids(const libp2p_gossipsub_Message *obj, size_t index)
+{
+    if (obj && index < obj->topic_ids_count_)
+        return obj->topic_ids_size_[index];
+    else
+        return 0;
+}
+
+int libp2p_gossipsub_Message_add_topic_ids(libp2p_gossipsub_Message *obj, const char *value, size_t size)
+{
+    if (!obj)
+        return NOISE_ERROR_INVALID_PARAM;
+    return noise_protobuf_add_to_string_array(&(obj->topic_ids), &(obj->topic_ids_size_), &(obj->topic_ids_count_), &(obj->topic_ids_max_), value, size);
 }
 
 int libp2p_gossipsub_ControlMessage_new(libp2p_gossipsub_ControlMessage **obj)
@@ -1466,11 +1466,11 @@ int libp2p_gossipsub_ControlIHave_free(libp2p_gossipsub_ControlIHave *obj)
     if (!obj)
         return NOISE_ERROR_INVALID_PARAM;
     noise_protobuf_free_memory(obj->topic, obj->topic_size_);
-    noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
     for (index = 0; index < obj->message_ids_count_; ++index)
         noise_protobuf_free_memory(obj->message_ids[index], obj->message_ids_size_[index]);
     noise_protobuf_free_memory(obj->message_ids, obj->message_ids_max_ * sizeof(void *));
     noise_protobuf_free_memory(obj->message_ids_size_, obj->message_ids_max_ * sizeof(size_t));
+    noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
     noise_protobuf_free_memory(obj, sizeof(libp2p_gossipsub_ControlIHave));
     return NOISE_ERROR_NONE;
 }
@@ -1581,50 +1581,6 @@ int libp2p_gossipsub_ControlIHave_set_topic(libp2p_gossipsub_ControlIHave *obj, 
     return NOISE_ERROR_INVALID_PARAM;
 }
 
-int libp2p_gossipsub_ControlIHave_clear_topic_id(libp2p_gossipsub_ControlIHave *obj)
-{
-    if (obj) {
-        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-        obj->topic_id = 0;
-        obj->topic_id_size_ = 0;
-        return NOISE_ERROR_NONE;
-    }
-    return NOISE_ERROR_INVALID_PARAM;
-}
-
-int libp2p_gossipsub_ControlIHave_has_topic_id(const libp2p_gossipsub_ControlIHave *obj)
-{
-    return obj ? (obj->topic_id != 0) : 0;
-}
-
-const char *libp2p_gossipsub_ControlIHave_get_topic_id(const libp2p_gossipsub_ControlIHave *obj)
-{
-    return obj ? obj->topic_id : 0;
-}
-
-size_t libp2p_gossipsub_ControlIHave_get_size_topic_id(const libp2p_gossipsub_ControlIHave *obj)
-{
-    return obj ? obj->topic_id_size_ : 0;
-}
-
-int libp2p_gossipsub_ControlIHave_set_topic_id(libp2p_gossipsub_ControlIHave *obj, const char *value, size_t size)
-{
-    if (obj) {
-        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-        obj->topic_id = (char *)malloc(size + 1);
-        if (obj->topic_id) {
-            memcpy(obj->topic_id, value, size);
-            obj->topic_id[size] = 0;
-            obj->topic_id_size_ = size;
-            return NOISE_ERROR_NONE;
-        } else {
-            obj->topic_id_size_ = 0;
-            return NOISE_ERROR_NO_MEMORY;
-        }
-    }
-    return NOISE_ERROR_INVALID_PARAM;
-}
-
 int libp2p_gossipsub_ControlIHave_clear_message_ids(libp2p_gossipsub_ControlIHave *obj)
 {
     size_t index;
@@ -1672,6 +1628,50 @@ int libp2p_gossipsub_ControlIHave_add_message_ids(libp2p_gossipsub_ControlIHave 
     if (!obj)
         return NOISE_ERROR_INVALID_PARAM;
     return noise_protobuf_add_to_bytes_array(&(obj->message_ids), &(obj->message_ids_size_), &(obj->message_ids_count_), &(obj->message_ids_max_), value, size);
+}
+
+int libp2p_gossipsub_ControlIHave_clear_topic_id(libp2p_gossipsub_ControlIHave *obj)
+{
+    if (obj) {
+        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
+        obj->topic_id = 0;
+        obj->topic_id_size_ = 0;
+        return NOISE_ERROR_NONE;
+    }
+    return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_ControlIHave_has_topic_id(const libp2p_gossipsub_ControlIHave *obj)
+{
+    return obj ? (obj->topic_id != 0) : 0;
+}
+
+const char *libp2p_gossipsub_ControlIHave_get_topic_id(const libp2p_gossipsub_ControlIHave *obj)
+{
+    return obj ? obj->topic_id : 0;
+}
+
+size_t libp2p_gossipsub_ControlIHave_get_size_topic_id(const libp2p_gossipsub_ControlIHave *obj)
+{
+    return obj ? obj->topic_id_size_ : 0;
+}
+
+int libp2p_gossipsub_ControlIHave_set_topic_id(libp2p_gossipsub_ControlIHave *obj, const char *value, size_t size)
+{
+    if (obj) {
+        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
+        obj->topic_id = (char *)malloc(size + 1);
+        if (obj->topic_id) {
+            memcpy(obj->topic_id, value, size);
+            obj->topic_id[size] = 0;
+            obj->topic_id_size_ = size;
+            return NOISE_ERROR_NONE;
+        } else {
+            obj->topic_id_size_ = 0;
+            return NOISE_ERROR_NO_MEMORY;
+        }
+    }
+    return NOISE_ERROR_INVALID_PARAM;
 }
 
 int libp2p_gossipsub_ControlIWant_new(libp2p_gossipsub_ControlIWant **obj)
@@ -1969,10 +1969,10 @@ int libp2p_gossipsub_ControlPrune_free(libp2p_gossipsub_ControlPrune *obj)
     if (!obj)
         return NOISE_ERROR_INVALID_PARAM;
     noise_protobuf_free_memory(obj->topic, obj->topic_size_);
-    noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
     for (index = 0; index < obj->peers_count_; ++index)
         libp2p_gossipsub_PeerInfo_free(obj->peers[index]);
     noise_protobuf_free_memory(obj->peers, obj->peers_max_ * sizeof(libp2p_gossipsub_PeerInfo *));
+    noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
     noise_protobuf_free_memory(obj, sizeof(libp2p_gossipsub_ControlPrune));
     return NOISE_ERROR_NONE;
 }
@@ -2090,50 +2090,6 @@ int libp2p_gossipsub_ControlPrune_set_topic(libp2p_gossipsub_ControlPrune *obj, 
     return NOISE_ERROR_INVALID_PARAM;
 }
 
-int libp2p_gossipsub_ControlPrune_clear_topic_id(libp2p_gossipsub_ControlPrune *obj)
-{
-    if (obj) {
-        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-        obj->topic_id = 0;
-        obj->topic_id_size_ = 0;
-        return NOISE_ERROR_NONE;
-    }
-    return NOISE_ERROR_INVALID_PARAM;
-}
-
-int libp2p_gossipsub_ControlPrune_has_topic_id(const libp2p_gossipsub_ControlPrune *obj)
-{
-    return obj ? (obj->topic_id != 0) : 0;
-}
-
-const char *libp2p_gossipsub_ControlPrune_get_topic_id(const libp2p_gossipsub_ControlPrune *obj)
-{
-    return obj ? obj->topic_id : 0;
-}
-
-size_t libp2p_gossipsub_ControlPrune_get_size_topic_id(const libp2p_gossipsub_ControlPrune *obj)
-{
-    return obj ? obj->topic_id_size_ : 0;
-}
-
-int libp2p_gossipsub_ControlPrune_set_topic_id(libp2p_gossipsub_ControlPrune *obj, const char *value, size_t size)
-{
-    if (obj) {
-        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-        obj->topic_id = (char *)malloc(size + 1);
-        if (obj->topic_id) {
-            memcpy(obj->topic_id, value, size);
-            obj->topic_id[size] = 0;
-            obj->topic_id_size_ = size;
-            return NOISE_ERROR_NONE;
-        } else {
-            obj->topic_id_size_ = 0;
-            return NOISE_ERROR_NO_MEMORY;
-        }
-    }
-    return NOISE_ERROR_INVALID_PARAM;
-}
-
 int libp2p_gossipsub_ControlPrune_clear_peers(libp2p_gossipsub_ControlPrune *obj)
 {
     size_t index;
@@ -2218,6 +2174,50 @@ int libp2p_gossipsub_ControlPrune_set_backoff(libp2p_gossipsub_ControlPrune *obj
     if (obj) {
         obj->backoff = value;
         return NOISE_ERROR_NONE;
+    }
+    return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_ControlPrune_clear_topic_id(libp2p_gossipsub_ControlPrune *obj)
+{
+    if (obj) {
+        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
+        obj->topic_id = 0;
+        obj->topic_id_size_ = 0;
+        return NOISE_ERROR_NONE;
+    }
+    return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_ControlPrune_has_topic_id(const libp2p_gossipsub_ControlPrune *obj)
+{
+    return obj ? (obj->topic_id != 0) : 0;
+}
+
+const char *libp2p_gossipsub_ControlPrune_get_topic_id(const libp2p_gossipsub_ControlPrune *obj)
+{
+    return obj ? obj->topic_id : 0;
+}
+
+size_t libp2p_gossipsub_ControlPrune_get_size_topic_id(const libp2p_gossipsub_ControlPrune *obj)
+{
+    return obj ? obj->topic_id_size_ : 0;
+}
+
+int libp2p_gossipsub_ControlPrune_set_topic_id(libp2p_gossipsub_ControlPrune *obj, const char *value, size_t size)
+{
+    if (obj) {
+        noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
+        obj->topic_id = (char *)malloc(size + 1);
+        if (obj->topic_id) {
+            memcpy(obj->topic_id, value, size);
+            obj->topic_id[size] = 0;
+            obj->topic_id_size_ = size;
+            return NOISE_ERROR_NONE;
+        } else {
+            obj->topic_id_size_ = 0;
+            return NOISE_ERROR_NO_MEMORY;
+        }
     }
     return NOISE_ERROR_INVALID_PARAM;
 }
@@ -2586,3 +2586,4 @@ int libp2p_gossipsub_PeerInfo_set_signed_peer_record(libp2p_gossipsub_PeerInfo *
     }
     return NOISE_ERROR_INVALID_PARAM;
 }
+
