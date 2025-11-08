@@ -511,6 +511,18 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     if (!entry->stream)
         return LIBP2P_ERR_AGAIN;
 
+    if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+    {
+        size_t queued = 0;
+        for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
+            queued++;
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "flush start entry=%p stream=%p queued=%zu",
+                (void *)entry,
+                (void *)entry->stream,
+                queued);
+    }
+
     while (entry->stream && entry->sendq_head)
     {
         gossipsub_sendq_item_t *item = entry->sendq_head;
@@ -602,7 +614,11 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                 }
                 return LIBP2P_ERR_AGAIN;
             }
-            LP_LOGW(GOSSIPSUB_MODULE, "failed to write gossipsub header to peer");
+            LP_LOGW(GOSSIPSUB_MODULE,
+                    "failed to write gossipsub header to peer entry=%p stream=%p header_remaining=%zu",
+                    (void *)entry,
+                    (void *)entry->stream,
+                    item ? (item->header_len - item->header_sent) : 0);
             gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
             return LIBP2P_ERR_INTERNAL;
         }
