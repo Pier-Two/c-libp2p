@@ -2075,7 +2075,9 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
             quic_stream_ctx_t *next = streams->next;
             if (streams->stream)
             {
-                libp2p__stream_destroy(streams->stream);
+                libp2p__stream_mark_deferred(streams->stream);
+                libp2p_stream_close(streams->stream);
+                libp2p_stream_free(streams->stream);
             }
             else
             {
