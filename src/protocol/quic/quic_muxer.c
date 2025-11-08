@@ -88,6 +88,28 @@ typedef struct quic_muxer_ctx
     pthread_mutex_t write_mtx;
 } quic_muxer_ctx_t;
 
+static void quic_muxer_ctx_retain(quic_muxer_ctx_t *ctx);
+static void quic_muxer_ctx_release(quic_muxer_ctx_t *ctx);
+
+static libp2p_quic_session_t *quic_muxer_retain_session(quic_muxer_ctx_t *mx)
+{
+    if (!mx)
+        return NULL;
+    libp2p_quic_session_t *session = NULL;
+    pthread_mutex_lock(&mx->lock);
+    session = mx->session;
+    if (session)
+        libp2p__quic_session_retain(session);
+    pthread_mutex_unlock(&mx->lock);
+    return session;
+}
+
+static void quic_muxer_release_session(libp2p_quic_session_t *session)
+{
+    if (session)
+        libp2p__quic_session_release(session);
+}
+
 typedef struct quic_stream_cb_task
 {
     libp2p_stream_t *stream;
@@ -1095,6 +1117,11 @@ static void quic_stream_ctx_destroy(quic_stream_ctx_t *ctx)
         quic_push_ctx_free(ctx->push);
         ctx->push = NULL;
     }
+    if (ctx->mx)
+    {
+        quic_muxer_ctx_release(ctx->mx);
+        ctx->mx = NULL;
+    }
     pthread_mutex_destroy(&ctx->lock);
     free(ctx);
 }
@@ -1429,14 +1456,15 @@ static void quic_stream_handshake_exec(void *arg)
     }
 
     int ok = 0;
-    if (mx && mx->host && mx->session)
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
+    if (mx && mx->host && session)
         ok = quic_run_inbound_handshake(mx, st);
 
     if (!ok)
     {
-        if (mx && mx->session)
+        if (session)
         {
-            picoquic_cnx_t *cnx = atomic_load_explicit(&mx->session->cnx, memory_order_acquire);
+            picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
             if (cnx)
                 picoquic_set_app_stream_ctx(cnx, st->stream_id, NULL);
         }
@@ -1463,6 +1491,7 @@ static void quic_stream_handshake_exec(void *arg)
         if (st->stream)
             quic_stream_schedule_readable(st);
     }
+    quic_muxer_release_session(session);
 
     pthread_mutex_lock(&st->lock);
     st->handshake_running = 0;
@@ -1791,19 +1820,23 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
     if (!st || !buf)
         return LIBP2P_ERR_NULL_PTR;
-    if (!st->mx || !st->mx->session)
+    if (!st->mx)
         return LIBP2P_ERR_INTERNAL;
     if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
     if (len == 0)
         return 0;
-    picoquic_cnx_t *cnx = atomic_load_explicit(&st->mx->session->cnx, memory_order_acquire);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    if (!session)
+        return LIBP2P_ERR_CLOSED;
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (!cnx)
     {
         LP_LOGW("QUIC",
                 "stream_backend_write drop ctx=%p stream_id=%" PRIu64 " reason=dead-session",
                 (void *)st,
                 st->stream_id);
+        quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
     LP_LOGI("QUIC",
@@ -1824,37 +1857,47 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
                 st->stream_id,
                 rc);
     }
-    libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);
+    libp2p__quic_session_wake(session);
     if (rc == 0)
     {
         quic_stream_schedule_writable(st);
+        quic_muxer_release_session(session);
         return (ssize_t)len;
     }
+    ssize_t err = LIBP2P_ERR_INTERNAL;
     if (rc == PICOQUIC_ERROR_SEND_BUFFER_TOO_SMALL)
-        return LIBP2P_ERR_AGAIN;
-    if (rc == PICOQUIC_ERROR_STREAM_ALREADY_CLOSED)
-        return LIBP2P_ERR_CLOSED;
-    if (rc == PICOQUIC_ERROR_INVALID_STREAM_ID)
-        return LIBP2P_ERR_INTERNAL;
-    return LIBP2P_ERR_INTERNAL;
+        err = LIBP2P_ERR_AGAIN;
+    else if (rc == PICOQUIC_ERROR_STREAM_ALREADY_CLOSED)
+        err = LIBP2P_ERR_CLOSED;
+    else if (rc == PICOQUIC_ERROR_INVALID_STREAM_ID)
+        err = LIBP2P_ERR_INTERNAL;
+    quic_muxer_release_session(session);
+    return err;
 }
 
 static int quic_stream_backend_close(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    if (!st || !st->mx || !st->mx->session)
+    if (!st || !st->mx)
         return LIBP2P_ERR_NULL_PTR;
     if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
     if (st->fin_local)
         return 0;
-    picoquic_cnx_t *cnx = atomic_load_explicit(&st->mx->session->cnx, memory_order_acquire);
-    if (!cnx)
+    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    if (!session)
         return LIBP2P_ERR_CLOSED;
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    if (!cnx)
+    {
+        quic_muxer_release_session(session);
+        return LIBP2P_ERR_CLOSED;
+    }
     pthread_mutex_lock(&st->mx->write_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, NULL, 0, 1);
     pthread_mutex_unlock(&st->mx->write_mtx);
-    libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);
+    libp2p__quic_session_wake(session);
+    quic_muxer_release_session(session);
     if (rc == 0)
     {
         st->fin_local = 1;
@@ -1868,17 +1911,24 @@ static int quic_stream_backend_close(void *io_ctx)
 static int quic_stream_backend_reset(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    if (!st || !st->mx || !st->mx->session)
+    if (!st || !st->mx)
         return LIBP2P_ERR_NULL_PTR;
     if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
-    picoquic_cnx_t *cnx = atomic_load_explicit(&st->mx->session->cnx, memory_order_acquire);
-    if (!cnx)
+    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    if (!session)
         return LIBP2P_ERR_CLOSED;
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    if (!cnx)
+    {
+        quic_muxer_release_session(session);
+        return LIBP2P_ERR_CLOSED;
+    }
     pthread_mutex_lock(&st->mx->write_mtx);
     int rc = picoquic_reset_stream(cnx, st->stream_id, 0);
     pthread_mutex_unlock(&st->mx->write_mtx);
-    libp2p__quic_session_wake(st->mx ? st->mx->session : NULL);
+    libp2p__quic_session_wake(session);
+    quic_muxer_release_session(session);
     if (rc == 0)
     {
         pthread_mutex_lock(&st->lock);
@@ -1936,12 +1986,14 @@ static void quic_stream_backend_free(void *io_ctx)
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
     if (!st)
         return;
+    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
     LP_LOGD("QUIC",
             "backend_free ctx=%p stream_id=%" PRIu64 " mx=%p session=%p",
             (void *)st,
             st->stream_id,
             (void *)st->mx,
-            st->mx ? (void *)st->mx->session : NULL);
+            (void *)session);
+    quic_muxer_release_session(session);
     if (st->mx)
     {
         pthread_mutex_lock(&st->mx->lock);
@@ -1967,14 +2019,21 @@ static const libp2p_stream_backend_ops_t QUIC_STREAM_OPS = {
 
 static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint64_t stream_id)
 {
-    if (!mx || !mx->session)
+    if (!mx)
+        return NULL;
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
+    if (!session)
         return NULL;
 
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)calloc(1, sizeof(*st));
     if (!st)
+    {
+        quic_muxer_release_session(session);
         return NULL;
+    }
 
     st->mx = mx;
+    quic_muxer_ctx_retain(mx);
     st->stream = NULL;
     st->stream_id = stream_id;
     st->head = st->tail = NULL;
@@ -1993,7 +2052,9 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
     st->push_cap = 0;
     if (pthread_mutex_init(&st->lock, NULL) != 0)
     {
+        quic_muxer_ctx_release(mx);
         free(st);
+        quic_muxer_release_session(session);
         return NULL;
     }
 
@@ -2001,13 +2062,14 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
     quic_muxer_append_stream(mx, st);
     pthread_mutex_unlock(&mx->lock);
 
-    picoquic_cnx_t *cnx = atomic_load_explicit(&mx->session->cnx, memory_order_acquire);
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (!cnx)
     {
         pthread_mutex_lock(&mx->lock);
         quic_muxer_remove_stream(mx, st);
         pthread_mutex_unlock(&mx->lock);
         quic_stream_ctx_release(st);
+        quic_muxer_release_session(session);
         return NULL;
     }
 
@@ -2021,6 +2083,7 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
         pthread_mutex_unlock(&mx->lock);
         picoquic_set_app_stream_ctx(cnx, stream_id, NULL);
         quic_stream_ctx_release(st);
+        quic_muxer_release_session(session);
         return NULL;
     }
 
@@ -2033,7 +2096,7 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
     st->handshake_running = 1;
     pthread_mutex_unlock(&st->lock);
     quic_stream_start_handshake(mx, st);
-
+    quic_muxer_release_session(session);
     return st;
 }
 
@@ -2053,17 +2116,27 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
     if (!mx || !out)
         return LIBP2P_MUXER_ERR_NULL_PTR;
     quic_muxer_ctx_t *ctx = (quic_muxer_ctx_t *)mx->ctx;
-    if (!ctx || !ctx->session)
+    if (!ctx)
         return LIBP2P_MUXER_ERR_INTERNAL;
-    picoquic_cnx_t *cnx = atomic_load_explicit(&ctx->session->cnx, memory_order_acquire);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(ctx);
+    if (!session)
+        return LIBP2P_MUXER_ERR_INTERNAL;
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     uint64_t stream_id = picoquic_get_next_local_stream_id(cnx, 0);
     if (stream_id == UINT64_MAX)
+    {
+        quic_muxer_release_session(session);
         return LIBP2P_MUXER_ERR_INTERNAL;
+    }
 
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)calloc(1, sizeof(*st));
     if (!st)
+    {
+        quic_muxer_release_session(session);
         return LIBP2P_MUXER_ERR_INTERNAL;
+    }
     st->mx = ctx;
+    quic_muxer_ctx_retain(ctx);
     st->stream = NULL;
     st->stream_id = stream_id;
     st->head = st->tail = NULL;
@@ -2082,7 +2155,9 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
     st->push_cap = 0;
     if (pthread_mutex_init(&st->lock, NULL) != 0)
     {
+        quic_muxer_ctx_release(ctx);
         free(st);
+        quic_muxer_release_session(session);
         return LIBP2P_MUXER_ERR_INTERNAL;
     }
 
@@ -2100,12 +2175,14 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
         quic_muxer_remove_stream(ctx, st);
         pthread_mutex_unlock(&ctx->lock);
         quic_stream_ctx_release(st);
+        quic_muxer_release_session(session);
         return LIBP2P_MUXER_ERR_INTERNAL;
     }
 
     st->stream = stream;
     libp2p_stream_set_parent(stream, NULL, mx, 0);
     *out = stream;
+    quic_muxer_release_session(session);
     return LIBP2P_MUXER_OK;
 }
 
@@ -2161,15 +2238,19 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
         ctx->local = NULL;
         multiaddr_free(ctx->remote);
         ctx->remote = NULL;
-            if (ctx->session)
-            {
-                picoquic_cnx_t *cnx = atomic_load_explicit(&ctx->session->cnx, memory_order_acquire);
-                if (cnx)
-                    picoquic_set_callback(cnx, NULL, NULL);
-                quic_session_attach_muxer(ctx->session, NULL);
-                libp2p__quic_session_release(ctx->session);
-                ctx->session = NULL;
-            }
+        libp2p_quic_session_t *session = NULL;
+        pthread_mutex_lock(&ctx->lock);
+        session = ctx->session;
+        ctx->session = NULL;
+        pthread_mutex_unlock(&ctx->lock);
+        if (session)
+        {
+            picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+            if (cnx)
+                picoquic_set_callback(cnx, NULL, NULL);
+            quic_session_attach_muxer(session, NULL);
+            libp2p__quic_session_release(session);
+        }
         ctx->host = NULL;
         ctx->owner = NULL;
         ctx->conn = NULL;
