@@ -483,8 +483,7 @@ static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
         if (st != last_state)
         {
-            fprintf(stderr, "[QUIC WAIT] state=%s(%d)\n", libp2p__quic_state_name(st), st);
-            fflush(stderr);
+            LP_LOGT("QUIC", "wait state=%s(%d)", libp2p__quic_state_name(st), st);
             last_state = st;
         }
         if (st == picoquic_state_ready)

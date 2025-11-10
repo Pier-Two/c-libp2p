@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "libp2p/log.h"
+
 #include "noise/protobufs.h"
 
 #define GOSSIPSUB_MODULE "gossipsub"
@@ -542,8 +544,8 @@ static libp2p_err_t gossipsub_rpc_parse_subscriptions(const libp2p_gossipsub_RPC
         const char *topic_id_raw = has_topic_id ? libp2p_gossipsub_RPC_SubOpts_get_topic_id(sub) : NULL;
         int has_subscribe = sub ? libp2p_gossipsub_RPC_SubOpts_has_subscribe(sub) : 0;
         int subscribe_value = has_subscribe ? (libp2p_gossipsub_RPC_SubOpts_get_subscribe(sub) ? 1 : 0) : -1;
-        fprintf(stderr,
-                "[gossipsub] parse_sub raw index=%zu has_topic=%d topic_len=%zu has_topic_id=%d topic_id_len=%zu subscribe_present=%d subscribe_value=%d\n",
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "parse_sub raw index=%zu has_topic=%d topic_len=%zu has_topic_id=%d topic_id_len=%zu subscribe_present=%d subscribe_value=%d",
                 i,
                 has_topic ? 1 : 0,
                 topic_len,

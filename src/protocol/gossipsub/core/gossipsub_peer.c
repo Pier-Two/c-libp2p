@@ -828,8 +828,8 @@ libp2p_err_t gossipsub_peer_send_subscription_locked(libp2p_gossipsub_t *gs,
     {
         char peer_buf[128];
         const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-        fprintf(stderr,
-                "[gossipsub] send_subscription peer=%s topic=%s subscribe=%d\n",
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "send_subscription peer=%s topic=%s subscribe=%d",
                 peer_repr,
                 topic,
                 subscribe ? 1 : 0);

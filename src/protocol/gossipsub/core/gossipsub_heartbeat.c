@@ -162,8 +162,8 @@ static void gossipsub_heartbeat_try_graft_from_candidates(libp2p_gossipsub_t *gs
         {
             char peer_buf[128];
             const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-            fprintf(stderr,
-                    "[gossipsub] send_graft peer=%s topic=%s\n",
+            LP_LOGT(GOSSIPSUB_MODULE,
+                    "send_graft peer=%s topic=%s",
                     peer_repr,
                     topic && topic->name ? topic->name : "(null)");
         }

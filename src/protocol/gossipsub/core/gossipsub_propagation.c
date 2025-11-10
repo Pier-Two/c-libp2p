@@ -625,8 +625,8 @@ static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_d
     char peer_buf[128];
     const char *peer_repr = gossipsub_peer_to_string(peer, peer_buf, sizeof(peer_buf));
 
-    fprintf(stderr,
-            "[gossipsub] PX dial schedule start peer=%s index=%zu count=%zu\n",
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "PX dial schedule start peer=%s index=%zu count=%zu",
             peer_repr,
             ctx->protocol_index,
             ctx->protocol_count);
@@ -641,8 +641,8 @@ static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_d
         }
 
         ctx->current_protocol = protocol;
-        fprintf(stderr,
-                "[gossipsub] PX dial attempting peer=%s protocol=%s\n",
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "PX dial attempting peer=%s protocol=%s",
                 peer_repr,
                 protocol);
 
@@ -650,8 +650,8 @@ static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_d
         if (rc == LIBP2P_ERR_OK)
             return;
 
-        fprintf(stderr,
-                "[gossipsub] PX dial immediate failure peer=%s protocol=%s rc=%d\n",
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "PX dial immediate failure peer=%s protocol=%s rc=%d",
                 peer_repr,
                 protocol,
                 rc);
@@ -669,8 +669,8 @@ static void gossipsub_px_schedule_attempt(libp2p_gossipsub_t *gs, gossipsub_px_d
         pthread_mutex_unlock(&gs->lock);
     }
 
-    fprintf(stderr,
-            "[gossipsub] PX dial exhausted protocols peer=%s attempts=%zu\n",
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "PX dial exhausted protocols peer=%s attempts=%zu",
             peer_repr,
             ctx->protocol_count);
 
@@ -697,8 +697,8 @@ static void gossipsub_px_dial_cb(libp2p_stream_t *s, void *user_data, int err)
 
     if (err == LIBP2P_ERR_OK && s)
     {
-        fprintf(stderr,
-                "[gossipsub] PX dial succeeded peer=%s protocol=%s\n",
+        LP_LOGT(GOSSIPSUB_MODULE,
+                "PX dial succeeded peer=%s protocol=%s",
                 peer_repr,
                 protocol);
         gossipsub_on_stream_open(s, gs);
@@ -706,8 +706,8 @@ static void gossipsub_px_dial_cb(libp2p_stream_t *s, void *user_data, int err)
         return;
     }
 
-    fprintf(stderr,
-            "[gossipsub] PX dial failed peer=%s protocol=%s err=%d\n",
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "PX dial failed peer=%s protocol=%s err=%d",
             peer_repr,
             protocol,
             err);
@@ -1047,8 +1047,8 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
 {
     char peer_buf[128];
     const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
-    fprintf(stderr,
-            "[gossipsub] handle_subscriptions peer=%s count=%zu\n",
+    LP_LOGT(GOSSIPSUB_MODULE,
+            "handle_subscriptions peer=%s count=%zu",
             peer_repr,
             count);
     if (!gs || !entry)
@@ -1067,8 +1067,8 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
         {
             char peer_buf[128];
             const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
-            fprintf(stderr,
-                    "[gossipsub] subscription peer=%s topic=%s topic_id=%s subscribe=1\n",
+            LP_LOGT(GOSSIPSUB_MODULE,
+                    "subscription peer=%s topic=%s topic_id=%s subscribe=1",
                     peer_repr,
                     sub->topic ? sub->topic : "(null)",
                     sub->topic_id ? sub->topic_id : "(null)");
@@ -1080,8 +1080,8 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
         {
             char peer_buf[128];
             const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
-            fprintf(stderr,
-                    "[gossipsub] subscription peer=%s topic=%s topic_id=%s subscribe=0\n",
+            LP_LOGT(GOSSIPSUB_MODULE,
+                    "subscription peer=%s topic=%s topic_id=%s subscribe=0",
                     peer_repr,
                     sub->topic ? sub->topic : "(null)",
                     sub->topic_id ? sub->topic_id : "(null)");
