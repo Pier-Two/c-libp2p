@@ -43,11 +43,23 @@ void gossipsub_host_events_populate_protocol_defs(libp2p_gossipsub_t *gs)
     if (!gs)
         return;
 
-    gs->num_protocol_defs = sizeof(k_gossipsub_protocols) / sizeof(k_gossipsub_protocols[0]);
-    for (size_t i = 0; i < gs->num_protocol_defs; i++)
+    const char *const *protocols = gs->cfg.protocol_ids;
+    size_t protocol_count = gs->cfg.protocol_id_count;
+    if (!protocols || protocol_count == 0)
     {
-        libp2p_protocol_def_t *def = &gs->protocol_defs[i];
-        def->protocol_id = k_gossipsub_protocols[i];
+        protocols = k_gossipsub_protocols;
+        protocol_count = sizeof(k_gossipsub_protocols) / sizeof(k_gossipsub_protocols[0]);
+    }
+
+    size_t max_defs = sizeof(gs->protocol_defs) / sizeof(gs->protocol_defs[0]);
+    gs->num_protocol_defs = 0;
+    for (size_t i = 0; i < protocol_count && gs->num_protocol_defs < max_defs; i++)
+    {
+        const char *pid = protocols[i];
+        if (!pid || !pid[0])
+            continue;
+        libp2p_protocol_def_t *def = &gs->protocol_defs[gs->num_protocol_defs++];
+        def->protocol_id = pid;
         def->read_mode = LIBP2P_READ_PUSH;
         def->on_open = gossipsub_on_stream_open;
         def->on_data = gossipsub_on_stream_data;
@@ -55,6 +67,25 @@ void gossipsub_host_events_populate_protocol_defs(libp2p_gossipsub_t *gs)
         def->on_close = gossipsub_on_stream_close;
         def->on_error = gossipsub_on_stream_error;
         def->user_data = gs;
+    }
+
+    if (gs->num_protocol_defs == 0)
+    {
+        gs->num_protocol_defs = sizeof(k_gossipsub_protocols) / sizeof(k_gossipsub_protocols[0]);
+        if (gs->num_protocol_defs > max_defs)
+            gs->num_protocol_defs = max_defs;
+        for (size_t i = 0; i < gs->num_protocol_defs; i++)
+        {
+            libp2p_protocol_def_t *def = &gs->protocol_defs[i];
+            def->protocol_id = k_gossipsub_protocols[i];
+            def->read_mode = LIBP2P_READ_PUSH;
+            def->on_open = gossipsub_on_stream_open;
+            def->on_data = gossipsub_on_stream_data;
+            def->on_eof = gossipsub_on_stream_eof;
+            def->on_close = gossipsub_on_stream_close;
+            def->on_error = gossipsub_on_stream_error;
+            def->user_data = gs;
+        }
     }
 }
 

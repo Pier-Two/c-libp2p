@@ -1165,6 +1165,8 @@ static int apply_gossipsub_params(const gossipsub_params_t *params, libp2p_gossi
         cfg->prune_backoff_ms = (int)llround(ns_to_ms(params->prune_backoff_ns));
     if (params->has_heartbeat_interval_ns)
         cfg->heartbeat_interval_ms = (int)llround(ns_to_ms(params->heartbeat_interval_ns));
+    if (params->has_fanout_ttl_ns)
+        cfg->fanout_ttl_ms = (uint64_t)llround(ns_to_ms(params->fanout_ttl_ns));
     if (params->has_opportunistic_graft_ticks)
     {
         double hb_ms = cfg->heartbeat_interval_ms > 0 ? cfg->heartbeat_interval_ms : ns_to_ms(HEARTBEAT_DEFAULT_NS);

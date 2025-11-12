@@ -127,6 +127,9 @@ typedef struct
     int ip_colocation_threshold;
     double behaviour_penalty_weight;
     double behaviour_penalty_decay;
+    uint64_t fanout_ttl_ms;
+    const char *const *protocol_ids;
+    size_t protocol_id_count;
 } libp2p_gossipsub_config_t;
 
 libp2p_err_t libp2p_gossipsub_config_default(libp2p_gossipsub_config_t *cfg);

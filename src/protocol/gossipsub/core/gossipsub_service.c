@@ -37,6 +37,7 @@
 #define GOSSIPSUB_DEFAULT_MESSAGE_CACHE_LEN 5U
 #define GOSSIPSUB_DEFAULT_MESSAGE_CACHE_GOSSIP 3U
 #define GOSSIPSUB_EXPLICIT_ADDR_TTL_MS (10 * 60 * 1000)
+#define GOSSIPSUB_DEFAULT_FANOUT_TTL_MS 60000ULL
 
 static void gossipsub_heartbeat_timer_cb(void *user_data);
 
@@ -295,6 +296,21 @@ static void gossipsub_init_config(libp2p_gossipsub_config_t *dst, const libp2p_g
     if (!src || src->struct_size < behaviour_decay_size ||
         dst->behaviour_penalty_decay < 0.0 || dst->behaviour_penalty_decay > 1.0)
         dst->behaviour_penalty_decay = 0.999;
+
+    size_t fanout_ttl_size = offsetof(libp2p_gossipsub_config_t, fanout_ttl_ms) +
+                             sizeof(dst->fanout_ttl_ms);
+    if (!src || src->struct_size < fanout_ttl_size || dst->fanout_ttl_ms == 0)
+        dst->fanout_ttl_ms = GOSSIPSUB_DEFAULT_FANOUT_TTL_MS;
+
+    size_t protocol_ids_field_size = offsetof(libp2p_gossipsub_config_t, protocol_ids) +
+                                     sizeof(dst->protocol_ids);
+    if (!src || src->struct_size < protocol_ids_field_size)
+        dst->protocol_ids = NULL;
+
+    size_t protocol_count_field_size = offsetof(libp2p_gossipsub_config_t, protocol_id_count) +
+                                       sizeof(dst->protocol_id_count);
+    if (!src || src->struct_size < protocol_count_field_size)
+        dst->protocol_id_count = 0;
 }
 
 libp2p_err_t libp2p_gossipsub_config_default(libp2p_gossipsub_config_t *cfg)
@@ -345,6 +361,9 @@ libp2p_err_t libp2p_gossipsub_config_default(libp2p_gossipsub_config_t *cfg)
     cfg->ip_colocation_threshold = 1;
     cfg->behaviour_penalty_weight = -1.0;
     cfg->behaviour_penalty_decay = 0.999;
+    cfg->fanout_ttl_ms = GOSSIPSUB_DEFAULT_FANOUT_TTL_MS;
+    cfg->protocol_ids = NULL;
+    cfg->protocol_id_count = 0;
     return LIBP2P_ERR_OK;
 }
 
@@ -1301,10 +1320,17 @@ libp2p_err_t libp2p_gossipsub__topic_fanout_add_peer(libp2p_gossipsub_t *gs,
         return LIBP2P_ERR_INTERNAL;
     }
 
-    if (ttl_ms >= UINT64_MAX - now_ms)
+    uint64_t effective_ttl = ttl_ms;
+    if (effective_ttl == 0)
+    {
+        uint64_t cfg_ttl = (gs->cfg.fanout_ttl_ms > 0) ? gs->cfg.fanout_ttl_ms : GOSSIPSUB_DEFAULT_FANOUT_TTL_MS;
+        effective_ttl = cfg_ttl;
+    }
+
+    if (effective_ttl >= UINT64_MAX - now_ms)
         topic->fanout_expire_ms = UINT64_MAX;
     else
-        topic->fanout_expire_ms = now_ms + ttl_ms;
+        topic->fanout_expire_ms = now_ms + effective_ttl;
 
     pthread_mutex_unlock(&gs->lock);
     return LIBP2P_ERR_OK;
