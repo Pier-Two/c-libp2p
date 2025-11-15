@@ -64,6 +64,7 @@ backup_tests*
 !bin/.emptydir
 debug.plist
 .sandbox-logs
+.interop-cache*
 
 # Ignore interal docs
 internal-docs*
