@@ -6,6 +6,9 @@
 #include <time.h>
 
 #include "host_internal.h"
+#include "libp2p/muxer_mplex.h"
+#include "libp2p/muxer_yamux.h"
+#include "libp2p/security_noise.h"
 
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"

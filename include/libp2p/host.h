@@ -12,7 +12,6 @@
 #include "libp2p/stream.h"
 #include "multiformats/multiaddr/multiaddr.h"
 #include "peer_id/peer_id.h"
-#include "protocol/muxer/yamux/protocol_yamux.h"
 
 #ifdef __cplusplus
 extern "C"

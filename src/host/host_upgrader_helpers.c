@@ -4,6 +4,8 @@
 #include "libp2p/error_map.h"
 #include "transport/upgrader.h"
 #include "libp2p/muxer.h"
+#include "libp2p/muxer_mplex.h"
+#include "libp2p/muxer_yamux.h"
 #include "protocol/muxer/yamux/protocol_yamux.h"
 #include "protocol/muxer/mplex/protocol_mplex.h"
 #include "protocol/quic/protocol_quic.h"

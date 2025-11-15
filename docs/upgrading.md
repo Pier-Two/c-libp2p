@@ -65,9 +65,11 @@ if necessary.
 While strongly recommended for application code, the host orchestrator is not
 mandatory. If you need absolute control—for example when developing a new
 transport or security handshake—you can still instantiate security transports,
-muxers, and the upgrader directly from `include/libp2p/security.h`,
-`include/libp2p/muxer.h`, and `transport/upgrader.h`. This is exactly what the
-host does internally.
+muxers, and the upgrader directly. Include the abstract interfaces from
+`include/libp2p/security.h` and `include/libp2p/muxer.h`, then opt into
+factories such as `include/libp2p/security_noise.h` and
+`include/libp2p/muxer_yamux.h` as needed alongside `transport/upgrader.h`.
+This is exactly what the host does internally.
 
 Manual upgrades resemble the older workflow:
 

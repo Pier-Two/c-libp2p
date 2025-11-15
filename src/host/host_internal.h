@@ -15,6 +15,7 @@
 #include "libp2p/metrics.h"
 #include "libp2p/security.h"
 #include "libp2p/transport.h"
+#include "protocol/muxer/yamux/protocol_yamux.h"
 #include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"

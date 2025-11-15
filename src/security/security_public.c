@@ -1,4 +1,6 @@
-#include "libp2p/security.h"
+#include "libp2p/security_noise.h"
+#include "libp2p/security_tls.h"
+#include "protocol/noise/protocol_noise.h"
 
 int libp2p_security_noise(libp2p_security_t **out)
 {
