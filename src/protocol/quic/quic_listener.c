@@ -77,7 +77,7 @@ struct quic_listener_ctx
     _Atomic int loop_stop;
 };
 
-static bool multiaddr_is_unspecified_or_loopback(const multiaddr_t *addr)
+static bool multiaddr_is_unspecified(const multiaddr_t *addr)
 {
     if (!addr)
         return false;
@@ -90,9 +90,7 @@ static bool multiaddr_is_unspecified_or_loopback(const multiaddr_t *addr)
         size_t len = sizeof(bytes);
         if (multiaddr_get_address_bytes(addr, 0, bytes, &len) != MULTIADDR_SUCCESS || len != sizeof(bytes))
             return false;
-        if ((bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0) ||
-            (bytes[0] == 127 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 1))
-            return true;
+        return bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0;
     }
     else if (proto == MULTICODEC_IP6)
     {
@@ -100,23 +98,12 @@ static bool multiaddr_is_unspecified_or_loopback(const multiaddr_t *addr)
         size_t len = sizeof(bytes);
         if (multiaddr_get_address_bytes(addr, 0, bytes, &len) != MULTIADDR_SUCCESS || len != sizeof(bytes))
             return false;
-        bool all_zero = true;
-        bool loopback = true;
         for (size_t i = 0; i < len; i++)
         {
             if (bytes[i] != 0)
-            {
-                all_zero = false;
-                if (i != len - 1 || bytes[i] != 1)
-                    loopback = false;
-            }
-            else if (i == len - 1)
-            {
-                loopback = false;
-            }
+                return false;
         }
-        if (all_zero || loopback)
-            return true;
+        return true;
     }
     return false;
 }
@@ -417,7 +404,7 @@ static libp2p_listener_err_t quic_listener_local_addr(libp2p_listener_t *l, mult
     multiaddr_t *base = ctx->bound_addr ? multiaddr_copy(ctx->bound_addr, NULL) : NULL;
     pthread_mutex_unlock(&ctx->lock);
 
-    if ((!base || multiaddr_is_unspecified_or_loopback(base)) && ctx->requested_addr)
+    if ((!base || multiaddr_is_unspecified(base)) && ctx->requested_addr)
     {
         if (base)
             multiaddr_free(base);
