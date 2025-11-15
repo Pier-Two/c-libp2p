@@ -25,3 +25,6 @@
 [submodule "external/picoquic"]
 	path = external/picoquic
 	url = https://github.com/Pier-Two/picoquic.git
+[submodule "tools/test-plans"]
+	path = tools/test-plans
+	url = https://github.com/Pier-Two/test-plans.git
