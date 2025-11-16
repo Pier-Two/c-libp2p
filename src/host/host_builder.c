@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "multiformats/multiaddr/multiaddr.h"
+#include "libp2p/component_registry.h"
 
 typedef struct list_node
 {
@@ -34,25 +35,21 @@ static int is_supported_transport(const char *name)
 {
     if (!name)
         return 0;
-    if ((strcmp(name, "tcp") == 0) || (strcmp(name, "quic") == 0))
-        return 1;
-    return 0;
+    return libp2p_component_lookup_transport(name) != NULL;
 }
 
 static int is_supported_security(const char *name)
 {
     if (!name)
         return 0;
-    /* Currently only Noise security is built-in */
-    return strcmp(name, "noise") == 0;
+    return libp2p_component_lookup_security(name) != NULL;
 }
 
 static int is_supported_muxer(const char *name)
 {
     if (!name)
         return 0;
-    /* yamux and mplex supported */
-    return (strcmp(name, "yamux") == 0) || (strcmp(name, "mplex") == 0);
+    return libp2p_component_lookup_muxer(name) != NULL;
 }
 
 static int validate_listen_addrs(const list_node_t *n)
@@ -128,6 +125,7 @@ static int list_push(list_node_t **head, const char *s)
 
 libp2p_host_builder_t *libp2p_host_builder_new(void)
 {
+    libp2p_component_registry_ensure_defaults();
     libp2p_host_builder_t *b = (libp2p_host_builder_t *)calloc(1, sizeof(*b));
     return b;
 }
@@ -274,6 +272,7 @@ int libp2p_host_builder_build(const libp2p_host_builder_t *b, libp2p_host_t **ou
 {
     if (!b || !out)
         return LIBP2P_ERR_NULL_PTR;
+    libp2p_component_registry_ensure_defaults();
     /* Validate dynamic lists up-front for clearer errors */
     int vrc;
     vrc = validate_listen_addrs(b->listen_addrs);

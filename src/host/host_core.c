@@ -6,19 +6,11 @@
 #include <time.h>
 
 #include "host_internal.h"
-#include "libp2p/muxer_mplex.h"
-#include "libp2p/muxer_yamux.h"
-#include "libp2p/security_noise.h"
-
+#include "libp2p/component_registry.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 #include "protocol/identify/protocol_identify.h"
-#include "protocol/muxer/mplex/protocol_mplex.h"
-#include "protocol/muxer/yamux/protocol_yamux.h"
-/* For adjusting TCP dial timeout to host options */
-#include "protocol/tcp/protocol_tcp_poller.h"
 #include "protocol/noise/protocol_noise.h"
-#include "protocol/tcp/protocol_tcp.h"
 #include "protocol/quic/protocol_quic.h"
 /* For push publisher */
 #include "libp2p/debug_trace.h"
@@ -180,6 +172,8 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
 {
     if (!opts || !out)
         return LIBP2P_ERR_NULL_PTR;
+    libp2p_component_registry_ensure_defaults();
+    int component_err = 0;
     libp2p_host_t *h = (libp2p_host_t *)calloc(1, sizeof(*h));
     if (!h)
         return LIBP2P_ERR_INTERNAL;
@@ -236,7 +230,7 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
     {
         libp2p_transport_t **arr = NULL;
         size_t n = 0;
-        /* From options */
+        int trans_rc = 0;
         if (h->opts.num_transport_names && h->opts.transport_names)
         {
             for (size_t i = 0; i < h->opts.num_transport_names; i++)
@@ -244,79 +238,85 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
                 const char *name = h->opts.transport_names[i];
                 if (!name)
                     continue;
+                libp2p_transport_factory_fn factory = libp2p_component_lookup_transport(name);
+                if (!factory)
+                {
+                    trans_rc = LIBP2P_ERR_UNSUPPORTED;
+                    break;
+                }
                 libp2p_transport_t *t = NULL;
-                if (strcmp(name, "tcp") == 0)
+                trans_rc = factory(&h->opts, &t);
+                if (trans_rc != 0 || !t)
                 {
-                    if (libp2p_transport_tcp(&t) == 0 && t)
-                    {
-                        /* Align TCP connect timeout with host dial_timeout_ms (monotonic). */
-                        tcp_transport_ctx_t *tcpctx = (tcp_transport_ctx_t *)t->ctx;
-                        if (tcpctx)
-                        {
-                            /* 0 → keep library default; >0 → apply host override */
-                            if (h->opts.dial_timeout_ms > 0)
-                                tcpctx->cfg.connect_timeout_ms = (uint32_t)h->opts.dial_timeout_ms;
-                            /* propagate metrics sink */
-                            tcpctx->metrics = h->metrics;
-                        }
-                        libp2p_transport_t **nb = realloc(arr, (n + 1) * sizeof(*arr));
-                        if (nb)
-                        {
-                            arr = nb;
-                            arr[n++] = t;
-                        }
-                        continue;
-                    }
+                    if (t)
+                        libp2p_transport_free(t);
+                    if (trans_rc == 0)
+                        trans_rc = LIBP2P_ERR_INTERNAL;
+                    break;
                 }
-                else if (strcmp(name, "quic") == 0)
+                libp2p_transport_t **nb = realloc(arr, (n + 1) * sizeof(*arr));
+                if (!nb)
                 {
-                    if (libp2p_transport_quic(&t) == 0 && t)
-                    {
-                        if (h->opts.dial_timeout_ms > 0)
-                            (void)libp2p_quic_transport_set_dial_timeout(t, (uint32_t)h->opts.dial_timeout_ms);
-                        libp2p_transport_t **nb = realloc(arr, (n + 1) * sizeof(*arr));
-                        if (nb)
-                        {
-                            arr = nb;
-                            arr[n++] = t;
-                        }
-                        continue;
-                    }
+                    libp2p_transport_free(t);
+                    trans_rc = LIBP2P_ERR_INTERNAL;
+                    break;
                 }
+                arr = nb;
+                arr[n++] = t;
             }
         }
-        /* Default to TCP if none created */
-        if (n == 0)
+        if (trans_rc == 0 && n == 0)
         {
-            libp2p_transport_t *t = NULL;
-            if (libp2p_transport_tcp(&t) == 0 && t)
+            libp2p_transport_factory_fn factory = libp2p_component_lookup_transport("tcp");
+            if (!factory)
+                factory = libp2p_component_first_transport();
+            if (factory)
             {
-                /* Align TCP connect timeout with host dial_timeout_ms (monotonic). */
-                tcp_transport_ctx_t *tcpctx = (tcp_transport_ctx_t *)t->ctx;
-                if (tcpctx)
+                libp2p_transport_t *t = NULL;
+                trans_rc = factory(&h->opts, &t);
+                if (trans_rc == 0 && t)
                 {
-                    if (h->opts.dial_timeout_ms > 0)
-                        tcpctx->cfg.connect_timeout_ms = (uint32_t)h->opts.dial_timeout_ms;
-                    tcpctx->metrics = h->metrics;
+                    arr = (libp2p_transport_t **)calloc(1, sizeof(*arr));
+                    if (!arr)
+                    {
+                        libp2p_transport_free(t);
+                        trans_rc = LIBP2P_ERR_INTERNAL;
+                    }
+                    else
+                    {
+                        arr[0] = t;
+                        n = 1;
+                    }
                 }
-                arr = (libp2p_transport_t **)calloc(1, sizeof(*arr));
-                if (!arr)
+                else if (trans_rc == 0)
                 {
-                    pthread_mutex_destroy(&h->mtx);
-                    free(h);
-                    return LIBP2P_ERR_INTERNAL;
+                    trans_rc = LIBP2P_ERR_INTERNAL;
                 }
-                arr[0] = t;
-                n = 1;
             }
+            else
+            {
+                trans_rc = LIBP2P_ERR_UNSUPPORTED;
+            }
+        }
+        if (trans_rc != 0)
+        {
+            if (arr)
+            {
+                for (size_t i = 0; i < n; i++)
+                    libp2p_transport_free(arr[i]);
+                free(arr);
+            }
+            component_err = trans_rc;
+            goto components_fail;
         }
         h->transports = arr;
         h->num_transports = n;
     }
 
+    /* Select security proposal */
     {
         libp2p_security_t *sec = NULL;
-        int selected = 0;
+        int sec_rc = 0;
         if (h->opts.num_security_proposals && h->opts.security_proposals)
         {
             for (size_t i = 0; i < h->opts.num_security_proposals; i++)
@@ -324,26 +324,48 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
                 const char *name = h->opts.security_proposals[i];
                 if (!name)
                     continue;
-                if (strcmp(name, "noise") == 0)
+                libp2p_security_factory_fn factory = libp2p_component_lookup_security(name);
+                if (!factory)
                 {
-                    if (libp2p_security_noise(&sec) == 0 && sec)
-                    {
-                        selected = 1;
-                        break;
-                    }
+                    sec_rc = LIBP2P_ERR_UNSUPPORTED;
+                    break;
                 }
+                sec_rc = factory(&h->opts, &sec);
+                if (sec_rc == 0 && sec)
+                    break;
+                if (sec)
+                {
+                    libp2p_security_free(sec);
+                    sec = NULL;
+                }
+                if (sec_rc != 0)
+                    break;
             }
         }
-        if (!selected)
+        if (!sec && sec_rc == 0)
         {
-            (void)libp2p_security_noise(&sec);
+            libp2p_security_factory_fn factory = libp2p_component_lookup_security("noise");
+            if (!factory)
+                factory = libp2p_component_first_security();
+            if (factory)
+                sec_rc = factory(&h->opts, &sec);
+            else
+                sec_rc = LIBP2P_ERR_UNSUPPORTED;
+        }
+        if (sec_rc != 0 || !sec)
+        {
+            if (sec)
+                libp2p_security_free(sec);
+            component_err = sec_rc != 0 ? sec_rc : LIBP2P_ERR_INTERNAL;
+            goto components_fail;
         }
         h->noise = sec;
     }
 
+    /* Select muxer */
     {
         libp2p_muxer_t *mx = NULL;
-        int selected = 0;
+        int mx_rc = 0;
         if (h->opts.num_muxer_proposals && h->opts.muxer_proposals)
         {
             for (size_t i = 0; i < h->opts.num_muxer_proposals; i++)
@@ -351,46 +373,42 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
                 const char *name = h->opts.muxer_proposals[i];
                 if (!name)
                     continue;
-                if (strcmp(name, "yamux") == 0)
+                libp2p_muxer_factory_fn factory = libp2p_component_lookup_muxer(name);
+                if (!factory)
                 {
-                    if (libp2p_muxer_yamux(&mx) == 0 && mx)
-                    {
-                        selected = 1;
-                        break;
-                    }
+                    mx_rc = LIBP2P_ERR_UNSUPPORTED;
+                    break;
                 }
-                else if (strcmp(name, "mplex") == 0)
+                mx_rc = factory(&h->opts, &mx);
+                if (mx_rc == 0 && mx)
+                    break;
+                if (mx)
                 {
-                    if (libp2p_muxer_mplex(&mx) == 0 && mx)
-                    {
-                        selected = 1;
-                        break;
-                    }
+                    libp2p_muxer_free(mx);
+                    mx = NULL;
                 }
+                if (mx_rc != 0)
+                    break;
             }
         }
-        if (!selected)
+        if (!mx && mx_rc == 0)
         {
-            (void)libp2p_muxer_yamux(&mx);
+            libp2p_muxer_factory_fn factory = libp2p_component_lookup_muxer("yamux");
+            if (!factory)
+                factory = libp2p_component_first_muxer();
+            if (factory)
+                mx_rc = factory(&h->opts, &mx);
+            else
+                mx_rc = LIBP2P_ERR_UNSUPPORTED;
+        }
+        if (mx_rc != 0 || !mx)
+        {
+            if (mx)
+                libp2p_muxer_free(mx);
+            component_err = mx_rc != 0 ? mx_rc : LIBP2P_ERR_INTERNAL;
+            goto components_fail;
         }
         h->yamux = mx;
-    }
-
-    if (h->num_transports == 0 || !h->transports || !h->noise || !h->yamux)
-    {
-        if (h->yamux)
-            libp2p_muxer_free(h->yamux);
-        if (h->noise)
-            libp2p_security_free(h->noise);
-        if (h->transports)
-        {
-            for (size_t i = 0; i < h->num_transports; i++)
-                libp2p_transport_free(h->transports[i]);
-            free(h->transports);
-        }
-        pthread_mutex_destroy(&h->mtx);
-        free(h);
-        return LIBP2P_ERR_INTERNAL;
     }
 
     /* Resource manager removed for rust-libp2p parity */
@@ -408,6 +426,27 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
     /* Start lightweight publish service (Identify Push triggers) */
     (void)libp2p_publish_service_start(h);
     return 0;
+
+components_fail:
+    if (h->yamux)
+        libp2p_muxer_free(h->yamux);
+    if (h->noise)
+        libp2p_security_free(h->noise);
+    if (h->transports)
+    {
+        for (size_t i = 0; i < h->num_transports; i++)
+            libp2p_transport_free(h->transports[i]);
+        free(h->transports);
+        h->transports = NULL;
+        h->num_transports = 0;
+    }
+    libp2p__cbexec_stop(h);
+    libp2p__event_dispatcher_stop(h);
+    pthread_cond_destroy(&h->worker_cv);
+    pthread_cond_destroy(&h->evt_cv);
+    pthread_mutex_destroy(&h->mtx);
+    free(h);
+    return component_err != 0 ? component_err : LIBP2P_ERR_INTERNAL;
 }
 
 int libp2p_host_new_default(const char *const *listen_addrs, size_t num_listen_addrs, libp2p_host_t **out)

@@ -555,6 +555,7 @@ add_library(libp2p_unified
     src/host/host_dial.c
     src/host/host_upgrader_helpers.c
     src/host/host_events.c
+    src/host/component_registry.c
     
     src/host/host_registry.c
     src/host/host_introspect.c

@@ -71,3 +71,6 @@ internal-docs*
 
 # IDE Settings
 .vscode/*
+
+# Ignore interop cache
+interop-cache*
