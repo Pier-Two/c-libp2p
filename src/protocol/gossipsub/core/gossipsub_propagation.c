@@ -1051,6 +1051,17 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
             "handle_subscriptions peer=%s count=%zu",
             peer_repr,
             count);
+    for (size_t i = 0; i < count; ++i) {
+        gossipsub_rpc_subscription_t *sub = &subs[i];
+        if (!sub || !sub->topic)
+            continue;
+        LP_LOGI(
+            GOSSIPSUB_MODULE,
+            "subscription_inbound peer=%s topic=%s subscribe=%d",
+            peer_repr,
+            sub->topic ? sub->topic : "(null)",
+            sub->subscribe ? 1 : 0);
+    }
     if (!gs || !entry)
         return LIBP2P_ERR_NULL_PTR;
     if (!subs || count == 0)

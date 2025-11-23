@@ -47,6 +47,7 @@ typedef struct stream_stub
     atomic_int defer_destroy;
     atomic_int pending_async;
     atomic_int destroy_state;
+    atomic_bool freed;
 } stream_stub_t;
 
 static stream_stub_t *S(libp2p_stream_t *s) { return (stream_stub_t *)s; }
@@ -55,8 +56,10 @@ static const stream_stub_t *SC(const libp2p_stream_t *s) { return (const stream_
 ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len)
 {
     stream_stub_t *st = S(s);
-    if (!st)
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire))
         return LIBP2P_ERR_NULL_PTR;
+    if (st->closed)
+        return LIBP2P_ERR_CLOSED;
     if (st->has_ops && st->ops.write)
     {
         ssize_t n = st->ops.write(st->io_ctx, buf, len);
@@ -73,18 +76,12 @@ ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len)
     }
     if (!st->c)
     {
-        void *proto_ptr = (void *)st->proto;
-        void *write_cb = st->has_ops ? (void *)st->ops.write : NULL;
-        const char *remote_addr = st->remote_addr_str ? st->remote_addr_str : "(unknown)";
-        fprintf(stderr,
-                "[STREAM] missing conn backend: stream=%p proto_ptr=%p remote_addr=%s has_ops=%d closed=%d write_cb=%p\n",
-                (void *)s,
-                proto_ptr,
-                remote_addr,
-                st->has_ops,
-                st->closed,
-                write_cb);
-        return LIBP2P_ERR_NULL_PTR;
+        /* The underlying connection was already torn down (e.g. session close)
+         * but upper layers still hold the stream handle. Treat this as a clean
+         * closure so callers can gracefully abort instead of aborting on a
+         * null backend. */
+        st->closed = 1;
+        return LIBP2P_ERR_CLOSED;
     }
     {
         ssize_t n = libp2p_conn_write(st->c, buf, len);
@@ -104,8 +101,10 @@ ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len)
 ssize_t libp2p_stream_writev(libp2p_stream_t *s, const struct iovec *iov, int iovcnt)
 {
     stream_stub_t *st = S(s);
-    if (!st || !iov || iovcnt <= 0)
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire) || !iov || iovcnt <= 0)
         return LIBP2P_ERR_NULL_PTR;
+    if (st->closed)
+        return LIBP2P_ERR_CLOSED;
 
     ssize_t total = 0;
     for (int i = 0; i < iovcnt; i++)
@@ -115,7 +114,7 @@ ssize_t libp2p_stream_writev(libp2p_stream_t *s, const struct iovec *iov, int io
         while (remain > 0)
         {
             ssize_t n = st->has_ops && st->ops.write ? st->ops.write(st->io_ctx, base, remain)
-                                                     : (st->c ? libp2p_conn_write(st->c, base, remain) : LIBP2P_ERR_NULL_PTR);
+                                                     : (st->c ? libp2p_conn_write(st->c, base, remain) : LIBP2P_ERR_CLOSED);
             if (n < 0)
             {
                 /* if we've written something already, return the progress */
@@ -175,6 +174,9 @@ int libp2p_stream_close(libp2p_stream_t *s)
         rc = libp2p_conn_close(st->c);
     else
         rc = LIBP2P_ERR_NULL_PTR;
+    /* Once closed, prevent further I/O from using a stale conn pointer. */
+    st->c = NULL;
+    st->closed = 1;
     /* Emit stream/conn closed events if we have a host */
     if (st->host)
     {
@@ -276,7 +278,7 @@ int libp2p_stream_reset(libp2p_stream_t *s)
 void libp2p_stream_free(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);
-    if (!st)
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire))
         return;
     int deferred = atomic_load_explicit(&st->defer_destroy, memory_order_acquire);
     if (deferred > 0)
@@ -296,8 +298,10 @@ void libp2p_stream_free(libp2p_stream_t *s)
 ssize_t libp2p_stream_read(libp2p_stream_t *s, void *buf, size_t len)
 {
     stream_stub_t *st = S(s);
-    if (!st)
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire))
         return LIBP2P_ERR_NULL_PTR;
+    if (st->closed)
+        return LIBP2P_ERR_CLOSED;
     if (st->has_ops && st->ops.read)
     {
         ssize_t n = st->ops.read(st->io_ctx, buf, len);
@@ -420,6 +424,12 @@ const multiaddr_t *libp2p_stream_remote_addr(const libp2p_stream_t *s)
     return libp2p_conn_remote_addr(st->c);
 }
 
+const char *libp2p_stream_remote_addr_str(const libp2p_stream_t *s)
+{
+    const stream_stub_t *st = SC(s);
+    return st ? st->remote_addr_str : NULL;
+}
+
 const peer_id_t *libp2p_stream_remote_peer(const libp2p_stream_t *s)
 {
     const stream_stub_t *st = SC(s);
@@ -450,6 +460,7 @@ libp2p_stream_t *libp2p_stream_from_conn(struct libp2p_host *host, libp2p_conn_t
     atomic_init(&ss->defer_destroy, 0);
     atomic_init(&ss->pending_async, 0);
     atomic_init(&ss->destroy_state, 0);
+    atomic_init(&ss->freed, false);
 
     /* Cache remote address string for reuse and register in host list */
     if (host)
@@ -622,7 +633,7 @@ void libp2p__stream_mark_deferred(libp2p_stream_t *s)
 int libp2p__stream_retain_async(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);
-    if (!st)
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire))
         return 0;
     atomic_fetch_add_explicit(&st->pending_async, 1, memory_order_acq_rel);
     int state = atomic_load_explicit(&st->destroy_state, memory_order_acquire);
@@ -646,6 +657,8 @@ int libp2p__stream_release_async(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);
     if (!st)
+        return 0;
+    if (atomic_load_explicit(&st->freed, memory_order_acquire))
         return 0;
     int prev = atomic_fetch_sub_explicit(&st->pending_async, 1, memory_order_acq_rel);
     if (prev <= 0)
@@ -690,6 +703,7 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
     atomic_init(&ss->defer_destroy, 0);
     atomic_init(&ss->pending_async, 0);
     atomic_init(&ss->destroy_state, 0);
+    atomic_init(&ss->freed, false);
 
     if (host)
     {
@@ -721,6 +735,10 @@ void libp2p__stream_destroy(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);
     if (!st)
+        return;
+    /* idempotent: if already freed, bail */
+    bool was_freed = atomic_exchange_explicit(&st->freed, true, memory_order_acq_rel);
+    if (was_freed)
         return;
     if (!st->closed)
         (void)libp2p_stream_close(s);

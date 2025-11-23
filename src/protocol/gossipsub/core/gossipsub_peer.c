@@ -280,6 +280,13 @@ void gossipsub_peer_detach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
 
     if (entry->stream && (!s || entry->stream == s))
     {
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+        LP_LOGI(
+            GOSSIPSUB_MODULE,
+            "peer_detach_stream peer=%s outbound=%d",
+            peer_repr,
+            entry->outbound_stream);
         libp2p_stream_on_writable(entry->stream, NULL, NULL);
         libp2p_stream_set_user_data(entry->stream, NULL);
         entry->stream = NULL;
@@ -301,10 +308,14 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
     entry->stream = s;
     entry->write_backpressure = 0;
     libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
-    LP_LOGT(GOSSIPSUB_MODULE,
-            "peer attach stream entry=%p decoder_max=%zu",
-            (void *)entry,
-            entry->decoder.max_frame_len);
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+    LP_LOGI(
+        GOSSIPSUB_MODULE,
+        "peer_attach_stream peer=%s entry=%p decoder_max=%zu",
+        peer_repr,
+        (void *)entry,
+        entry->decoder.max_frame_len);
     if (entry->explicit_peering)
         gossipsub_peer_explicit_cancel_timer_locked(gs, entry);
     if (s)
@@ -844,11 +855,22 @@ static void gossipsub_peer_send_current_subscriptions_locked(libp2p_gossipsub_t 
 {
     if (!gs || !entry)
         return;
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+    LP_LOGI(
+        GOSSIPSUB_MODULE,
+        "send_current_subscriptions peer=%s",
+        peer_repr);
 
     for (gossipsub_topic_state_t *topic = gs->topics; topic; topic = topic->next)
     {
         if (!topic->subscribed || !topic->name)
             continue;
+        LP_LOGI(
+            GOSSIPSUB_MODULE,
+            "send_current_subscriptions peer=%s topic=%s",
+            peer_repr,
+            topic->name);
         (void)gossipsub_peer_send_subscription_locked(gs, entry, topic->name, 1);
     }
 }

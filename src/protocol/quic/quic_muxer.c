@@ -1820,15 +1820,18 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
     if (!st || !buf)
         return LIBP2P_ERR_NULL_PTR;
-    if (!st->mx)
+    quic_muxer_ctx_t *mx = st->mx;
+    if (!mx)
         return LIBP2P_ERR_INTERNAL;
-    if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
+    /* Fast path bail out if muxer already marked closed. */
+    if (atomic_load_explicit(&mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
     if (len == 0)
         return 0;
-    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
     if (!session)
         return LIBP2P_ERR_CLOSED;
+    /* Snapshot cnx before taking write lock; session->cnx is nulled during close. */
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (!cnx)
     {
@@ -1839,15 +1842,37 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
         quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
+    picoquic_state_enum cnx_state = picoquic_get_cnx_state(cnx);
+    /* Avoid writing into a connection that is already closing/disconnected. */
+    if (cnx_state >= picoquic_state_disconnected || cnx_state == picoquic_state_closing ||
+        cnx_state == picoquic_state_closing_received)
+    {
+        LP_LOGW("QUIC",
+                "stream_backend_write drop ctx=%p stream_id=%" PRIu64 " state=%s(%d)",
+                (void *)st,
+                st->stream_id,
+                libp2p__quic_state_name(cnx_state),
+                (int)cnx_state);
+        quic_muxer_release_session(session);
+        return LIBP2P_ERR_CLOSED;
+    }
     LP_LOGI("QUIC",
             "stream_backend_write ctx=%p cnx=%p stream_id=%" PRIu64 " len=%zu",
             (void *)st,
             (void *)cnx,
             st->stream_id,
             len);
-    pthread_mutex_lock(&st->mx->write_mtx);
+    pthread_mutex_lock(&mx->write_mtx);
+    /* Re-check closed/connection after acquiring write lock to narrow race on shutdown. */
+    if (atomic_load_explicit(&mx->closed, memory_order_acquire) ||
+        atomic_load_explicit(&session->cnx, memory_order_acquire) != cnx)
+    {
+        pthread_mutex_unlock(&mx->write_mtx);
+        quic_muxer_release_session(session);
+        return LIBP2P_ERR_CLOSED;
+    }
     int rc = picoquic_add_to_stream(cnx, st->stream_id, (const uint8_t *)buf, len, 0);
-    pthread_mutex_unlock(&st->mx->write_mtx);
+    pthread_mutex_unlock(&mx->write_mtx);
     if (rc != 0)
     {
         LP_LOGW("QUIC",

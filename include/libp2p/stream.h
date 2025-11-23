@@ -41,6 +41,7 @@ int libp2p_stream_set_protocol_id(libp2p_stream_t *s, const char *protocol_id);
 int libp2p_stream_set_remote_peer(libp2p_stream_t *s, peer_id_t *peer);
 const multiaddr_t *libp2p_stream_local_addr(const libp2p_stream_t *s);
 const multiaddr_t *libp2p_stream_remote_addr(const libp2p_stream_t *s);
+const char *libp2p_stream_remote_addr_str(const libp2p_stream_t *s);
 
 #ifdef __cplusplus
 }

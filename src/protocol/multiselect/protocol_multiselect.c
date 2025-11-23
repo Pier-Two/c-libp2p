@@ -594,6 +594,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial(libp2p_conn_t *conn, const char
 
         if (!strcmp(msg, proposals[idx]))
         {
+            LP_LOGI("MULTISELECT", "dial: negotiated protocol=%s conn=%p", proposals[idx], (void *)conn);
             if (accepted_out)
                 *accepted_out = proposals[idx];
             free(msg);
@@ -714,6 +715,7 @@ libp2p_multiselect_err_t libp2p_multiselect_listen(libp2p_conn_t *conn, const ch
             {
                 free(msg);
             }
+            LP_LOGI("MULTISELECT", "listen: negotiated protocol=%s conn=%p", accepted_out ? *accepted_out : msg, (void *)conn);
 
             if (cfg.handshake_timeout_ms)
             {

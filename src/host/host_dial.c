@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include "host_internal.h"
 #include "proto_select_internal.h"
@@ -33,6 +34,48 @@
 #include "protocol/identify/protocol_identify.h"
 #include "protocol/tcp/protocol_tcp_util.h" /* now_mono_ms */
 #include "multiformats/multicodec/multicodec_codes.h"
+
+static uint64_t g_quic_handshake_seq = 0;
+static uint32_t g_quic_handshake_pending = 0;
+
+static uint64_t host_dial_quic_trace_begin(const char *remote)
+{
+    uint64_t id = __atomic_fetch_add(&g_quic_handshake_seq, 1u, __ATOMIC_RELAXED) + 1u;
+    uint32_t pending = __atomic_fetch_add(&g_quic_handshake_pending, 1u, __ATOMIC_RELAXED) + 1u;
+    if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
+    {
+        LP_LOGI(
+            "HOST_DIAL",
+            "quic_handshake[%llu] begin remote=%s pending=%u",
+            (unsigned long long)id,
+            remote ? remote : "(unknown)",
+            pending);
+    }
+    return id;
+}
+
+static void host_dial_quic_trace_end(
+    uint64_t id,
+    const char *remote,
+    const char *phase,
+    int rc,
+    uint64_t elapsed_ms)
+{
+    uint32_t before = __atomic_fetch_sub(&g_quic_handshake_pending, 1u, __ATOMIC_RELAXED);
+    uint32_t pending = before > 0u ? (before - 1u) : 0u;
+    if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
+    {
+        LP_LOGI(
+            "HOST_DIAL",
+            "quic_handshake[%llu] %s remote=%s rc=%d elapsed_ms=%llu pending=%u",
+            (unsigned long long)id,
+            phase ? phase : "done",
+            remote ? remote : "(unknown)",
+            rc,
+            (unsigned long long)elapsed_ms,
+            pending);
+    }
+}
 
 /* ================= Outbound yamux session loop (event-driven) ================= */
 
@@ -449,6 +492,9 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
 
     libp2p_conn_t *raw = NULL;
     int is_quic = addr_is_quic(addr) ? 1 : 0;
+    uint64_t quic_trace_id = 0;
+    uint64_t quic_trace_start_ms = 0;
+    int quic_trace_active = 0;
     if (cancel && libp2p_cancel_token_is_canceled(cancel))
     {
         multiaddr_free(addr);
@@ -468,10 +514,17 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     /* QUIC: bypass upgrader; stream support comes in Phase 2. */
     if (is_quic)
     {
+        quic_trace_active = 1;
+        quic_trace_id = host_dial_quic_trace_begin(remote_multiaddr);
+        quic_trace_start_ms = now_mono_ms();
         libp2p_uconn_t *uc_q = NULL;
         int qrc = libp2p__host_upgrade_outbound_quic(host, raw, &uc_q);
+        int rc = 0;
         if (qrc != 0 || !uc_q)
-            return qrc ? qrc : LIBP2P_ERR_INTERNAL;
+        {
+            rc = qrc ? qrc : LIBP2P_ERR_INTERNAL;
+            goto quic_fail;
+        }
 
         libp2p_conn_t *secured = uc_q->conn;
         peer_id_t *remote_peer = uc_q->remote_peer;
@@ -480,7 +533,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         libp2p_io_t *subio = NULL;
         const char *accepted = NULL;
         int take_ownership = 1;
-        int rc = 0;
 
         if (cancel && libp2p_cancel_token_is_canceled(cancel))
         {
@@ -642,9 +694,21 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         libp2p__emit_conn_opened(host, false, libp2p_stream_remote_peer(dial_stream), libp2p_stream_remote_addr(dial_stream));
         if (!accepted_out && accepted)
             free((void *)accepted);
+        if (quic_trace_active)
+        {
+            uint64_t elapsed_ms = (quic_trace_start_ms > 0) ? (now_mono_ms() - quic_trace_start_ms) : 0;
+            host_dial_quic_trace_end(quic_trace_id, remote_multiaddr, "ready", 0, elapsed_ms);
+            quic_trace_active = 0;
+        }
         return 0;
 
     quic_fail:
+        if (quic_trace_active)
+        {
+            uint64_t elapsed_ms = (quic_trace_start_ms > 0) ? (now_mono_ms() - quic_trace_start_ms) : 0;
+            host_dial_quic_trace_end(quic_trace_id, remote_multiaddr, "fail", rc ? rc : LIBP2P_ERR_INTERNAL, elapsed_ms);
+            quic_trace_active = 0;
+        }
         if (subio)
             libp2p_io_close_free(subio);
         if (dial_stream)

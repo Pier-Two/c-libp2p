@@ -727,6 +727,12 @@ libp2p_err_t libp2p_gossipsub_start(libp2p_gossipsub_t *gs)
     if (!gs)
         return LIBP2P_ERR_NULL_PTR;
 
+    LP_LOGI(GOSSIPSUB_MODULE, "gossipsub_start num_protocol_defs=%zu", gs->num_protocol_defs);
+    for (size_t i = 0; i < gs->num_protocol_defs; i++)
+    {
+        LP_LOGI(GOSSIPSUB_MODULE, "gossipsub protocol[%zu]=%s", i, gs->protocol_defs[i].protocol_id);
+    }
+
     int need_timer = 0;
     int need_opportunistic_timer = 0;
     pthread_mutex_lock(&gs->lock);
@@ -743,6 +749,7 @@ libp2p_err_t libp2p_gossipsub_start(libp2p_gossipsub_t *gs)
 
     for (size_t i = 0; i < gs->num_protocol_defs; i++)
     {
+        LP_LOGI(GOSSIPSUB_MODULE, "registering gossipsub protocol %s", gs->protocol_defs[i].protocol_id);
         int rc = libp2p_register_protocol(gs->host, &gs->protocol_defs[i]);
         if (rc != 0)
         {

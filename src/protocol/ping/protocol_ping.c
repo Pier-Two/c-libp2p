@@ -280,22 +280,15 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
         const char *peer_str = "<unknown>";
         if (p && peer_id_to_string(p, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) >= 0)
             peer_str = peer_buf;
-        const multiaddr_t *remote_addr = libp2p_stream_remote_addr(s);
         char addr_buf[256];
         const char *addr_str = "<unknown>";
-        if (remote_addr)
+        const char *cached_addr = libp2p_stream_remote_addr_str(s);
+        if (cached_addr)
         {
-            int serr = 0;
-            char *tmp = multiaddr_to_str(remote_addr, &serr);
-            if (tmp && serr == MULTIADDR_SUCCESS)
-            {
-                size_t copy = sizeof(addr_buf) - 1;
-                strncpy(addr_buf, tmp, copy);
-                addr_buf[copy] = '\0';
-                addr_str = addr_buf;
-            }
-            if (tmp)
-                free(tmp);
+            size_t copy = sizeof(addr_buf) - 1;
+            strncpy(addr_buf, cached_addr, copy);
+            addr_buf[copy] = '\0';
+            addr_str = addr_buf;
         }
         LP_LOGE("PING", "stream_write_all failed stream=%p peer=%s addr=%s n=%zd err=%s", (void *)s, peer_str, addr_str, n, stream_err_name(n));
         (void)libp2p_stream_set_deadline(s, 0);
