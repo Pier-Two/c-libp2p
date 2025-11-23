@@ -532,7 +532,8 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         libp2p_stream_t *dial_stream = NULL;
         libp2p_io_t *subio = NULL;
         const char *accepted = NULL;
-        int take_ownership = 1;
+        /* QUIC is fully multiplexed; keep the parent session alive after a stream closes. */
+        int take_ownership = 0;
 
         if (cancel && libp2p_cancel_token_is_canceled(cancel))
         {
@@ -924,7 +925,9 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
        Identify Push we avoid tearing down the parent immediately to ensure
        the remote peer can drain the push payload before the session goes
        away. */
-    int take_ownership = 1;
+    /* Multiplexers (yamux/mplex) allow multiple substreams per connection, so
+     * do not tear down the parent session when a single stream closes. */
+    int take_ownership = 0;
     libp2p_stream_set_parent(ss, secured, mx, take_ownership);
     libp2p_io_free(subio);
     free(uc); /* parent now owns secured+mx; remote_peer moved into stream */

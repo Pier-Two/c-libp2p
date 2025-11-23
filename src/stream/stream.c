@@ -166,6 +166,12 @@ int libp2p_stream_close(libp2p_stream_t *s)
         }
         pthread_mutex_unlock(&st->host->mtx);
     }
+    /* Only emit CONN_CLOSED when we truly tear down the underlying
+     * connection. Substreams (has_ops) ride on a muxer and should not
+     * force a peer disconnect just because one protocol stream ended. */
+    const int is_substream = st->has_ops ? 1 : 0;
+    const int owns_parent = st->owns_parent ? 1 : 0;
+
     /* Resource manager removed: no release accounting */
     int rc = 0;
     if (st->has_ops && st->ops.close)
@@ -177,21 +183,22 @@ int libp2p_stream_close(libp2p_stream_t *s)
     /* Once closed, prevent further I/O from using a stale conn pointer. */
     st->c = NULL;
     st->closed = 1;
-    /* Emit stream/conn closed events if we have a host */
+    /* Emit stream closed; only emit conn closed when the underlying
+     * session was actually closed (non-muxed stream or explicit owner). */
     if (st->host)
     {
+        libp2p_event_t evt = {0};
+        evt.kind = LIBP2P_EVT_STREAM_CLOSED;
+        evt.u.stream_closed.reason = 0; /* normal close */
+        libp2p_event_publish(st->host, &evt);
+
+        if (!is_substream || owns_parent)
         {
-            libp2p_event_t evt = {0};
-            evt.kind = LIBP2P_EVT_STREAM_CLOSED;
-            evt.u.stream_closed.reason = 0; /* normal close */
-            libp2p_event_publish(st->host, &evt);
-        }
-        {
-            libp2p_event_t evt = {0};
-            evt.kind = LIBP2P_EVT_CONN_CLOSED;
-            evt.u.conn_closed.peer = st->peer; /* may be NULL */
-            evt.u.conn_closed.reason = rc;
-            libp2p_event_publish(st->host, &evt);
+            libp2p_event_t evt2 = {0};
+            evt2.kind = LIBP2P_EVT_CONN_CLOSED;
+            evt2.u.conn_closed.peer = st->peer; /* may be NULL */
+            evt2.u.conn_closed.reason = rc;
+            libp2p_event_publish(st->host, &evt2);
         }
     }
     if (st->peer)
@@ -239,6 +246,8 @@ int libp2p_stream_reset(libp2p_stream_t *s)
         pthread_mutex_unlock(&st->host->mtx);
     }
     /* Resource manager removed: no release accounting */
+    const int is_substream = st->has_ops ? 1 : 0;
+    const int owns_parent = st->owns_parent ? 1 : 0;
     int rc = 0;
     if (st->has_ops && st->ops.reset)
         rc = st->ops.reset(st->io_ctx);
@@ -252,11 +261,15 @@ int libp2p_stream_reset(libp2p_stream_t *s)
         evt1.kind = LIBP2P_EVT_STREAM_CLOSED;
         evt1.u.stream_closed.reason = LIBP2P_ERR_RESET;
         libp2p_event_publish(st->host, &evt1);
-        libp2p_event_t evt2 = {0};
-        evt2.kind = LIBP2P_EVT_CONN_CLOSED;
-        evt2.u.conn_closed.peer = st->peer;
-        evt2.u.conn_closed.reason = LIBP2P_ERR_RESET;
-        libp2p_event_publish(st->host, &evt2);
+
+        if (!is_substream || owns_parent)
+        {
+            libp2p_event_t evt2 = {0};
+            evt2.kind = LIBP2P_EVT_CONN_CLOSED;
+            evt2.u.conn_closed.peer = st->peer;
+            evt2.u.conn_closed.reason = LIBP2P_ERR_RESET;
+            libp2p_event_publish(st->host, &evt2);
+        }
     }
     if (st->peer)
     {
