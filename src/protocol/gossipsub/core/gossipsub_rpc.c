@@ -379,9 +379,7 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic,
     if (noise_rc != NOISE_ERROR_NONE || !sub)
         goto cleanup;
 
-    noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic(sub, topic, topic_len);
-    if (noise_rc != NOISE_ERROR_NONE)
-        goto cleanup;
+    /* Send only topic_id (tag 2) to match rust-libp2p schema */
     noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic_id(sub, topic, topic_len);
     if (noise_rc != NOISE_ERROR_NONE)
         goto cleanup;

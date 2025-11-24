@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <inttypes.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -38,6 +39,16 @@
 #define GOSSIPSUB_DEFAULT_MESSAGE_CACHE_GOSSIP 3U
 #define GOSSIPSUB_EXPLICIT_ADDR_TTL_MS (10 * 60 * 1000)
 #define GOSSIPSUB_DEFAULT_FANOUT_TTL_MS 60000ULL
+
+static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer, size_t length)
+{
+    if (!peer || !buffer || length == 0)
+        return "-";
+    int rc = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
+    if (rc > 0)
+        return buffer;
+    return "-";
+}
 
 static void gossipsub_heartbeat_timer_cb(void *user_data);
 
@@ -101,6 +112,50 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
                 parsed.graft_len,
                 parsed.prune_len);
     }
+    if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
+    {
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+        for (size_t i = 0; i < parsed.subscriptions_len; ++i)
+        {
+            gossipsub_rpc_subscription_t *sub = &parsed.subscriptions[i];
+            if (sub && sub->topic)
+            {
+                LP_LOGD(GOSSIPSUB_MODULE,
+                        "rpc trace peer=%s subscribe=%d topic=%s topic_id=%s",
+                        peer_repr,
+                        sub->subscribe ? 1 : 0,
+                        sub->topic,
+                        sub->topic_id ? sub->topic_id : "(null)");
+            }
+        }
+        for (size_t i = 0; i < parsed.graft_len; ++i)
+        {
+            gossipsub_rpc_control_graft_t *g = &parsed.grafts[i];
+            if (g && g->topic)
+            {
+                LP_LOGD(GOSSIPSUB_MODULE,
+                        "rpc trace peer=%s graft topic=%s topic_id=%s",
+                        peer_repr,
+                        g->topic,
+                        g->topic_id ? g->topic_id : "(null)");
+            }
+        }
+        for (size_t i = 0; i < parsed.prune_len; ++i)
+        {
+            gossipsub_rpc_control_prune_t *p = &parsed.prunes[i];
+            if (p && p->topic)
+            {
+                LP_LOGD(GOSSIPSUB_MODULE,
+                        "rpc trace peer=%s prune topic=%s topic_id=%s backoff=%" PRIu64 " px=%zu",
+                        peer_repr,
+                        p->topic,
+                        p->topic_id ? p->topic_id : "(null)",
+                        (uint64_t)p->backoff,
+                        p->px_count);
+            }
+        }
+    }
 
     rc = gossipsub_propagation_handle_subscriptions(gs, entry, parsed.subscriptions, parsed.subscriptions_len);
     if (rc != LIBP2P_ERR_OK)
@@ -114,6 +169,58 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
         gossipsub_rpc_parsed_clear(&parsed);
         libp2p_gossipsub_RPC_free(rpc);
         return rc;
+    }
+    /* Ensure mesh is (re)evaluated promptly after learning new subscriptions.
+     * The periodic heartbeat will also graft/prune, but running one immediately
+     * keeps topic meshes from staying empty when the runtime timer is delayed.
+     */
+    if (parsed.subscriptions_len > 0)
+    {
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "heartbeat trigger after %zu inbound subscriptions",
+                parsed.subscriptions_len);
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "heartbeat call started=%d",
+                gs ? gs->started : -1);
+        /* Run a heartbeat inline so we graft immediately after learning
+         * about new subscriptions, even if the runtime timer lags.
+         */
+        if (gs)
+        {
+            pthread_mutex_lock(&gs->lock);
+            int started = gs->started;
+            pthread_mutex_unlock(&gs->lock);
+            if (started)
+            {
+                uint64_t now_ms = gossipsub_now_ms();
+                LP_LOGI(GOSSIPSUB_MODULE,
+                        "heartbeat inline run now_ms=%" PRIu64,
+                        now_ms);
+                gossipsub_heartbeat_tick(gs, now_ms);
+                /* Snapshot mesh state after the heartbeat for debug. */
+                pthread_mutex_lock(&gs->lock);
+                for (gossipsub_topic_state_t *topic = gs->topics; topic; topic = topic->next)
+                {
+                    size_t mesh = topic->mesh_size;
+                    size_t backoff = topic->backoff_size;
+                    size_t fanout = topic->fanout_size;
+                    size_t subscribers = 0;
+                    for (gossipsub_peer_entry_t *p = gs->peers; p; p = p->next)
+                    {
+                        if (gossipsub_peer_topic_find(p->topics, topic->name))
+                            subscribers++;
+                    }
+                    LP_LOGI(GOSSIPSUB_MODULE,
+                            "mesh snapshot topic=%s mesh=%zu subscribers=%zu backoff=%zu fanout=%zu",
+                            topic && topic->name ? topic->name : "(null)",
+                            mesh,
+                            subscribers,
+                            backoff,
+                            fanout);
+                }
+                pthread_mutex_unlock(&gs->lock);
+            }
+        }
     }
 
     libp2p_err_t final_rc = LIBP2P_ERR_OK;

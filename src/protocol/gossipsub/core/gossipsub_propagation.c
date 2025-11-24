@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 #include "libp2p/log.h"
 #include "libp2p/stream.h"
@@ -1387,6 +1388,8 @@ libp2p_err_t gossipsub_propagation_handle_control_graft(libp2p_gossipsub_t *gs,
     libp2p_err_t result = LIBP2P_ERR_OK;
     uint64_t config_backoff_seconds = gossipsub_propagation_backoff_seconds(gs);
     uint64_t config_backoff_ms = (gs->cfg.prune_backoff_ms > 0) ? (uint64_t)gs->cfg.prune_backoff_ms : 0;
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
 
     for (size_t i = 0; i < count; ++i)
     {
@@ -1399,21 +1402,26 @@ libp2p_err_t gossipsub_propagation_handle_control_graft(libp2p_gossipsub_t *gs,
         peer_id_t **px_peers = NULL;
         size_t px_len = 0;
         uint64_t now_ms = gossipsub_now_ms();
+        double peer_score = 0.0;
+        const char *decision = "unknown";
 
         pthread_mutex_lock(&gs->lock);
         gossipsub_topic_state_t *topic = gossipsub_topic_find(gs->topics, topic_name);
         if (!topic || !topic->subscribed)
         {
             store_for_prune = 1;
+            decision = "not_subscribed";
         }
         else if (gossipsub_mesh_member_find(topic->mesh, entry->peer))
         {
             store_for_prune = 0;
+            decision = "already_in_mesh";
         }
         else if (gossipsub_backoff_contains(topic, entry->peer, now_ms))
         {
             store_for_prune = 1;
             extend_backoff = 1;
+            decision = "in_backoff";
         }
         else
         {
@@ -1421,12 +1429,15 @@ libp2p_err_t gossipsub_propagation_handle_control_graft(libp2p_gossipsub_t *gs,
             if (!gossipsub_mesh_member_insert(topic, entry, outbound, now_ms))
             {
                 store_for_prune = 1;
+                decision = "mesh_insert_failed";
             }
             else
             {
                 gossipsub_score_on_mesh_join_locked(gs, topic, entry, now_ms);
                 gossipsub_backoff_remove(topic, entry->peer);
                 (void)gossipsub_fanout_remove(topic, entry->peer);
+                store_for_prune = 0;
+                decision = outbound ? "graft_accept_outbound" : "graft_accept_inbound";
             }
         }
 
@@ -1444,10 +1455,18 @@ libp2p_err_t gossipsub_propagation_handle_control_graft(libp2p_gossipsub_t *gs,
             uint64_t expire_ms = gossipsub_propagation_compute_backoff_expiry(now_ms, config_backoff_ms);
             (void)gossipsub_backoff_add(topic, entry->peer, expire_ms);
         }
+        peer_score = entry ? entry->score : 0.0;
         pthread_mutex_unlock(&gs->lock);
 
         if (!store_for_prune)
         {
+            LP_LOGD(GOSSIPSUB_MODULE,
+                    "graft_accept peer=%s topic=%s score=%.3f decision=%s outbound=%d",
+                    peer_repr,
+                    topic_name,
+                    peer_score,
+                    decision,
+                    entry && entry->outbound_stream ? 1 : 0);
             if (px_peers)
                 gossipsub_px_list_free(px_peers, px_len);
             continue;
@@ -1491,6 +1510,15 @@ libp2p_err_t gossipsub_propagation_handle_control_graft(libp2p_gossipsub_t *gs,
             prune_cap = new_cap;
         }
         prune_targets[prune_count++] = target;
+
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "graft_reject peer=%s topic=%s score=%.3f decision=%s extend_backoff=%d px_suggested=%zu",
+                peer_repr,
+                topic_name,
+                peer_score,
+                decision,
+                extend_backoff,
+                px_len);
     }
 
     if (prune_count > 0)
@@ -1536,6 +1564,8 @@ libp2p_err_t gossipsub_propagation_handle_control_prune(libp2p_gossipsub_t *gs,
         return LIBP2P_ERR_OK;
 
     libp2p_err_t result = LIBP2P_ERR_OK;
+    char peer_buf[128];
+    const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
     peer_id_t *self_id = NULL;
     if (gs->host)
     {
@@ -1584,6 +1614,13 @@ libp2p_err_t gossipsub_propagation_handle_control_prune(libp2p_gossipsub_t *gs,
             (void)gossipsub_fanout_remove(topic, entry->peer);
             if (!gossipsub_backoff_add(topic, entry->peer, expire_ms) && result == LIBP2P_ERR_OK)
                 result = LIBP2P_ERR_INTERNAL;
+            LP_LOGD(GOSSIPSUB_MODULE,
+                    "prune_recv peer=%s topic=%s backoff_ms=%" PRIu64 " px_count=%zu score=%.3f",
+                    peer_repr,
+                    prune->topic,
+                    backoff_ms,
+                    prune->px_count,
+                    entry ? entry->score : 0.0);
         }
 
         int allow_px = (gs->cfg.enable_px && entry && entry->score >= gs->cfg.accept_px_threshold) ? 1 : 0;
