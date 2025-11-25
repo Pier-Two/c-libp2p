@@ -30,6 +30,7 @@
 #include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
+#include "conn_pool.h"
 
 /* generic readiness helpers are provided by stream internals */
 
@@ -2137,6 +2138,22 @@ static void *listener_accept_thread(void *arg)
                 pthread_mutex_unlock(&snode->ready_mtx);
                 LP_LOGD("HOST", "registered inbound QUIC session node=%p", (void *)snode);
             }
+
+            /* Add incoming QUIC connection to pool for future reuse.
+             * When we want to dial this peer later, we can reuse the existing
+             * inbound connection instead of creating a new outbound one. */
+            if (host->conn_pool && remote_peer && mx)
+            {
+                libp2p_quic_session_t *session = libp2p_quic_conn_session(secured);
+                (void)libp2p_conn_pool_add(host->conn_pool,
+                                            remote_peer,
+                                            mx,
+                                            session,
+                                            secured,
+                                            1); /* is_inbound = true */
+                LP_LOGI("CONN_POOL", "added inbound QUIC connection to pool");
+            }
+
             if (remote_peer)
             {
                 peer_id_destroy(remote_peer);

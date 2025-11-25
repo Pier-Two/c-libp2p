@@ -73,28 +73,28 @@ static gossipsub_peer_entry_t **gossipsub_heartbeat_collect_candidates(libp2p_go
     {
         if (!entry->connected)
         {
-            LP_LOGI(GOSSIPSUB_MODULE, "candidate skip peer=disconnect");
+            LP_LOGD(GOSSIPSUB_MODULE, "candidate skip peer=disconnect");
             continue;
         }
         if (!gossipsub_peer_topic_find(entry->topics, topic->name))
         {
-            LP_LOGI(GOSSIPSUB_MODULE, "candidate skip peer=not_subscribed topic=%s", topic->name);
+            LP_LOGD(GOSSIPSUB_MODULE, "candidate skip peer=not_subscribed topic=%s", topic->name);
             continue;
         }
         if (gossipsub_mesh_member_find(topic->mesh, entry->peer))
         {
-            LP_LOGI(GOSSIPSUB_MODULE, "candidate skip peer=already_in_mesh topic=%s", topic->name);
+            LP_LOGD(GOSSIPSUB_MODULE, "candidate skip peer=already_in_mesh topic=%s", topic->name);
             continue;
         }
         if (!ignore_backoff && gossipsub_backoff_contains(topic, entry->peer, now_ms))
         {
-            LP_LOGI(GOSSIPSUB_MODULE, "candidate skip peer=backoff topic=%s", topic->name);
+            LP_LOGD(GOSSIPSUB_MODULE, "candidate skip peer=backoff topic=%s", topic->name);
             continue;
         }
         int outbound = entry->outbound_stream ? 1 : 0;
         if (require_outbound && !outbound)
         {
-            LP_LOGI(GOSSIPSUB_MODULE, "candidate skip peer=not_outbound topic=%s", topic->name);
+            LP_LOGD(GOSSIPSUB_MODULE, "candidate skip peer=not_outbound topic=%s", topic->name);
             continue;
         }
 
@@ -113,7 +113,7 @@ static gossipsub_peer_entry_t **gossipsub_heartbeat_collect_candidates(libp2p_go
         list[count++] = entry;
         char peer_buf[128];
         const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "heartbeat candidate peer=%s topic=%s outbound=%d",
                 peer_repr ? peer_repr : "-",
                 topic->name ? topic->name : "(null)",
@@ -193,13 +193,13 @@ static void gossipsub_heartbeat_try_graft_from_candidates(libp2p_gossipsub_t *gs
         {
             char peer_buf[128];
             const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "send_graft peer=%s topic=%s",
                     peer_repr,
                     topic && topic->name ? topic->name : "(null)");
             if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
             {
-                LP_LOGI(GOSSIPSUB_MODULE,
+                LP_LOGD(GOSSIPSUB_MODULE,
                         "heartbeat graft peer=%s topic=%s outbound=%d score=%.3f remaining=%zu outbound_needed=%zu",
                         peer_repr,
                         topic && topic->name ? topic->name : "(null)",
@@ -283,7 +283,7 @@ static void gossipsub_heartbeat_graft_locked(libp2p_gossipsub_t *gs,
         outbound_needed = d_out - current_outbound;
     if (outbound_needed > remaining)
         outbound_needed = remaining;
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "heartbeat graft topic=%s mesh_size=%zu needed=%zu outbound_needed=%zu d_out=%zu",
                 topic->name ? topic->name : "(null)",
                 topic->mesh_size,
@@ -302,7 +302,7 @@ static void gossipsub_heartbeat_graft_locked(libp2p_gossipsub_t *gs,
                                                                                      &candidate_count);
         if (candidates)
         {
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "heartbeat graft outbound pass topic=%s candidates=%zu needed=%zu outbound_needed=%zu current_outbound=%zu",
                     topic->name ? topic->name : "(null)",
                     candidate_count,
@@ -334,7 +334,7 @@ static void gossipsub_heartbeat_graft_locked(libp2p_gossipsub_t *gs,
                                                                                      &candidate_count);
         if (candidates)
         {
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "heartbeat graft any-pass topic=%s candidates=%zu needed=%zu outbound_needed=%zu current_outbound=%zu allow_inbound_fallback=%d",
                     topic->name ? topic->name : "(null)",
                     candidate_count,
@@ -674,7 +674,7 @@ void gossipsub_opportunistic_tick(libp2p_gossipsub_t *gs, uint64_t now_ms)
         {
             topic->last_opportunistic_graft_ms = now_ms;
             gs->last_opportunistic_graft_ms = now_ms;
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "opportunistic grafted %zu peers on topic %s (median=%.3f threshold=%.3f)",
                     grafted,
                     topic->name ? topic->name : "<unnamed>",
@@ -716,7 +716,7 @@ void gossipsub_heartbeat_tick(libp2p_gossipsub_t *gs, uint64_t now_ms)
     uint64_t gossip_round = ++gs->gossip_round;
     for (gossipsub_topic_state_t *topic = gs->topics; topic; topic = topic->next)
     {
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "heartbeat topic=%s mesh_size=%zu d_lo=%zu d=%zu d_hi=%zu",
                 topic && topic->name ? topic->name : "(null)",
                 topic ? topic->mesh_size : 0,
@@ -768,7 +768,7 @@ void gossipsub_heartbeat_run(libp2p_gossipsub_t *gs)
         return;
     }
     uint64_t now_ms = gossipsub_now_ms();
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGD(GOSSIPSUB_MODULE,
             "heartbeat run start now_ms=%" PRIu64 " topics=%p",
             now_ms,
             (void *)gs->topics);

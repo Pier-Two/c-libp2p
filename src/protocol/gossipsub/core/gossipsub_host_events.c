@@ -137,7 +137,7 @@ void gossipsub_on_stream_open(struct libp2p_stream *s, void *user_data)
         }
     }
     pthread_mutex_unlock(&gs->lock);
-    LP_LOGI(GOSSIPSUB_MODULE, 
+    LP_LOGD(GOSSIPSUB_MODULE, 
             "gossipsub stream opened peer=%s protocol=%s initiator=%d",
             peer_buf[0] ? peer_buf : "(unknown)",
             protocol_id ? protocol_id : "(null)",
@@ -279,7 +279,7 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
     
     if (err == LIBP2P_ERR_OK && s)
     {
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "outbound gossipsub stream opened peer=%s",
                 peer_buf[0] ? peer_buf : "(unknown)");
         gossipsub_on_stream_open(s, gs);
@@ -382,7 +382,7 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     
     char peer_buf[128] = {0};
     peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGD(GOSSIPSUB_MODULE,
             "opening outbound gossipsub stream peer=%s protocol=%s",
             peer_buf[0] ? peer_buf : "(unknown)",
             protocol);

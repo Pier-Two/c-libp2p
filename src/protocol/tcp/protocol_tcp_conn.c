@@ -14,6 +14,7 @@
 
 #include "protocol/tcp/protocol_tcp_conn.h"
 #include "protocol/tcp/protocol_tcp_util.h"
+#include "libp2p/log.h"
 
 ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
 {
@@ -39,7 +40,7 @@ ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
                     return LIBP2P_CONN_ERR_TIMEOUT; /* poll timed out */
                 if (errno == EINTR)
                     return LIBP2P_CONN_ERR_AGAIN; /* try again      */
-                fprintf(stderr, "[TCP_ERR] poll(POLLIN) failed errno=%d\n", errno);
+                LP_LOGE("TCP", "poll(POLLIN) failed errno=%d", errno);
                 return LIBP2P_CONN_ERR_INTERNAL;
             }
         }
@@ -65,7 +66,7 @@ ssize_t tcp_conn_read(libp2p_conn_t *c, void *buf, size_t len)
     {
         if (errno == EAGAIN || errno == EWOULDBLOCK)
             return LIBP2P_CONN_ERR_AGAIN;
-        fprintf(stderr, "[TCP_ERR] read failed errno=%d\n", errno);
+        LP_LOGE("TCP", "read failed errno=%d", errno);
         return LIBP2P_CONN_ERR_INTERNAL;
     }
 #endif

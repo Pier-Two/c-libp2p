@@ -45,14 +45,6 @@ static void gossipsub_trace_publish_frame(const libp2p_gossipsub_message_t *msg,
     {
         log_level = LIBP2P_LOG_DEBUG;
     }
-    else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
-    {
-        log_level = LIBP2P_LOG_INFO;
-    }
-    else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
-    {
-        log_level = LIBP2P_LOG_WARN;
-    }
     else
     {
         return;

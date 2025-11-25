@@ -336,7 +336,7 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
             (void)libp2p_stream_set_deadline(s, 0);
             return LIBP2P_PING_OK;
         }
-        fprintf(stderr, "[PING] stream_read_exact error n=%zd\n", n);
+        LP_LOGE("PING", "stream_read_exact error n=%zd", n);
         (void)libp2p_stream_set_deadline(s, 0);
         return map_stream_err(n);
     }

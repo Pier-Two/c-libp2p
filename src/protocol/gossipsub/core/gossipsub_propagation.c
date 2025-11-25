@@ -1056,7 +1056,7 @@ libp2p_err_t gossipsub_propagation_handle_subscriptions(libp2p_gossipsub_t *gs,
         gossipsub_rpc_subscription_t *sub = &subs[i];
         if (!sub || !sub->topic)
             continue;
-        LP_LOGI(
+        LP_LOGD(
             GOSSIPSUB_MODULE,
             "subscription_inbound peer=%s topic=%s subscribe=%d",
             peer_repr,

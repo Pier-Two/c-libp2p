@@ -385,10 +385,10 @@ int libp2p_gossipsub_RPC_SubOpts_write(NoiseProtobuf *pbuf, int tag, const libp2
     if (!pbuf || !obj)
         return NOISE_ERROR_INVALID_PARAM;
     noise_protobuf_write_end_element(pbuf, &end_posn);
-    /* Align with libp2p-gossipsub >=0.47: SubOpts carries subscribe + topic_id only.
-       Write topic_id on tag=2; ignore legacy topic field. */
     if (obj->topic_id)
-        noise_protobuf_write_string(pbuf, 2, obj->topic_id, obj->topic_id_size_);
+        noise_protobuf_write_string(pbuf, 3, obj->topic_id, obj->topic_id_size_);
+    if (obj->topic)
+        noise_protobuf_write_string(pbuf, 2, obj->topic, obj->topic_size_);
     if (obj->subscribe)
         noise_protobuf_write_bool(pbuf, 1, obj->subscribe);
     return noise_protobuf_write_start_element(pbuf, tag, end_posn);
@@ -413,14 +413,12 @@ int libp2p_gossipsub_RPC_SubOpts_read(NoiseProtobuf *pbuf, int tag, libp2p_gossi
                 noise_protobuf_read_bool(pbuf, 1, &((*obj)->subscribe));
             } break;
             case 2: {
-                /* topic_id (canonical) */
-                noise_protobuf_free_memory((*obj)->topic_id, (*obj)->topic_id_size_);
-                (*obj)->topic_id = 0;
-                (*obj)->topic_id_size_ = 0;
-                noise_protobuf_read_alloc_string(pbuf, 2, &((*obj)->topic_id), 0, &((*obj)->topic_id_size_));
+                noise_protobuf_free_memory((*obj)->topic, (*obj)->topic_size_);
+                (*obj)->topic = 0;
+                (*obj)->topic_size_ = 0;
+                noise_protobuf_read_alloc_string(pbuf, 2, &((*obj)->topic), 0, &((*obj)->topic_size_));
             } break;
             case 3: {
-                /* legacy topic_id tag (backward compatibility) */
                 noise_protobuf_free_memory((*obj)->topic_id, (*obj)->topic_id_size_);
                 (*obj)->topic_id = 0;
                 (*obj)->topic_id_size_ = 0;
@@ -2588,3 +2586,4 @@ int libp2p_gossipsub_PeerInfo_set_signed_peer_record(libp2p_gossipsub_PeerInfo *
     }
     return NOISE_ERROR_INVALID_PARAM;
 }
+

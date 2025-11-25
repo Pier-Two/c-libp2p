@@ -193,7 +193,7 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
             if (started)
             {
                 uint64_t now_ms = gossipsub_now_ms();
-                LP_LOGI(GOSSIPSUB_MODULE,
+                LP_LOGD(GOSSIPSUB_MODULE,
                         "heartbeat inline run now_ms=%" PRIu64,
                         now_ms);
                 gossipsub_heartbeat_tick(gs, now_ms);
@@ -210,7 +210,7 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
                         if (gossipsub_peer_topic_find(p->topics, topic->name))
                             subscribers++;
                     }
-                    LP_LOGI(GOSSIPSUB_MODULE,
+                    LP_LOGD(GOSSIPSUB_MODULE,
                             "mesh snapshot topic=%s mesh=%zu subscribers=%zu backoff=%zu fanout=%zu",
                             topic && topic->name ? topic->name : "(null)",
                             mesh,
@@ -840,10 +840,10 @@ libp2p_err_t libp2p_gossipsub_start(libp2p_gossipsub_t *gs)
     if (!gs)
         return LIBP2P_ERR_NULL_PTR;
 
-    LP_LOGI(GOSSIPSUB_MODULE, "gossipsub_start num_protocol_defs=%zu", gs->num_protocol_defs);
+    LP_LOGD(GOSSIPSUB_MODULE, "gossipsub_start num_protocol_defs=%zu", gs->num_protocol_defs);
     for (size_t i = 0; i < gs->num_protocol_defs; i++)
     {
-        LP_LOGI(GOSSIPSUB_MODULE, "gossipsub protocol[%zu]=%s", i, gs->protocol_defs[i].protocol_id);
+        LP_LOGD(GOSSIPSUB_MODULE, "gossipsub protocol[%zu]=%s", i, gs->protocol_defs[i].protocol_id);
     }
 
     int need_timer = 0;
@@ -862,7 +862,7 @@ libp2p_err_t libp2p_gossipsub_start(libp2p_gossipsub_t *gs)
 
     for (size_t i = 0; i < gs->num_protocol_defs; i++)
     {
-        LP_LOGI(GOSSIPSUB_MODULE, "registering gossipsub protocol %s", gs->protocol_defs[i].protocol_id);
+        LP_LOGD(GOSSIPSUB_MODULE, "registering gossipsub protocol %s", gs->protocol_defs[i].protocol_id);
         int rc = libp2p_register_protocol(gs->host, &gs->protocol_defs[i]);
         if (rc != 0)
         {

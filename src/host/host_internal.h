@@ -19,6 +19,7 @@
 #include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
+#include "conn_pool.h"
 
 /* Opaque forward declarations */
 struct libp2p_protocol_server;
@@ -209,6 +210,9 @@ struct libp2p_host
     int idpush_pending;   /* set when LOCAL_PROTOCOLS_UPDATED occurs or retry needed */
     int idpush_inflight;  /* set while an async publisher is running */
     int idpush_attempts;  /* bounded attempts to avoid storms */
+
+    /* Connection pool for QUIC session reuse (reduces CPU by reusing connections) */
+    libp2p_conn_pool_t *conn_pool;
 };
 
 /* Internal helper to enqueue an event for pull-based APIs and notify waiters. */

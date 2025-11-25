@@ -403,7 +403,7 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic,
             preview[(i * 2) + 1] = hex_digits[out->frame[i] & 0xF];
         }
         preview[preview_len * 2] = '\0';
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "encode_subscription topic=%s subscribe=%d frame_len=%zu hex=%s",
                 topic,
                 subscribe ? 1 : 0,

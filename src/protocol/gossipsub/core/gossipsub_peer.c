@@ -282,7 +282,7 @@ void gossipsub_peer_detach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
     {
         char peer_buf[128];
         const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-        LP_LOGI(
+        LP_LOGD(
             GOSSIPSUB_MODULE,
             "peer_detach_stream peer=%s outbound=%d",
             peer_repr,
@@ -312,7 +312,7 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
     const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
     const char *proto = s ? libp2p_stream_protocol_id(s) : NULL;
     int is_initiator = s ? libp2p_stream_is_initiator(s) : -1;
-    LP_LOGI(
+    LP_LOGD(
         GOSSIPSUB_MODULE,
         "peer_attach_stream peer=%s stream=%p protocol=%s initiator=%d entry=%p decoder_max=%zu",
         peer_repr,
@@ -348,7 +348,7 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
             if (t->subscribed && t->name)
                 topic_count++;
         }
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "peer_attach_stream peer=%s will_send_subscriptions=%zu",
                 peer_repr,
                 topic_count);
@@ -360,7 +360,7 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
         size_t queued = 0;
         for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
             queued++;
-        LP_LOGI(GOSSIPSUB_MODULE,
+        LP_LOGD(GOSSIPSUB_MODULE,
                 "peer_attach_stream peer=%s after_send_subscriptions sendq_size=%zu stream=%p",
                 peer_repr,
                 queued,
@@ -563,7 +563,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     size_t queued = 0;
     for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
         queued++;
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGD(GOSSIPSUB_MODULE,
             "flush START peer=%s stream=%p queued=%zu",
             peer_repr,
             (void *)entry->stream,
@@ -582,12 +582,8 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                 log_level = LIBP2P_LOG_TRACE;
             else if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
                 log_level = LIBP2P_LOG_DEBUG;
-            else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
-                log_level = LIBP2P_LOG_INFO;
-            else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
-                log_level = LIBP2P_LOG_WARN;
             else
-                log_level = (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1);
+                log_level = (libp2p_log_level_t)-1;
 
             if (log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
             {
@@ -640,7 +636,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         while (item && item->header_sent < item->header_len)
         {
             ssize_t n = libp2p_stream_write(entry->stream, item->header + item->header_sent, item->header_len - item->header_sent);
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "flush WRITE_HEADER peer=%s wrote=%zd remaining=%zu",
                     peer_repr,
                     n,
@@ -653,7 +649,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
             }
             if (n == 0 || n == LIBP2P_ERR_AGAIN)
             {
-                LP_LOGI(GOSSIPSUB_MODULE,
+                LP_LOGD(GOSSIPSUB_MODULE,
                         "flush BACKPRESSURE peer=%s frames_written=%zu bytes_written=%zu",
                         peer_repr,
                         frames_written,
@@ -677,7 +673,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         while (item && item->payload_sent < item->payload_len)
         {
             ssize_t n = libp2p_stream_write(entry->stream, item->payload + item->payload_sent, item->payload_len - item->payload_sent);
-            LP_LOGI(GOSSIPSUB_MODULE,
+            LP_LOGD(GOSSIPSUB_MODULE,
                     "flush WRITE_PAYLOAD peer=%s wrote=%zd remaining=%zu",
                     peer_repr,
                     n,
@@ -690,7 +686,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
             }
             if (n == 0 || n == LIBP2P_ERR_AGAIN)
             {
-                LP_LOGI(GOSSIPSUB_MODULE,
+                LP_LOGD(GOSSIPSUB_MODULE,
                         "flush BACKPRESSURE peer=%s frames_written=%zu bytes_written=%zu",
                         peer_repr,
                         frames_written,
@@ -720,7 +716,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         }
     }
 
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGD(GOSSIPSUB_MODULE,
             "flush END peer=%s frames_written=%zu bytes_written=%zu",
             peer_repr,
             frames_written,
@@ -794,11 +790,7 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
                                         ? LIBP2P_LOG_TRACE
                                         : (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG)
                                                ? LIBP2P_LOG_DEBUG
-                                               : (libp2p_log_is_enabled(LIBP2P_LOG_INFO)
-                                                      ? LIBP2P_LOG_INFO
-                                                      : (libp2p_log_is_enabled(LIBP2P_LOG_WARN)
-                                                             ? LIBP2P_LOG_WARN
-                                                             : (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1)))));
+                                               : (libp2p_log_level_t)-1));
     if (frame_len && log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
     {
         static const char hex_digits[] = "0123456789abcdef";
@@ -906,7 +898,7 @@ libp2p_err_t gossipsub_peer_send_subscription_locked(libp2p_gossipsub_t *gs,
     }
 
     libp2p_err_t send_rc = gossipsub_peer_enqueue_frame_locked(gs, entry, frame.frame, frame.frame_len);
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGD(GOSSIPSUB_MODULE,
             "send_subscription peer=%s topic=%s subscribe=%d frame_len=%zu enqueue_rc=%d stream=%p",
             peer_repr,
             topic,
@@ -928,7 +920,7 @@ static void gossipsub_peer_send_current_subscriptions_locked(libp2p_gossipsub_t 
     const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
     
     int has_stream = entry->stream ? 1 : 0;
-    LP_LOGI(
+    LP_LOGD(
         GOSSIPSUB_MODULE,
         "send_current_subscriptions START peer=%s has_stream=%d",
         peer_repr,
@@ -939,7 +931,7 @@ static void gossipsub_peer_send_current_subscriptions_locked(libp2p_gossipsub_t 
     {
         if (!topic->subscribed || !topic->name)
             continue;
-        LP_LOGI(
+        LP_LOGD(
             GOSSIPSUB_MODULE,
             "send_current_subscriptions peer=%s topic=%s",
             peer_repr,
@@ -949,7 +941,7 @@ static void gossipsub_peer_send_current_subscriptions_locked(libp2p_gossipsub_t 
             sent++;
     }
     
-    LP_LOGI(
+    LP_LOGD(
         GOSSIPSUB_MODULE,
         "send_current_subscriptions END peer=%s sent=%zu",
         peer_repr,

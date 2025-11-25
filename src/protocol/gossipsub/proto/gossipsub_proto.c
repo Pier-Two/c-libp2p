@@ -151,12 +151,8 @@ libp2p_err_t libp2p_gossipsub_rpc_encode_publish(const libp2p_gossipsub_message_
             log_level = LIBP2P_LOG_TRACE;
         else if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
             log_level = LIBP2P_LOG_DEBUG;
-        else if (libp2p_log_is_enabled(LIBP2P_LOG_INFO))
-            log_level = LIBP2P_LOG_INFO;
-        else if (libp2p_log_is_enabled(LIBP2P_LOG_WARN))
-            log_level = LIBP2P_LOG_WARN;
         else
-            log_level = (libp2p_log_is_enabled(LIBP2P_LOG_ERROR) ? LIBP2P_LOG_ERROR : (libp2p_log_level_t)-1);
+            log_level = (libp2p_log_level_t)-1;
 
         if (log_level != (libp2p_log_level_t)-1 && log_level != LIBP2P_LOG_ERROR)
         {

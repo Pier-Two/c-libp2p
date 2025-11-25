@@ -1856,7 +1856,7 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
         quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
-    LP_LOGI("QUIC",
+    LP_LOGD("QUIC",
             "stream_backend_write ctx=%p cnx=%p stream_id=%" PRIu64 " len=%zu",
             (void *)st,
             (void *)cnx,
