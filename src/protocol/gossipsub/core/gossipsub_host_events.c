@@ -277,19 +277,11 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
     char peer_buf[128] = {0};
     peer_id_to_string(&ctx->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
     
-    const char *attempted_protocol = gossipsub_get_protocol_at_index(gs, ctx->protocol_index);
-    
     if (err == LIBP2P_ERR_OK && s)
     {
-        const char *negotiated_protocol = libp2p_stream_protocol_id(s);
-        int is_initiator = libp2p_stream_is_initiator(s);
         LP_LOGI(GOSSIPSUB_MODULE,
-                "outbound gossipsub stream OPENED peer=%s attempted_protocol=%s negotiated_protocol=%s initiator=%d stream=%p",
-                peer_buf[0] ? peer_buf : "(unknown)",
-                attempted_protocol ? attempted_protocol : "(null)",
-                negotiated_protocol ? negotiated_protocol : "(null)",
-                is_initiator,
-                (void *)s);
+                "outbound gossipsub stream opened peer=%s",
+                peer_buf[0] ? peer_buf : "(unknown)");
         gossipsub_on_stream_open(s, gs);
         if (ctx->peer.bytes)
             peer_id_destroy(&ctx->peer);
@@ -297,10 +289,9 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
         return;
     }
     
-    LP_LOGI(GOSSIPSUB_MODULE,
-            "outbound gossipsub stream FAILED peer=%s attempted_protocol=%s err=%d protocol_index=%zu",
+    LP_LOGD(GOSSIPSUB_MODULE,
+            "outbound gossipsub stream failed peer=%s err=%d protocol_index=%zu",
             peer_buf[0] ? peer_buf : "(unknown)",
-            attempted_protocol ? attempted_protocol : "(null)",
             err,
             ctx->protocol_index);
     
@@ -334,9 +325,6 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     if (!gs || !peer || !gs->host)
         return;
     
-    char peer_buf[128] = {0};
-    peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-    
     /* Check if we already initiated an outbound stream to this peer.
      * We track this by checking if the existing stream was initiated by us (initiator=1).
      * If peer has no stream, or has a stream where they initiated (initiator=0),
@@ -345,32 +333,20 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     pthread_mutex_lock(&gs->lock);
     gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, peer);
     int skip_dial = 0;
-    int has_stream = entry && entry->stream ? 1 : 0;
-    int existing_initiator = -1;
     if (entry && entry->stream)
     {
         /* If we already have a stream and we're the initiator, skip */
-        existing_initiator = libp2p_stream_is_initiator(entry->stream);
-        if (existing_initiator)
+        int is_initiator = libp2p_stream_is_initiator(entry->stream);
+        if (is_initiator)
             skip_dial = 1;
     }
     pthread_mutex_unlock(&gs->lock);
     
     if (skip_dial)
     {
-        LP_LOGI(GOSSIPSUB_MODULE, 
-                "try_open_outbound SKIP peer=%s has_stream=%d existing_initiator=%d",
-                peer_buf[0] ? peer_buf : "(unknown)",
-                has_stream,
-                existing_initiator);
+        LP_LOGD(GOSSIPSUB_MODULE, "peer already has outbound gossipsub stream, skipping dial");
         return;
     }
-    
-    LP_LOGI(GOSSIPSUB_MODULE,
-            "try_open_outbound START peer=%s has_stream=%d existing_initiator=%d",
-            peer_buf[0] ? peer_buf : "(unknown)",
-            has_stream,
-            existing_initiator);
     
     const char *protocol = gossipsub_get_protocol_at_index(gs, 0);
     if (!protocol)
@@ -404,6 +380,8 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
         return;
     }
     
+    char peer_buf[128] = {0};
+    peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
     LP_LOGI(GOSSIPSUB_MODULE,
             "opening outbound gossipsub stream peer=%s protocol=%s",
             peer_buf[0] ? peer_buf : "(unknown)",
@@ -412,10 +390,7 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     int rc = libp2p_host_open_stream_async(gs->host, peer, protocol, gossipsub_outbound_dial_cb, ctx);
     if (rc != LIBP2P_ERR_OK)
     {
-        LP_LOGW(GOSSIPSUB_MODULE, 
-                "failed to open outbound gossipsub stream peer=%s rc=%d",
-                peer_buf[0] ? peer_buf : "(unknown)",
-                rc);
+        LP_LOGW(GOSSIPSUB_MODULE, "failed to open outbound gossipsub stream (rc=%d)", rc);
         if (ctx->peer.bytes)
             peer_id_destroy(&ctx->peer);
         free(ctx);
