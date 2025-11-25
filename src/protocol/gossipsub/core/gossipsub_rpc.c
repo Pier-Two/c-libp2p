@@ -379,8 +379,9 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic,
     if (noise_rc != NOISE_ERROR_NONE || !sub)
         goto cleanup;
 
-    /* Send only topic_id (tag 2) to match rust-libp2p schema */
-    noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic_id(sub, topic, topic_len);
+    /* rust-libp2p gossipsub uses 'topicid' at proto tag 2, which maps to our 'topic' field.
+     * Setting both topic (tag 2) and topic_id (tag 3) for maximum compatibility. */
+    noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic(sub, topic, topic_len);
     if (noise_rc != NOISE_ERROR_NONE)
         goto cleanup;
 
@@ -389,6 +390,26 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic,
         goto cleanup;
 
     result = gossipsub_rpc_encode_finalize(rpc, out);
+
+    /* Log the encoded subscription frame for debugging */
+    if (result == LIBP2P_ERR_OK && out->frame && out->frame_len > 0)
+    {
+        static const char hex_digits[] = "0123456789abcdef";
+        char preview[256];
+        size_t preview_len = out->frame_len < 128 ? out->frame_len : 128;
+        for (size_t i = 0; i < preview_len; ++i)
+        {
+            preview[(i * 2) + 0] = hex_digits[(out->frame[i] >> 4) & 0xF];
+            preview[(i * 2) + 1] = hex_digits[out->frame[i] & 0xF];
+        }
+        preview[preview_len * 2] = '\0';
+        LP_LOGI(GOSSIPSUB_MODULE,
+                "encode_subscription topic=%s subscribe=%d frame_len=%zu hex=%s",
+                topic,
+                subscribe ? 1 : 0,
+                out->frame_len,
+                preview);
+    }
 
 cleanup:
     if (rpc)

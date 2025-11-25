@@ -1312,7 +1312,13 @@ static void *open_stream_async_thread(void *arg)
     libp2p_stream_t *s = NULL;
     int rc = LIBP2P_ERR_INTERNAL;
 
-    /* Prefer reuse: if an active stream already exists for any address */
+    /* Prefer reuse: if an active stream already exists for any address.
+     * IMPORTANT: Only reuse streams where WE are the initiator. This is critical
+     * for gossipsub interop with rust-libp2p: each peer must open their own
+     * stream for sending messages. We cannot reuse an inbound stream (where
+     * the remote peer is the initiator) to send our messages, because the
+     * remote peer expects to read from streams they opened, not write to them.
+     */
     LP_LOGD("IDENTIFY_PUB", "[open_async] have %zu addr(s) for peer dial", n);
     for (size_t i = 0; i < n; i++)
     {
@@ -1326,9 +1332,18 @@ static void *open_stream_async_thread(void *arg)
         {
             if (ent->remote_addr && ent->protocol_id && strcmp(ent->protocol_id, protocol_id) == 0 && strcmp(ent->remote_addr, maddr) == 0)
             {
-                s = ent->s;
-                rc = 0;
-                break;
+                /* Only reuse if we are the initiator (we opened this stream) */
+                if (ent->s && libp2p_stream_is_initiator(ent->s))
+                {
+                    s = ent->s;
+                    rc = 0;
+                    LP_LOGD("IDENTIFY_PUB", "[open_async] reusing initiator stream %p for %s", (void *)s, maddr);
+                    break;
+                }
+                else
+                {
+                    LP_LOGD("IDENTIFY_PUB", "[open_async] found stream but we're not initiator, will dial new");
+                }
             }
         }
         pthread_mutex_unlock(&host->mtx);

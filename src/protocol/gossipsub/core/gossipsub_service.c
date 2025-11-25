@@ -418,6 +418,11 @@ static void gossipsub_init_config(libp2p_gossipsub_config_t *dst, const libp2p_g
                                        sizeof(dst->protocol_id_count);
     if (!src || src->struct_size < protocol_count_field_size)
         dst->protocol_id_count = 0;
+
+    size_t anonymous_mode_field_size = offsetof(libp2p_gossipsub_config_t, anonymous_mode) +
+                                       sizeof(dst->anonymous_mode);
+    if (!src || src->struct_size < anonymous_mode_field_size)
+        dst->anonymous_mode = false;
 }
 
 libp2p_err_t libp2p_gossipsub_config_default(libp2p_gossipsub_config_t *cfg)
@@ -471,6 +476,7 @@ libp2p_err_t libp2p_gossipsub_config_default(libp2p_gossipsub_config_t *cfg)
     cfg->fanout_ttl_ms = GOSSIPSUB_DEFAULT_FANOUT_TTL_MS;
     cfg->protocol_ids = NULL;
     cfg->protocol_id_count = 0;
+    cfg->anonymous_mode = false;
     return LIBP2P_ERR_OK;
 }
 

@@ -548,7 +548,9 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
         return;
     }
 
-    if (ctx->propagate_on_accept && !ctx->message.from && gs->host)
+    /* In anonymous mode, skip adding from/seqno fields to be compatible with
+       rust-libp2p ValidationMode::Anonymous which rejects messages with these fields */
+    if (ctx->propagate_on_accept && !gs->cfg.anonymous_mode && !ctx->message.from && gs->host)
     {
         peer_id_t *self = NULL;
         if (libp2p_host_get_peer_id(gs->host, &self) == LIBP2P_ERR_OK && self)
@@ -564,7 +566,7 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
         }
     }
 
-    if (ctx->propagate_on_accept && ctx->message.seqno_len == 0)
+    if (ctx->propagate_on_accept && !gs->cfg.anonymous_mode && ctx->message.seqno_len == 0)
     {
         uint8_t seqno_bytes[8];
         uint64_t seq = atomic_fetch_add_explicit(&gs->seqno_counter, 1, memory_order_relaxed);
