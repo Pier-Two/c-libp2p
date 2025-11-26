@@ -983,7 +983,16 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
         topic_len = libp2p_gossipsub_Message_get_size_at_topic_ids(proto_msg, 0);
     }
     if (!topic_raw || topic_len == 0)
+    {
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "inbound publish has no topic peer=%s has_topic=%d topic_ids_count=%zu",
+                peer_repr,
+                libp2p_gossipsub_Message_has_topic(proto_msg),
+                libp2p_gossipsub_Message_count_topic_ids(proto_msg));
         return LIBP2P_ERR_UNSUPPORTED;
+    }
 
     char *topic_str = (char *)malloc(topic_len + 1);
     if (!topic_str)
@@ -1032,9 +1041,23 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
     libp2p_err_t rc = gossipsub_validation_collect(gs, topic_str, &topic, &validators, &validator_count);
     if (rc != LIBP2P_ERR_OK)
     {
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "validation_collect failed peer=%s topic=%s rc=%d (topic not subscribed?)",
+                peer_repr,
+                topic_str,
+                rc);
         free(topic_str);
         return rc;
     }
+
+    LP_LOGD(GOSSIPSUB_MODULE,
+            "scheduling validation topic=%s validators=%zu has_msg_id_fn=%d data_len=%zu",
+            topic_str,
+            validator_count,
+            topic && topic->message_id_fn ? 1 : 0,
+            msg.data_len);
 
     rc = gossipsub_validation_schedule(gs, topic, validators, validator_count, &msg, 0);
     free(topic_str);

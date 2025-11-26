@@ -228,6 +228,12 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs,
     if (libp2p_gossipsub_RPC_has_publish(rpc))
     {
         size_t publish_count = libp2p_gossipsub_RPC_count_publish(rpc);
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+        LP_LOGD(GOSSIPSUB_MODULE,
+                "RPC frame contains %zu publish message(s) from peer=%s",
+                publish_count,
+                peer_repr);
         for (size_t i = 0; i < publish_count; ++i)
         {
             libp2p_gossipsub_Message *proto_msg = libp2p_gossipsub_RPC_get_at_publish(rpc, i);

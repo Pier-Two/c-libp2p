@@ -564,6 +564,7 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
         return 0;
 
     libp2p_host_t *host = mx->host;
+    LP_LOGI("QUIC", "run_inbound_handshake START stream_id=%llu", (unsigned long long)st->stream_id);
 
     if (host->opts.per_conn_max_inbound_streams > 0)
     {
@@ -607,7 +608,11 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
     libp2p_io_free(io);
 
     if (ms != LIBP2P_MULTISELECT_OK || !accepted)
+    {
+        LP_LOGW("QUIC", "run_inbound_handshake multiselect failed ms=%d stream_id=%llu", (int)ms, (unsigned long long)st->stream_id);
         return 0;
+    }
+    LP_LOGI("QUIC", "run_inbound_handshake multiselect OK accepted=%s stream_id=%llu", accepted, (unsigned long long)st->stream_id);
 
     libp2p_stream_t *stream = st->stream;
     if (libp2p_stream_set_protocol_id(stream, accepted) != 0)
@@ -644,6 +649,7 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
 
     libp2p_protocol_def_t chosen = {0};
     int found = quic_find_protocol_def(host, proto_id, &chosen);
+    LP_LOGI("QUIC", "run_inbound_handshake protocol_lookup proto=%s found=%d has_on_open=%d", proto_id, found, chosen.on_open ? 1 : 0);
     if (!found)
     {
         libp2p_stream_close(stream);
@@ -1592,13 +1598,19 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
     if (!mx)
         return 0;
 
+    LP_LOGI("QUIC", "muxer_stream_event stream_id=%llu event=%d length=%zu", 
+            (unsigned long long)stream_id, (int)event, length);
+
     quic_stream_ctx_t *st = quic_muxer_find_stream(mx, stream_id);
     switch (event)
     {
         case picoquic_callback_stream_data:
         case picoquic_callback_stream_fin:
             if (!st)
+            {
+                LP_LOGI("QUIC", "accepting inbound stream stream_id=%llu", (unsigned long long)stream_id);
                 st = quic_accept_inbound_stream(mx, stream_id);
+            }
             if (st)
             {
                 int schedule_handshake = 0;
@@ -1618,7 +1630,10 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                 pthread_mutex_unlock(&st->lock);
 
                 if (schedule_handshake)
+                {
+                    LP_LOGI("QUIC", "scheduling handshake stream_id=%llu", (unsigned long long)st->stream_id);
                     quic_stream_start_handshake(mx, st);
+                }
 
                 if (handshake_done_now && st->stream)
                     quic_stream_schedule_readable(st);

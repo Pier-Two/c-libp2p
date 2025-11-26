@@ -6,7 +6,6 @@
 #include <time.h>
 
 #include "host_internal.h"
-#include "conn_pool.h"
 #include "libp2p/component_registry.h"
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
@@ -420,14 +419,6 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
         h->peerstore = libp2p_peerstore_new();
     }
 
-    /* Connection pool for QUIC session reuse (0 = unlimited, 300s idle timeout) */
-    h->conn_pool = libp2p_conn_pool_new(0, 300);
-    if (!h->conn_pool)
-    {
-        component_err = LIBP2P_ERR_INTERNAL;
-        goto components_fail;
-    }
-
     *out = h;
     /* Start Identify responder (/ipfs/id/1.0.0) and Push listener */
     (void)libp2p_identify_service_start(h, &h->identify_server);
@@ -437,8 +428,6 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
     return 0;
 
 components_fail:
-    if (h->conn_pool)
-        libp2p_conn_pool_free(h->conn_pool);
     if (h->yamux)
         libp2p_muxer_free(h->yamux);
     if (h->noise)
@@ -567,12 +556,6 @@ void libp2p_host_free(libp2p_host_t *host)
     /* no resource manager to free */
     if (host->conn_mgr)
         libp2p_conn_mgr_free(host->conn_mgr);
-    /* Free connection pool */
-    if (host->conn_pool)
-    {
-        libp2p_conn_pool_free(host->conn_pool);
-        host->conn_pool = NULL;
-    }
     /* free per-protocol server configs */
     LP_LOGD("HOST_FREE", "freeing proto_cfgs");
     proto_server_cfg_t *pc = host->proto_cfgs;

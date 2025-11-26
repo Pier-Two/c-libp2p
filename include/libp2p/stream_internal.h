@@ -46,6 +46,9 @@ libp2p_stream_t *libp2p_stream_from_ops(struct libp2p_host *host, void *io_ctx, 
 struct libp2p_muxer; /* fwd */
 void libp2p_stream_set_parent(libp2p_stream_t *s, libp2p_conn_t *parent_conn, struct libp2p_muxer *mx, int take_ownership);
 
+/* Get the parent muxer for a substream. Returns NULL if none. */
+struct libp2p_muxer *libp2p_stream_get_parent_muxer(libp2p_stream_t *s);
+
 /* Destroy a stream stub after it has been closed; pointer becomes invalid. */
 void libp2p__stream_destroy(libp2p_stream_t *s);
 

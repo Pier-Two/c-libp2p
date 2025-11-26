@@ -322,8 +322,18 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
  */
 static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const peer_id_t *peer)
 {
+    char peer_buf[128] = {0};
+    if (peer)
+        peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+    
     if (!gs || !peer || !gs->host)
+    {
+        LP_LOGW(GOSSIPSUB_MODULE, "try_open_outbound_stream early return: gs=%p peer=%p host=%p",
+                (void*)gs, (void*)peer, gs ? (void*)gs->host : NULL);
         return;
+    }
+    
+    LP_LOGI(GOSSIPSUB_MODULE, "try_open_outbound_stream called peer=%s", peer_buf[0] ? peer_buf : "(unknown)");
     
     /* Check if we already initiated an outbound stream to this peer.
      * We track this by checking if the existing stream was initiated by us (initiator=1).
@@ -333,14 +343,20 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     pthread_mutex_lock(&gs->lock);
     gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, peer);
     int skip_dial = 0;
+    int has_stream = 0;
+    int is_initiator = 0;
     if (entry && entry->stream)
     {
+        has_stream = 1;
         /* If we already have a stream and we're the initiator, skip */
-        int is_initiator = libp2p_stream_is_initiator(entry->stream);
+        is_initiator = libp2p_stream_is_initiator(entry->stream);
         if (is_initiator)
             skip_dial = 1;
     }
     pthread_mutex_unlock(&gs->lock);
+    
+    LP_LOGI(GOSSIPSUB_MODULE, "try_open_outbound peer=%s has_stream=%d is_initiator=%d skip_dial=%d",
+            peer_buf[0] ? peer_buf : "(unknown)", has_stream, is_initiator, skip_dial);
     
     if (skip_dial)
     {
@@ -380,9 +396,7 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
         return;
     }
     
-    char peer_buf[128] = {0};
-    peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-    LP_LOGD(GOSSIPSUB_MODULE,
+    LP_LOGI(GOSSIPSUB_MODULE,
             "opening outbound gossipsub stream peer=%s protocol=%s",
             peer_buf[0] ? peer_buf : "(unknown)",
             protocol);
@@ -406,6 +420,13 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
     switch (evt->kind)
     {
         case LIBP2P_EVT_CONN_OPENED:
+        {
+            char peer_buf[128] = {0};
+            if (evt->u.conn_opened.peer)
+                peer_id_to_string(evt->u.conn_opened.peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+            LP_LOGI(GOSSIPSUB_MODULE, "CONN_OPENED event received peer=%s inbound=%d", 
+                    peer_buf[0] ? peer_buf : "(null)", evt->u.conn_opened.inbound ? 1 : 0);
+            
             if (evt->u.conn_opened.peer)
             {
                 pthread_mutex_lock(&gs->lock);
@@ -422,6 +443,7 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
             }
             LP_LOGD(GOSSIPSUB_MODULE, "connection opened (inbound=%d)", evt->u.conn_opened.inbound ? 1 : 0);
             break;
+        }
         case LIBP2P_EVT_CONN_CLOSED:
             if (evt->u.conn_closed.peer)
             {

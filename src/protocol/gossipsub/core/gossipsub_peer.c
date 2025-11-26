@@ -10,6 +10,10 @@
 
 #include "libp2p/log.h"
 #include "libp2p/runtime.h"
+#include "libp2p/muxer.h"
+#include "libp2p/stream_internal.h"
+#include "libp2p/io.h"
+#include "protocol/multiselect/protocol_multiselect.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "../../../host/host_internal.h"
 
@@ -340,6 +344,23 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
                 free(ip);
         }
         libp2p_stream_on_writable(s, NULL, NULL);
+        
+        /* For rust-libp2p interop: if we received an inbound stream (initiator=0),
+         * rust-libp2p won't read from it. We need to open our OWN outbound stream
+         * on the same connection to send subscriptions.
+         * 
+         * NOTE: We DON'T do this synchronously here because:
+         * 1. The QUIC muxer is single-threaded
+         * 2. Blocking multiselect would prevent the QUIC event loop from processing responses
+         * 3. This would cause a deadlock/timeout
+         * 
+         * Instead, we rely on gossipsub_try_open_outbound_stream being called
+         * from the CONN_OPENED event handler, which spawns an async thread.
+         * 
+         * For now, we just use the inbound stream for receiving RPC data.
+         * When the async outbound stream is ready, it will be attached separately.
+         */
+        (void)proto; /* Avoid unused warning - proto is used for context only here */
         
         /* Count subscribed topics for debug */
         size_t topic_count = 0;

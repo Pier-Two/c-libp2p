@@ -19,7 +19,6 @@
 #include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
-#include "conn_pool.h"
 
 /* Opaque forward declarations */
 struct libp2p_protocol_server;
@@ -66,6 +65,7 @@ typedef struct session_node
     struct libp2p_yamux_ctx *yctx;  /* mux context for GO_AWAY/shutdown */
     struct libp2p_muxer *mx;        /* parent muxer */
     struct libp2p_connection *conn; /* secured connection */
+    peer_id_t *remote_peer;         /* remote peer id (for session lookup) */
     /* Inbound yamux session callback context (owned by session; freed on host_stop) */
     struct yamux_cb_ctx *yamux_cb;
     /* Ready signaling to avoid polling during shutdown */
@@ -210,9 +210,6 @@ struct libp2p_host
     int idpush_pending;   /* set when LOCAL_PROTOCOLS_UPDATED occurs or retry needed */
     int idpush_inflight;  /* set while an async publisher is running */
     int idpush_attempts;  /* bounded attempts to avoid storms */
-
-    /* Connection pool for QUIC session reuse (reduces CPU by reusing connections) */
-    libp2p_conn_pool_t *conn_pool;
 };
 
 /* Internal helper to enqueue an event for pull-based APIs and notify waiters. */

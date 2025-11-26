@@ -512,6 +512,14 @@ void libp2p_stream_set_parent(libp2p_stream_t *s, libp2p_conn_t *parent_conn, st
     st->owns_parent = take_ownership ? 1 : 0;
 }
 
+struct libp2p_muxer *libp2p_stream_get_parent_muxer(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return NULL;
+    return st->parent_mx;
+}
+
 int libp2p_stream_set_protocol_id(libp2p_stream_t *s, const char *protocol_id)
 {
     stream_stub_t *st = S(s);

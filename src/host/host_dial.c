@@ -6,7 +6,6 @@
 
 #include "host_internal.h"
 #include "proto_select_internal.h"
-#include "conn_pool.h"
 
 #include "libp2p/dial.h"
 #include "libp2p/host.h"
@@ -429,130 +428,6 @@ static bool addr_is_quic(const multiaddr_t *addr)
     return (next == MULTICODEC_QUIC_V1 || next == MULTICODEC_QUIC);
 }
 
-/**
- * Open a stream on an existing pooled muxer (for connection reuse).
- * This avoids creating a new QUIC connection when we already have one to the peer.
- *
- * @param host The libp2p host
- * @param mx The muxer from the connection pool
- * @param peer The remote peer ID
- * @param proposals Protocol proposals for multistream-select
- * @param accepted_out If not NULL, receives the accepted protocol ID
- * @param out_stream Receives the opened stream on success
- * @return 0 on success, error code on failure
- */
-static int do_open_stream_on_pooled_muxer(libp2p_host_t *host,
-                                           libp2p_muxer_t *mx,
-                                           const peer_id_t *peer,
-                                           const char *const proposals[],
-                                           const char **accepted_out,
-                                           libp2p_stream_t **out_stream)
-{
-    if (!host || !mx || !proposals || !out_stream)
-        return LIBP2P_ERR_NULL_PTR;
-
-    if (!mx->vt || !mx->vt->open_stream)
-        return LIBP2P_ERR_INTERNAL;
-
-    /* Update last-used timestamp in the pool */
-    if (host->conn_pool && peer)
-        libp2p_conn_pool_touch(host->conn_pool, peer);
-
-    /* Open a new stream on the existing muxer */
-    libp2p_stream_t *dial_stream = NULL;
-    if (mx->vt->open_stream(mx, NULL, 0, &dial_stream) != LIBP2P_MUXER_OK || !dial_stream)
-    {
-        LP_LOGD("CONN_POOL", "failed to open stream on pooled muxer");
-        return LIBP2P_ERR_INTERNAL;
-    }
-
-    /* Perform multistream-select on the new stream */
-    libp2p_io_t *subio = libp2p_io_from_stream(dial_stream);
-    if (!subio)
-    {
-        libp2p_stream_free(dial_stream);
-        return LIBP2P_ERR_INTERNAL;
-    }
-
-    const char *accepted = NULL;
-    libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(subio, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
-    if (ms != LIBP2P_MULTISELECT_OK || !accepted)
-    {
-        libp2p_io_close_free(subio);
-        libp2p_stream_free(dial_stream);
-        return libp2p_error_from_multiselect(ms);
-    }
-
-    libp2p_io_free(subio);
-    subio = NULL;
-
-    /* Set protocol ID on the stream */
-    if (accepted)
-    {
-        const char *dup = strdup(accepted);
-        free((void *)accepted);
-        accepted = dup;
-        if (!accepted)
-        {
-            libp2p_stream_free(dial_stream);
-            return LIBP2P_ERR_INTERNAL;
-        }
-        if (libp2p_stream_set_protocol_id(dial_stream, accepted) != 0)
-        {
-            free((void *)accepted);
-            libp2p_stream_free(dial_stream);
-            return LIBP2P_ERR_INTERNAL;
-        }
-    }
-
-    /* Set remote peer on the stream */
-    if (peer)
-    {
-        peer_id_t *peer_copy = (peer_id_t *)calloc(1, sizeof(*peer_copy));
-        if (peer_copy && peer->bytes && peer->size > 0)
-        {
-            peer_copy->bytes = (uint8_t *)malloc(peer->size);
-            if (peer_copy->bytes)
-            {
-                memcpy(peer_copy->bytes, peer->bytes, peer->size);
-                peer_copy->size = peer->size;
-                if (libp2p_stream_set_remote_peer(dial_stream, peer_copy) != 0)
-                {
-                    peer_id_destroy(peer_copy);
-                    free(peer_copy);
-                    peer_copy = NULL;
-                }
-            }
-            else
-            {
-                free(peer_copy);
-                peer_copy = NULL;
-            }
-        }
-        else if (peer_copy)
-        {
-            free(peer_copy);
-        }
-    }
-
-    /* Don't take ownership of parent - the pool owns it */
-    libp2p_stream_set_parent(dial_stream, NULL, mx, 0);
-
-    *out_stream = dial_stream;
-    if (accepted_out)
-        *accepted_out = accepted;
-    else if (accepted)
-        free((void *)accepted);
-
-    libp2p__emit_protocol_negotiated(host, libp2p_stream_protocol_id(dial_stream));
-    libp2p__emit_stream_opened(host, libp2p_stream_protocol_id(dial_stream), libp2p_stream_remote_peer(dial_stream), true);
-
-    LP_LOGI("CONN_POOL", "opened stream on pooled connection, protocol=%s",
-            libp2p_stream_protocol_id(dial_stream) ? libp2p_stream_protocol_id(dial_stream) : "(none)");
-
-    return 0;
-}
-
 static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr, const char *const proposals[], int dial_timeout_ms,
                               const char **accepted_out, libp2p_stream_t **out_stream, const libp2p_cancel_token_t *cancel)
 {
@@ -826,19 +701,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             host_dial_quic_trace_end(quic_trace_id, remote_multiaddr, "ready", 0, elapsed_ms);
             quic_trace_active = 0;
         }
-
-        /* Add to connection pool for future reuse (QUIC sessions are multiplexed) */
-        if (host->conn_pool && libp2p_stream_remote_peer(dial_stream))
-        {
-            libp2p_quic_session_t *session = libp2p_quic_conn_session(secured);
-            (void)libp2p_conn_pool_add(host->conn_pool,
-                                        libp2p_stream_remote_peer(dial_stream),
-                                        mx,
-                                        session,
-                                        secured,
-                                        0); /* is_inbound = false */
-        }
-
         return 0;
 
     quic_fail:
@@ -1361,27 +1223,6 @@ int libp2p_host_open_stream(libp2p_host_t *host, const peer_id_t *peer, const ch
             schedule_dial_on_open(host, on_open, NULL, user_data, LIBP2P_ERR_INTERNAL);
         return LIBP2P_ERR_INTERNAL;
     }
-
-    /* Check connection pool first for an existing connection to this peer */
-    if (host->conn_pool)
-    {
-        libp2p_muxer_t *pooled_mx = libp2p_conn_pool_get(host->conn_pool, peer, NULL);
-        if (pooled_mx)
-        {
-            LP_LOGI("CONN_POOL", "[open_stream] found pooled connection for peer, reusing");
-            libp2p_stream_t *s = NULL;
-            const char *proposals[2] = {protocol_id, NULL};
-            int rc = do_open_stream_on_pooled_muxer(host, pooled_mx, peer, proposals, NULL, &s);
-            if (rc == 0 && s)
-            {
-                if (on_open)
-                    schedule_dial_on_open(host, on_open, s, user_data, 0);
-                return 0;
-            }
-            LP_LOGD("CONN_POOL", "[open_stream] pooled connection failed (rc=%d), falling back to dial", rc);
-        }
-    }
-
     const multiaddr_t **addrs = NULL;
     size_t n = 0;
     if (libp2p_peerstore_get_addrs(host->peerstore, peer, &addrs, &n) != 0 || n == 0)
@@ -1431,16 +1272,26 @@ typedef struct open_async_ctx
 static void *open_stream_async_thread(void *arg)
 {
     open_async_ctx_t *ctx = (open_async_ctx_t *)arg;
+    LP_LOGI("STREAM_ASYNC", "[open_async] thread started ctx=%p", (void *)ctx);
     if (!ctx)
+    {
+        LP_LOGW("STREAM_ASYNC", "[open_async] ctx is NULL, returning");
         return NULL;
+    }
     libp2p_host_t *host = ctx->host;
     const char *protocol_id = ctx->protocol_id;
     libp2p_on_stream_open_fn on_open = ctx->cb;
     void *ud = ctx->user_data;
+    
+    char peer_id_str[128] = {0};
+    if (ctx->peer.bytes && ctx->peer.size > 0)
+        peer_id_to_string(&ctx->peer, PEER_ID_FMT_BASE58_LEGACY, peer_id_str, sizeof(peer_id_str));
+    LP_LOGI("STREAM_ASYNC", "[open_async] thread running for peer=%s proto=%s", 
+            peer_id_str[0] ? peer_id_str : "(unknown)", protocol_id ? protocol_id : "(null)");
 
     if (!host || !host->peerstore || !protocol_id || !on_open)
     {
-        LP_LOGD("IDENTIFY_PUB", "[open_async] early fail: host=%p peerstore=%p proto=%s on_open=%p",
+        LP_LOGW("STREAM_ASYNC", "[open_async] early fail: host=%p peerstore=%p proto=%s on_open=%p",
                 (void *)host, host ? (void *)host->peerstore : NULL, protocol_id ? protocol_id : "(null)", (void *)on_open);
         if (on_open)
             schedule_dial_on_open(host, on_open, NULL, ud, LIBP2P_ERR_NULL_PTR);
@@ -1453,91 +1304,20 @@ static void *open_stream_async_thread(void *arg)
         return NULL;
     }
 
-    /* ============ CONNECTION POOL CHECK (reduces CPU by reusing QUIC connections) ============
-     * Before trying to dial, check if we already have a pooled connection to this peer.
-     * If so, just open a new stream on the existing connection instead of dialing again.
-     * This is critical for CPU savings: without this, multiple concurrent protocol dials
-     * to the same peer would each create a separate QUIC connection with its own network thread.
-     */
-    if (host->conn_pool && ctx->peer.bytes)
-    {
-        libp2p_muxer_t *pooled_mx = libp2p_conn_pool_get(host->conn_pool, &ctx->peer, NULL);
-        if (pooled_mx)
-        {
-            LP_LOGI("CONN_POOL", "[open_async] found pooled connection for peer, reusing");
-            libp2p_stream_t *s = NULL;
-            const char *proposals[2] = {protocol_id, NULL};
-            int rc = do_open_stream_on_pooled_muxer(host, pooled_mx, &ctx->peer, proposals, NULL, &s);
-            if (rc == 0 && s)
-            {
-                schedule_dial_on_open(host, on_open, s, ud, 0);
-                if (ctx->peer.bytes)
-                    peer_id_destroy(&ctx->peer);
-                free(ctx->protocol_id);
-                if (ctx->host)
-                    libp2p__worker_dec(ctx->host);
-                free(ctx);
-                return NULL;
-            }
-            LP_LOGD("CONN_POOL", "[open_async] pooled connection failed (rc=%d), falling back to dial", rc);
-            /* Fall through to normal dial path if pooled connection failed */
-        }
-    }
-
-    /* ============ IN-FLIGHT DIAL DEDUPLICATION ============
-     * If another thread is already dialing this peer, wait for it instead of creating
-     * another concurrent dial. This prevents multiple QUIC sessions to the same peer.
-     */
-    if (host->conn_pool && ctx->peer.bytes)
-    {
-        if (libp2p_conn_pool_dial_in_progress(host->conn_pool, &ctx->peer))
-        {
-            LP_LOGI("CONN_POOL", "[open_async] dial already in progress for peer, waiting");
-            libp2p_muxer_t *mx = libp2p_conn_pool_wait_for_dial(host->conn_pool, &ctx->peer,
-                                                                  host->opts.dial_timeout_ms);
-            if (mx)
-            {
-                /* Dial completed, try to use the pooled connection */
-                libp2p_stream_t *s = NULL;
-                const char *proposals[2] = {protocol_id, NULL};
-                int rc = do_open_stream_on_pooled_muxer(host, mx, &ctx->peer, proposals, NULL, &s);
-                if (rc == 0 && s)
-                {
-                    schedule_dial_on_open(host, on_open, s, ud, 0);
-                    if (ctx->peer.bytes)
-                        peer_id_destroy(&ctx->peer);
-                    free(ctx->protocol_id);
-                    if (ctx->host)
-                        libp2p__worker_dec(ctx->host);
-                    free(ctx);
-                    return NULL;
-                }
-            }
-            /* Fall through if wait failed or pooled stream open failed */
-        }
-        else
-        {
-            /* Mark that we're starting a dial to this peer */
-            (void)libp2p_conn_pool_mark_dialing(host->conn_pool, &ctx->peer);
-        }
-    }
-
     const multiaddr_t **addrs = NULL;
     size_t n = 0;
+    char peer_str[128] = {0};
+    peer_id_to_string(&ctx->peer, PEER_ID_FMT_BASE58_LEGACY, peer_str, sizeof(peer_str));
+    LP_LOGI("STREAM_ASYNC", "[open_async] looking up peerstore for peer=%s", peer_str[0] ? peer_str : "(unknown)");
+    
     if (libp2p_peerstore_get_addrs(host->peerstore, &ctx->peer, &addrs, &n) != 0 || n == 0)
     {
-        LP_LOGD("IDENTIFY_PUB", "[open_async] no peerstore addrs (n=%zu)", n);
-        /* Signal dial completion (failed) so waiters don't hang */
-        if (host->conn_pool && ctx->peer.bytes)
-            libp2p_conn_pool_dial_complete(host->conn_pool, &ctx->peer, 0);
-        schedule_dial_on_open(host, on_open, NULL, ud, LIBP2P_ERR_INTERNAL);
-        if (ctx->peer.bytes)
-            peer_id_destroy(&ctx->peer);
-        free(ctx->protocol_id);
-        if (ctx->host)
-            libp2p__worker_dec(ctx->host);
-        free(ctx);
-        return NULL;
+        LP_LOGI("STREAM_ASYNC", "[open_async] no peerstore addrs for peer=%s (n=%zu), will try session lookup", peer_str[0] ? peer_str : "(unknown)", n);
+        /* Don't return early - try session lookup below */
+    }
+    else
+    {
+        LP_LOGI("STREAM_ASYNC", "[open_async] found %zu peerstore addrs for peer=%s", n, peer_str[0] ? peer_str : "(unknown)");
     }
 
     libp2p_stream_t *s = NULL;
@@ -1550,14 +1330,14 @@ static void *open_stream_async_thread(void *arg)
      * the remote peer is the initiator) to send our messages, because the
      * remote peer expects to read from streams they opened, not write to them.
      */
-    LP_LOGD("IDENTIFY_PUB", "[open_async] have %zu addr(s) for peer dial", n);
+    LP_LOGD("STREAM_ASYNC", "[open_async] have %zu addr(s) for peer dial", n);
     for (size_t i = 0; i < n; i++)
     {
         int serr = 0;
         char *maddr = multiaddr_to_str(addrs[i], &serr);
         if (!maddr)
             continue;
-        LP_LOGD("IDENTIFY_PUB", "[open_async] try reuse %s", maddr);
+        LP_LOGD("STREAM_ASYNC", "[open_async] try reuse %s", maddr);
         pthread_mutex_lock(&host->mtx);
         for (stream_entry_t *ent = host->active_streams; ent; ent = ent->next)
         {
@@ -1568,12 +1348,12 @@ static void *open_stream_async_thread(void *arg)
                 {
                     s = ent->s;
                     rc = 0;
-                    LP_LOGD("IDENTIFY_PUB", "[open_async] reusing initiator stream %p for %s", (void *)s, maddr);
+                    LP_LOGD("STREAM_ASYNC", "[open_async] reusing initiator stream %p for %s", (void *)s, maddr);
                     break;
                 }
                 else
                 {
-                    LP_LOGD("IDENTIFY_PUB", "[open_async] found stream but we're not initiator, will dial new");
+                    LP_LOGD("STREAM_ASYNC", "[open_async] found stream but we're not initiator, will dial new");
                 }
             }
         }
@@ -1587,7 +1367,145 @@ static void *open_stream_async_thread(void *arg)
         free(maddr);
     }
 
-    /* No reuse path hit; dial using selector (blocking call inside this thread) */
+    /* Check if we have an existing session/connection to this peer where we can
+     * open a new stream. This is critical for gossipsub interop with rust-libp2p:
+     * rust-libp2p only reads from streams where it's the responder, so we need
+     * to open a NEW stream on the EXISTING connection (rather than dialing a
+     * new connection which may fail).
+     */
+    fprintf(stderr, "=== open_async: about to search sessions for peer=%s ===\n", peer_str);
+    fflush(stderr);
+    pthread_mutex_lock(&host->mtx);
+    size_t session_count = 0;
+    for (session_node_t *it = host->sessions; it; it = it->next)
+        session_count++;
+    fprintf(stderr, "=== open_async: found %zu sessions ===\n", session_count);
+    fflush(stderr);
+    LP_LOGI("STREAM_ASYNC", "[open_async] searching %zu sessions for existing connection to peer=%s", session_count, peer_str);
+    
+    for (session_node_t *sess = host->sessions; sess; sess = sess->next)
+    {
+        LP_LOGD("STREAM_ASYNC", "[open_async] checking session=%p mx=%p has_vt=%d has_open_stream=%d remote_peer=%p",
+                (void *)sess, (void *)sess->mx, 
+                (sess->mx && sess->mx->vt) ? 1 : 0,
+                (sess->mx && sess->mx->vt && sess->mx->vt->open_stream) ? 1 : 0,
+                (void *)sess->remote_peer);
+        
+        if (!sess->mx || !sess->mx->vt || !sess->mx->vt->open_stream)
+        {
+            LP_LOGD("STREAM_ASYNC", "[open_async] session skip: no muxer/vt/open_stream");
+            continue;
+        }
+        /* Check if this session is for the target peer using stored remote_peer */
+        if (!sess->remote_peer || !sess->remote_peer->bytes || !ctx->peer.bytes)
+        {
+            LP_LOGD("STREAM_ASYNC", "[open_async] session skip: no remote_peer data sess_peer=%p ctx_peer=%p",
+                    sess->remote_peer ? (void *)sess->remote_peer->bytes : NULL,
+                    (void *)ctx->peer.bytes);
+            continue;
+        }
+        if (sess->remote_peer->size != ctx->peer.size)
+        {
+            LP_LOGD("STREAM_ASYNC", "[open_async] session skip: size mismatch sess=%zu ctx=%zu",
+                    sess->remote_peer->size, ctx->peer.size);
+            continue;
+        }
+        if (memcmp(sess->remote_peer->bytes, ctx->peer.bytes, ctx->peer.size) != 0)
+        {
+            LP_LOGD("STREAM_ASYNC", "[open_async] session skip: peer bytes mismatch");
+            continue;
+        }
+        
+        fprintf(stderr, "=== open_async: FOUND MATCHING SESSION! calling open_stream... ===\n");
+        fflush(stderr);
+        LP_LOGI("STREAM_ASYNC", "[open_async] found existing session to target peer, opening new stream");
+        
+        /* Found a session for our target peer - try to open a new stream 
+         * IMPORTANT: unlock mutex before calling open_stream to avoid potential deadlock
+         * with QUIC event loop.
+         */
+        struct libp2p_muxer *mx = sess->mx;
+        pthread_mutex_unlock(&host->mtx);
+        
+        libp2p_stream_t *new_stream = NULL;
+        fprintf(stderr, "=== open_async: calling mx->vt->open_stream()... ===\n");
+        fflush(stderr);
+        libp2p_muxer_err_t mx_rc = mx->vt->open_stream(mx, NULL, 0, &new_stream);
+        fprintf(stderr, "=== open_async: open_stream returned mx_rc=%d new_stream=%p ===\n", (int)mx_rc, (void*)new_stream);
+        fflush(stderr);
+        if (mx_rc == LIBP2P_MUXER_OK && new_stream)
+        {
+            LP_LOGI("STREAM_ASYNC", "[open_async] opened new stream on existing muxer for peer");
+            /* Negotiate the protocol on this new stream using multiselect */
+            libp2p_io_t *io = libp2p_io_from_stream(new_stream);
+            if (io)
+            {
+                const char *proposals[] = {protocol_id, NULL};
+                const char *accepted = NULL;
+                fprintf(stderr, "=== open_async: calling multiselect_dial_io proto=%s ===\n", protocol_id);
+                fflush(stderr);
+                libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(io, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+                fprintf(stderr, "=== open_async: multiselect returned ms=%d accepted=%s ===\n", (int)ms, accepted ? accepted : "(null)");
+                fflush(stderr);
+                libp2p_io_free(io); /* Free IO adapter after negotiation */
+                if (ms == LIBP2P_MULTISELECT_OK && accepted)
+                {
+                    if (libp2p_stream_set_protocol_id(new_stream, accepted) == 0)
+                    {
+                        /* Copy remote peer to the new stream */
+                        peer_id_t *remote_copy = NULL;
+                        if (sess->remote_peer && sess->remote_peer->bytes && sess->remote_peer->size > 0)
+                        {
+                            remote_copy = (peer_id_t *)calloc(1, sizeof(peer_id_t));
+                            if (remote_copy)
+                            {
+                                remote_copy->bytes = (uint8_t *)malloc(sess->remote_peer->size);
+                                if (remote_copy->bytes)
+                                {
+                                    memcpy(remote_copy->bytes, sess->remote_peer->bytes, sess->remote_peer->size);
+                                    remote_copy->size = sess->remote_peer->size;
+                                }
+                                else
+                                {
+                                    free(remote_copy);
+                                    remote_copy = NULL;
+                                }
+                            }
+                        }
+                        if (remote_copy)
+                        {
+                            (void)libp2p_stream_set_remote_peer(new_stream, remote_copy);
+                        }
+                        s = new_stream;
+                        rc = 0;
+                        LP_LOGI("STREAM_ASYNC", "[open_async] protocol negotiation succeeded on existing conn proto=%s", accepted);
+                        free((void *)accepted);
+                        schedule_dial_on_open(host, on_open, s, ud, rc);
+                        goto out_cleanup;
+                    }
+                    free((void *)accepted);
+                }
+                LP_LOGW("STREAM_ASYNC", "[open_async] multiselect failed on existing conn, ms=%d", ms);
+            }
+            else
+            {
+                LP_LOGW("STREAM_ASYNC", "[open_async] could not get IO from stream");
+            }
+            libp2p_stream_close(new_stream);
+            goto try_dial; /* Protocol negotiation failed, try dialing */
+        }
+        else
+        {
+            LP_LOGW("STREAM_ASYNC", "[open_async] failed to open stream on muxer, mx_rc=%d", mx_rc);
+        }
+        /* We found the session (and already unlocked), don't keep searching */
+        goto try_dial;
+    }
+    pthread_mutex_unlock(&host->mtx); /* No matching session found */
+
+try_dial:
+
+    /* No existing session found; dial using selector (blocking call inside this thread) */
     libp2p_proto_selector_t sel = {
         .kind = LIBP2P_PROTO_SELECT_EXACT,
         .exact_id = protocol_id,
@@ -1603,18 +1521,13 @@ static void *open_stream_async_thread(void *arg)
         char *maddr = multiaddr_to_str(addrs[i], &serr);
         if (!maddr)
             continue;
-        LP_LOGD("IDENTIFY_PUB", "[open_async] dialing %s", maddr);
+        LP_LOGD("STREAM_ASYNC", "[open_async] dialing %s", maddr);
         s = NULL;
         rc = libp2p_host_dial_selected_blocking(host, maddr, &sel, host->opts.dial_timeout_ms, &s);
         free(maddr);
         if (rc == 0 && s)
             break;
     }
-
-    /* Signal dial completion so other waiters can proceed */
-    if (host->conn_pool && ctx->peer.bytes)
-        libp2p_conn_pool_dial_complete(host->conn_pool, &ctx->peer, (rc == 0 && s) ? 1 : 0);
-
     schedule_dial_on_open(host, on_open, s, ud, rc);
 
 out_cleanup:
@@ -1631,8 +1544,20 @@ out_cleanup:
 int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, const char *protocol_id, libp2p_on_stream_open_fn on_open,
                                   void *user_data)
 {
+    fprintf(stderr, "=== libp2p_host_open_stream_async CALLED ===\n");
+    fflush(stderr);
+    char peer_str[128] = {0};
+    if (peer && peer->bytes && peer->size > 0)
+        peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_str, sizeof(peer_str));
+    LP_LOGI("HOST", "[open_stream_async] called host=%p peer=%s proto=%s on_open=%p",
+            (void *)host, peer_str[0] ? peer_str : "(null)",
+            protocol_id ? protocol_id : "(null)", (void *)on_open);
+    
     if (!host || !peer || !protocol_id || !on_open)
+    {
+        LP_LOGW("STREAM_ASYNC", "[async_entry] null ptr check failed");
         return LIBP2P_ERR_NULL_PTR;
+    }
     open_async_ctx_t *ctx = (open_async_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
         return LIBP2P_ERR_INTERNAL;
@@ -1660,8 +1585,10 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
     ctx->user_data = user_data;
     pthread_t th;
     libp2p__worker_inc(host);
+    LP_LOGI("STREAM_ASYNC", "[async_entry] creating thread for peer=%s proto=%s", peer_str, protocol_id);
     if (pthread_create(&th, NULL, open_stream_async_thread, ctx) != 0)
     {
+        LP_LOGE("STREAM_ASYNC", "[async_entry] pthread_create FAILED");
         if (ctx->peer.bytes)
             peer_id_destroy(&ctx->peer);
         free(ctx->protocol_id);
@@ -1670,6 +1597,7 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
         return LIBP2P_ERR_INTERNAL;
     }
     pthread_detach(th);
+    LP_LOGI("STREAM_ASYNC", "[async_entry] thread created and detached");
     return 0;
 }
 

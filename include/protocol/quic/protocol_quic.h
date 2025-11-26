@@ -40,10 +40,7 @@ static inline libp2p_quic_config_t libp2p_quic_config_default(void)
 }
 
 /* Opaque session handle type (e.g., picoquic_cnx_t). */
-#ifndef LIBP2P_QUIC_SESSION_TYPEDEF
-#define LIBP2P_QUIC_SESSION_TYPEDEF
 typedef struct libp2p_quic_session libp2p_quic_session_t;
-#endif
 struct libp2p_host;
 
 /*

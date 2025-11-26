@@ -30,7 +30,6 @@
 #include "protocol/quic/protocol_quic.h"
 #include "transport/transport.h"
 #include "transport/upgrader.h"
-#include "conn_pool.h"
 
 /* generic readiness helpers are provided by stream internals */
 
@@ -1989,6 +1988,7 @@ static void *listener_accept_thread(void *arg)
             rc == LIBP2P_LISTENER_ERR_TIMEOUT ||
             rc == LIBP2P_LISTENER_ERR_BACKOFF)
             continue; /* rely on listener internals to block efficiently */
+        LP_LOGI("HOST", "listener_accept rc=%d raw=%p", (int)rc, (void *)raw);
         if (rc != LIBP2P_LISTENER_OK)
         {
             if (rc == LIBP2P_LISTENER_ERR_CLOSED)
@@ -2026,7 +2026,9 @@ static void *listener_accept_thread(void *arg)
         /* Upgrade inbound connection (Noise + muxer) via shared helper */
         libp2p_uconn_t *uc = NULL;
         int uprci = 0;
-        if (libp2p_quic_conn_session(raw) != NULL)
+        int is_quic_raw = (libp2p_quic_conn_session(raw) != NULL) ? 1 : 0;
+        LP_LOGI("HOST", "upgrading inbound connection is_quic=%d", is_quic_raw);
+        if (is_quic_raw)
         {
             uprci = libp2p__host_upgrade_inbound_quic(host, raw, &uc);
         }
@@ -2034,6 +2036,7 @@ static void *listener_accept_thread(void *arg)
         {
             uprci = libp2p__host_upgrade_inbound(host, raw, /*allow_mplex=*/1, &uc);
         }
+        LP_LOGI("HOST", "upgrade result rc=%d uc=%p", uprci, (void *)uc);
         if (uprci != 0 || !uc)
             continue;
         libp2p_conn_t *secured = uc->conn;
@@ -2115,16 +2118,37 @@ static void *listener_accept_thread(void *arg)
             }
         }
 
-        libp2p__emit_conn_opened(host, true, remote_peer, libp2p_conn_remote_addr(secured));
-
         int is_quic = libp2p_quic_conn_session(secured) ? 1 : 0;
+        LP_LOGI("HOST", "inbound conn established is_quic=%d has_remote_peer=%d mx=%p", 
+                is_quic, remote_peer ? 1 : 0, (void *)mx);
 
+        /* Register session BEFORE emitting CONN_OPENED so that handlers can 
+         * find the session/muxer when they try to open new streams */
         if (is_quic)
         {
             session_node_t *snode = (session_node_t *)calloc(1, sizeof(*snode));
             if (snode)
             {
                 snode->is_quic = 1;
+                /* Store remote peer so we can find this session later */
+                if (remote_peer && remote_peer->bytes && remote_peer->size > 0)
+                {
+                    snode->remote_peer = (peer_id_t *)calloc(1, sizeof(peer_id_t));
+                    if (snode->remote_peer)
+                    {
+                        snode->remote_peer->bytes = (uint8_t *)malloc(remote_peer->size);
+                        if (snode->remote_peer->bytes)
+                        {
+                            memcpy(snode->remote_peer->bytes, remote_peer->bytes, remote_peer->size);
+                            snode->remote_peer->size = remote_peer->size;
+                        }
+                        else
+                        {
+                            free(snode->remote_peer);
+                            snode->remote_peer = NULL;
+                        }
+                    }
+                }
                 pthread_mutex_init(&snode->ready_mtx, NULL);
                 pthread_cond_init(&snode->ready_cv, NULL);
                 pthread_mutex_lock(&host->mtx);
@@ -2136,24 +2160,20 @@ static void *listener_accept_thread(void *arg)
                 snode->conn = secured;
                 pthread_cond_broadcast(&snode->ready_cv);
                 pthread_mutex_unlock(&snode->ready_mtx);
-                LP_LOGD("HOST", "registered inbound QUIC session node=%p", (void *)snode);
+                LP_LOGI("HOST", "registered inbound QUIC session node=%p peer=%p mx=%p has_open_stream=%d",
+                        (void *)snode, (void *)snode->remote_peer, (void *)snode->mx,
+                        (snode->mx && snode->mx->vt && snode->mx->vt->open_stream) ? 1 : 0);
             }
-
-            /* Add incoming QUIC connection to pool for future reuse.
-             * When we want to dial this peer later, we can reuse the existing
-             * inbound connection instead of creating a new outbound one. */
-            if (host->conn_pool && remote_peer && mx)
+            else
             {
-                libp2p_quic_session_t *session = libp2p_quic_conn_session(secured);
-                (void)libp2p_conn_pool_add(host->conn_pool,
-                                            remote_peer,
-                                            mx,
-                                            session,
-                                            secured,
-                                            1); /* is_inbound = true */
-                LP_LOGI("CONN_POOL", "added inbound QUIC connection to pool");
+                LP_LOGE("HOST", "failed to allocate session node for QUIC connection");
             }
+        }
 
+        libp2p__emit_conn_opened(host, true, remote_peer, libp2p_conn_remote_addr(secured));
+
+        if (is_quic)
+        {
             if (remote_peer)
             {
                 peer_id_destroy(remote_peer);

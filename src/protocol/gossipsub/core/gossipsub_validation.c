@@ -638,6 +638,20 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
             LP_LOGW(GOSSIPSUB_MODULE, "failed to update seen cache (rc=%d)", seen_rc);
         else
             duplicate = was_present;
+
+        /* Debug: log duplicate detection */
+        if (was_present)
+        {
+            char id_hex[65];
+            size_t hex_len = message_id_len < 32 ? message_id_len : 32;
+            for (size_t i = 0; i < hex_len; ++i)
+                snprintf(id_hex + (i * 2), 3, "%02x", message_id[i]);
+            id_hex[hex_len * 2] = '\0';
+            LP_LOGD(GOSSIPSUB_MODULE,
+                    "message marked as DUPLICATE topic=%s msg_id=%s",
+                    ctx->message.topic.topic ? ctx->message.topic.topic : "(null)",
+                    id_hex);
+        }
     }
 
     if (ctx->propagate_on_accept)

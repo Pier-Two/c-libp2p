@@ -553,7 +553,6 @@ add_library(libp2p_unified
     src/host/host_core.c
     src/host/host_listen.c
     src/host/host_dial.c
-    src/host/conn_pool.c
     src/host/host_upgrader_helpers.c
     src/host/host_events.c
     src/host/component_registry.c
