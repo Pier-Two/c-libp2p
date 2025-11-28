@@ -686,6 +686,48 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
         libp2p_stream_set_parent(dial_stream, secured, mx, take_ownership);
         free(uc_q);
 
+        /* Register outbound QUIC session to host->sessions so open_stream_async
+         * can find it when trying to open new streams to the same peer */
+        {
+            const peer_id_t *stream_peer = libp2p_stream_remote_peer(dial_stream);
+            session_node_t *snode = (session_node_t *)calloc(1, sizeof(*snode));
+            if (snode)
+            {
+                snode->is_quic = 1;
+                if (stream_peer && stream_peer->bytes && stream_peer->size > 0)
+                {
+                    snode->remote_peer = (peer_id_t *)calloc(1, sizeof(peer_id_t));
+                    if (snode->remote_peer)
+                    {
+                        snode->remote_peer->bytes = (uint8_t *)malloc(stream_peer->size);
+                        if (snode->remote_peer->bytes)
+                        {
+                            memcpy(snode->remote_peer->bytes, stream_peer->bytes, stream_peer->size);
+                            snode->remote_peer->size = stream_peer->size;
+                        }
+                        else
+                        {
+                            free(snode->remote_peer);
+                            snode->remote_peer = NULL;
+                        }
+                    }
+                }
+                pthread_mutex_init(&snode->ready_mtx, NULL);
+                pthread_cond_init(&snode->ready_cv, NULL);
+                pthread_mutex_lock(&host->mtx);
+                snode->next = host->sessions;
+                host->sessions = snode;
+                pthread_mutex_unlock(&host->mtx);
+                pthread_mutex_lock(&snode->ready_mtx);
+                snode->mx = mx;
+                snode->conn = secured;
+                pthread_cond_broadcast(&snode->ready_cv);
+                pthread_mutex_unlock(&snode->ready_mtx);
+                LP_LOGI("HOST_DIAL", "registered outbound QUIC session node=%p peer=%p mx=%p",
+                        (void *)snode, (void *)snode->remote_peer, (void *)snode->mx);
+            }
+        }
+
         *out_stream = dial_stream;
         (void)dial_timeout_ms;
         if (accepted_out)

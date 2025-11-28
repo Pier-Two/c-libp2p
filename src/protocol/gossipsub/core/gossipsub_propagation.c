@@ -782,24 +782,81 @@ void gossipsub_propagation_propagate_frame(libp2p_gossipsub_t *gs,
     int has_topic = (topic && topic->name);
     double publish_threshold = gossipsub_topic_publish_threshold(gs, topic);
 
+    /* Count mesh members for logging */
+    size_t mesh_count = 0;
+    if (topic)
+    {
+        for (gossipsub_mesh_member_t *m = topic->mesh; m; m = m->next)
+            mesh_count++;
+    }
+
+    LP_LOGI(GOSSIPSUB_MODULE,
+            "propagate_frame START topic=%s frame_len=%zu mesh_count=%zu flood=%d threshold=%.2f",
+            topic && topic->name ? topic->name : "(null)",
+            frame_len,
+            mesh_count,
+            flood_enabled,
+            publish_threshold);
+
     size_t mesh_sent = 0;
+    size_t mesh_skipped_disconnected = 0;
+    size_t mesh_skipped_explicit = 0;
+    size_t mesh_skipped_excluded = 0;
+    size_t mesh_skipped_score = 0;
     if (topic)
     {
         for (gossipsub_mesh_member_t *member = topic->mesh; member; member = member->next)
         {
             gossipsub_peer_entry_t *peer_entry = member->peer_entry;
+            char peer_buf[128];
+            const char *peer_str = "-";
+            if (member->peer)
+            {
+                int rc = peer_id_to_string(member->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
+                if (rc > 0)
+                    peer_str = peer_buf;
+            }
+            
             if (!peer_entry || !peer_entry->connected)
+            {
+                mesh_skipped_disconnected++;
+                LP_LOGD(GOSSIPSUB_MODULE, "propagate_frame SKIP mesh peer=%s reason=disconnected peer_entry=%p connected=%d",
+                        peer_str, (void *)peer_entry, peer_entry ? peer_entry->connected : -1);
                 continue;
-            if (peer_entry->explicit_peering)
-                continue;
+            }
+            /* NOTE: We do NOT skip explicit peers here. If an explicit peer is in the mesh,
+             * we still send to them. The second loop (for explicit peers) will skip them
+             * since they're already in the mesh, but that's fine - we want to send here.
+             * Skipping explicit_peering peers in both loops causes them to never receive messages.
+             */
             if (exclude_peer && gossipsub_peer_equals(member->peer, exclude_peer))
+            {
+                mesh_skipped_excluded++;
+                LP_LOGD(GOSSIPSUB_MODULE, "propagate_frame SKIP mesh peer=%s reason=excluded", peer_str);
                 continue;
+            }
             if (flood_enabled && has_topic && peer_entry->score < publish_threshold)
+            {
+                mesh_skipped_score++;
+                LP_LOGD(GOSSIPSUB_MODULE, "propagate_frame SKIP mesh peer=%s reason=low_score score=%.2f threshold=%.2f",
+                        peer_str, peer_entry->score, publish_threshold);
                 continue;
-            (void)gossipsub_peer_enqueue_frame_locked(gs, peer_entry, frame, frame_len);
+            }
+            
+            LP_LOGI(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE mesh peer=%s frame_len=%zu stream=%p",
+                    peer_str, frame_len, (void *)peer_entry->stream);
+            libp2p_err_t enq_rc = gossipsub_peer_enqueue_frame_locked(gs, peer_entry, frame, frame_len);
+            if (enq_rc != LIBP2P_ERR_OK)
+            {
+                LP_LOGW(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE_FAILED mesh peer=%s rc=%d", peer_str, enq_rc);
+            }
             mesh_sent++;
         }
     }
+    
+    LP_LOGI(GOSSIPSUB_MODULE,
+            "propagate_frame MESH_DONE sent=%zu skipped_disconn=%zu skipped_explicit=%zu skipped_excluded=%zu skipped_score=%zu",
+            mesh_sent, mesh_skipped_disconnected, mesh_skipped_explicit, mesh_skipped_excluded, mesh_skipped_score);
 
     for (gossipsub_peer_entry_t *entry = gs->peers; entry; entry = entry->next)
     {
@@ -842,6 +899,8 @@ void gossipsub_propagation_propagate_frame(libp2p_gossipsub_t *gs,
             (void)gossipsub_peer_enqueue_frame_locked(gs, entry, frame, frame_len);
         }
     }
+    
+    LP_LOGI(GOSSIPSUB_MODULE, "propagate_frame COMPLETE total_mesh_sent=%zu", mesh_sent);
     pthread_mutex_unlock(&gs->lock);
 }
 

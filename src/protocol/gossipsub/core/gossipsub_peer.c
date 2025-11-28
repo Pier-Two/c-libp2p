@@ -306,8 +306,38 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
     if (!entry)
         return;
 
-    if (entry->stream && entry->stream != s)
-        gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
+    /* IMPORTANT: Do NOT detach the old stream when attaching a new one!
+     * 
+     * In gossipsub, each peer can have TWO streams:
+     * 1. Inbound stream (initiator=0): opened by the remote peer to us
+     * 2. Outbound stream (initiator=1): opened by us to the remote peer
+     * 
+     * Both streams are valid for receiving data. If we detach the old stream,
+     * we clear its user_data, causing data arriving on that stream to be dropped
+     * because gossipsub_on_stream_data can't find the peer entry.
+     * 
+     * Instead, we keep the old stream's user_data intact and just update
+     * entry->stream to point to the new stream (used for writing).
+     * Data can still be received on the old stream because its user_data
+     * still points to this entry.
+     */
+    libp2p_stream_t *old_stream = entry->stream;
+    if (old_stream && old_stream != s)
+    {
+        char peer_buf[128];
+        const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+        int old_initiator = libp2p_stream_is_initiator(old_stream);
+        int new_initiator = s ? libp2p_stream_is_initiator(s) : -1;
+        LP_LOGI(
+            GOSSIPSUB_MODULE,
+            "peer_attach_stream peer=%s keeping_old_stream=%p (initiator=%d) new_stream=%p (initiator=%d)",
+            peer_repr,
+            (void *)old_stream,
+            old_initiator,
+            (void *)s,
+            new_initiator);
+        /* Keep old_stream's user_data pointing to entry so it can still receive data */
+    }
 
     entry->stream = s;
     entry->write_backpressure = 0;
@@ -737,11 +767,12 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         }
     }
 
-    LP_LOGD(GOSSIPSUB_MODULE,
-            "flush END peer=%s frames_written=%zu bytes_written=%zu",
+    LP_LOGI(GOSSIPSUB_MODULE,
+            "flush COMPLETE peer=%s frames_written=%zu bytes_written=%zu stream=%p",
             peer_repr,
             frames_written,
-            total_bytes_written);
+            total_bytes_written,
+            (void *)entry->stream);
     
     entry->write_backpressure = 0;
     return LIBP2P_ERR_OK;

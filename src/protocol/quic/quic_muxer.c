@@ -113,6 +113,7 @@ static void quic_muxer_release_session(libp2p_quic_session_t *session)
 typedef struct quic_stream_cb_task
 {
     libp2p_stream_t *stream;
+    quic_stream_ctx_t *st;  /* For push-mode streams, allows fallback to push ctx */
 } quic_stream_cb_task_t;
 
 typedef struct quic_handshake_task
@@ -884,6 +885,16 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
     if (!session)
         return LIBP2P_ERR_NULL_PTR;
 
+    /* For server-mode (inbound) connections, the listener's network thread
+     * is already handling the session. We don't need to start a new loop. */
+    picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    if (cnx && !picoquic_is_client(cnx))
+    {
+        /* Mark as started since the listener loop is handling it */
+        atomic_store_explicit(&session->loop_started, 1, memory_order_release);
+        return 0;
+    }
+
     int expected = 0;
     if (!atomic_compare_exchange_strong_explicit(&session->loop_started, &expected, 1, memory_order_acq_rel, memory_order_acquire))
     {
@@ -979,6 +990,22 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
         return LIBP2P_ERR_INTERNAL;
     }
 
+    /* Wait for the network thread to be ready before returning.
+     * This is necessary to ensure the socket is open and packets
+     * can be sent/received before we try to use the connection. */
+    uint64_t deadline = picoquic_current_time() + 2000000ULL; /* 2 seconds */
+    while (!loop_ctx->thread_is_ready)
+    {
+        if (picoquic_current_time() > deadline)
+        {
+            LP_LOGE("QUIC", "network thread failed to become ready within 2 seconds");
+            picoquic_delete_network_thread(loop_ctx);
+            atomic_store_explicit(&session->loop_started, 0, memory_order_release);
+            return LIBP2P_ERR_INTERNAL;
+        }
+        usleep(1000); /* 1ms */
+    }
+
     pthread_mutex_lock(&session->lock);
     session->loop_ctx = loop_ctx;
     pthread_mutex_unlock(&session->lock);
@@ -1024,6 +1051,22 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
             picoquic_delete_network_thread(loop_ctx);
         atomic_store_explicit(&session->loop_started, 0, memory_order_release);
         return LIBP2P_ERR_INTERNAL;
+    }
+
+    /* Wait for the network thread to be ready before returning.
+     * This is necessary to ensure the socket is open and packets
+     * can be sent/received before we try to use the connection. */
+    uint64_t deadline = picoquic_current_time() + 2000000ULL; /* 2 seconds */
+    while (!loop_ctx->thread_is_ready)
+    {
+        if (picoquic_current_time() > deadline)
+        {
+            LP_LOGE("QUIC", "network thread failed to become ready within 2 seconds");
+            picoquic_delete_network_thread(loop_ctx);
+            atomic_store_explicit(&session->loop_started, 0, memory_order_release);
+            return LIBP2P_ERR_INTERNAL;
+        }
+        usleep(1000); /* 1ms */
     }
 
     pthread_mutex_lock(&session->lock);
@@ -1386,10 +1429,28 @@ static void quic_stream_fire_readable(void *arg)
         free(task);
         return;
     }
+    
+    /* First try the one-shot callback mechanism */
     libp2p_on_readable_fn cb = NULL;
     void *ud = NULL;
-    if (libp2p__stream_consume_on_readable(task->stream, &cb, &ud) && cb)
+    int has_cb = libp2p__stream_consume_on_readable(task->stream, &cb, &ud);
+    if (has_cb && cb)
+    {
         cb(task->stream, ud);
+        libp2p__stream_release_async(task->stream);
+        free(task);
+        return;
+    }
+    
+    /* For push-mode streams: if no one-shot callback, try the push context.
+     * This handles the case where multiple fire_readable events are queued
+     * but the callback was already consumed by an earlier event. */
+    quic_stream_ctx_t *st = task->st;
+    if (st && st->push && st->push->def.on_data)
+    {
+        quic_push_on_readable(task->stream, st->push);
+    }
+    
     libp2p__stream_release_async(task->stream);
     free(task);
 }
@@ -1424,6 +1485,7 @@ static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx)
         return;
     }
     task->stream = stream;
+    task->st = ctx;  /* Store stream ctx for push-mode fallback */
     libp2p__exec_on_cb_thread(ctx->mx->host, quic_stream_fire_readable, task);
 }
 
@@ -1631,7 +1693,6 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
 
                 if (schedule_handshake)
                 {
-                    LP_LOGI("QUIC", "scheduling handshake stream_id=%llu", (unsigned long long)st->stream_id);
                     quic_stream_start_handshake(mx, st);
                 }
 

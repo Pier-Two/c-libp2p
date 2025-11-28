@@ -657,9 +657,24 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
     if (ctx->propagate_on_accept)
         duplicate = 0;
 
+    LP_LOGI(GOSSIPSUB_MODULE,
+            "validation_finalize propagate_on_accept=%d duplicate=%d final_result=%d topic=%s frame_len=%zu",
+            ctx->propagate_on_accept,
+            duplicate,
+            ctx->final_result,
+            ctx->message.topic.topic ? ctx->message.topic.topic : "(null)",
+            frame_len);
+
     if (!duplicate)
     {
+        LP_LOGI(GOSSIPSUB_MODULE, "validation_finalize CALLING propagate_frame topic=%s",
+                ctx->message.topic.topic ? ctx->message.topic.topic : "(null)");
         gossipsub_propagation_propagate_frame(gs, ctx->topic, ctx->message.from, frame, frame_len);
+        LP_LOGI(GOSSIPSUB_MODULE, "validation_finalize propagate_frame RETURNED");
+    }
+    else
+    {
+        LP_LOGI(GOSSIPSUB_MODULE, "validation_finalize SKIPPING propagate (duplicate)");
     }
 
     if (encoded_frame)
