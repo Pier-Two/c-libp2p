@@ -1415,15 +1415,11 @@ static void *open_stream_async_thread(void *arg)
      * to open a NEW stream on the EXISTING connection (rather than dialing a
      * new connection which may fail).
      */
-    fprintf(stderr, "=== open_async: about to search sessions for peer=%s ===\n", peer_str);
-    fflush(stderr);
     pthread_mutex_lock(&host->mtx);
     size_t session_count = 0;
     for (session_node_t *it = host->sessions; it; it = it->next)
         session_count++;
-    fprintf(stderr, "=== open_async: found %zu sessions ===\n", session_count);
-    fflush(stderr);
-    LP_LOGI("STREAM_ASYNC", "[open_async] searching %zu sessions for existing connection to peer=%s", session_count, peer_str);
+    LP_LOGD("STREAM_ASYNC", "[open_async] searching %zu sessions for existing connection to peer=%s", session_count, peer_str);
     
     for (session_node_t *sess = host->sessions; sess; sess = sess->next)
     {
@@ -1458,9 +1454,7 @@ static void *open_stream_async_thread(void *arg)
             continue;
         }
         
-        fprintf(stderr, "=== open_async: FOUND MATCHING SESSION! calling open_stream... ===\n");
-        fflush(stderr);
-        LP_LOGI("STREAM_ASYNC", "[open_async] found existing session to target peer, opening new stream");
+        LP_LOGD("STREAM_ASYNC", "[open_async] found existing session to target peer, opening new stream");
         
         /* Found a session for our target peer - try to open a new stream 
          * IMPORTANT: unlock mutex before calling open_stream to avoid potential deadlock
@@ -1470,11 +1464,7 @@ static void *open_stream_async_thread(void *arg)
         pthread_mutex_unlock(&host->mtx);
         
         libp2p_stream_t *new_stream = NULL;
-        fprintf(stderr, "=== open_async: calling mx->vt->open_stream()... ===\n");
-        fflush(stderr);
         libp2p_muxer_err_t mx_rc = mx->vt->open_stream(mx, NULL, 0, &new_stream);
-        fprintf(stderr, "=== open_async: open_stream returned mx_rc=%d new_stream=%p ===\n", (int)mx_rc, (void*)new_stream);
-        fflush(stderr);
         if (mx_rc == LIBP2P_MUXER_OK && new_stream)
         {
             LP_LOGI("STREAM_ASYNC", "[open_async] opened new stream on existing muxer for peer");
@@ -1484,11 +1474,7 @@ static void *open_stream_async_thread(void *arg)
             {
                 const char *proposals[] = {protocol_id, NULL};
                 const char *accepted = NULL;
-                fprintf(stderr, "=== open_async: calling multiselect_dial_io proto=%s ===\n", protocol_id);
-                fflush(stderr);
                 libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(io, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
-                fprintf(stderr, "=== open_async: multiselect returned ms=%d accepted=%s ===\n", (int)ms, accepted ? accepted : "(null)");
-                fflush(stderr);
                 libp2p_io_free(io); /* Free IO adapter after negotiation */
                 if (ms == LIBP2P_MULTISELECT_OK && accepted)
                 {
@@ -1586,15 +1572,6 @@ out_cleanup:
 int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, const char *protocol_id, libp2p_on_stream_open_fn on_open,
                                   void *user_data)
 {
-    fprintf(stderr, "=== libp2p_host_open_stream_async CALLED ===\n");
-    fflush(stderr);
-    char peer_str[128] = {0};
-    if (peer && peer->bytes && peer->size > 0)
-        peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_str, sizeof(peer_str));
-    LP_LOGI("HOST", "[open_stream_async] called host=%p peer=%s proto=%s on_open=%p",
-            (void *)host, peer_str[0] ? peer_str : "(null)",
-            protocol_id ? protocol_id : "(null)", (void *)on_open);
-    
     if (!host || !peer || !protocol_id || !on_open)
     {
         LP_LOGW("STREAM_ASYNC", "[async_entry] null ptr check failed");

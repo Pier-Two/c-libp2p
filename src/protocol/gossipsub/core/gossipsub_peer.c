@@ -659,7 +659,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     size_t queued = 0;
     for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
         queued++;
-    LP_LOGW(GOSSIPSUB_MODULE,
+    LP_LOGT(GOSSIPSUB_MODULE,
             "flush START peer=%s stream=%p queued=%zu",
             peer_repr,
             (void *)entry->stream,
@@ -812,7 +812,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         }
     }
 
-    LP_LOGW(GOSSIPSUB_MODULE,
+    LP_LOGT(GOSSIPSUB_MODULE,
             "flush COMPLETE peer=%s frames_written=%zu bytes_written=%zu stream=%p",
             peer_repr,
             frames_written,

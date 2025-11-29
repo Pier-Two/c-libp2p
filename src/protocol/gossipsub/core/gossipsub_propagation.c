@@ -843,18 +843,18 @@ void gossipsub_propagation_propagate_frame(libp2p_gossipsub_t *gs,
                 continue;
             }
             
-            LP_LOGW(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE mesh peer=%s frame_len=%zu stream=%p",
+            LP_LOGT(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE mesh peer=%s frame_len=%zu stream=%p",
                     peer_str, frame_len, (void *)peer_entry->stream);
             libp2p_err_t enq_rc = gossipsub_peer_enqueue_frame_locked(gs, peer_entry, frame, frame_len);
             if (enq_rc != LIBP2P_ERR_OK)
             {
-                LP_LOGW(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE_FAILED mesh peer=%s rc=%d", peer_str, enq_rc);
+                LP_LOGD(GOSSIPSUB_MODULE, "propagate_frame ENQUEUE_FAILED mesh peer=%s rc=%d", peer_str, enq_rc);
             }
             mesh_sent++;
         }
     }
     
-    LP_LOGW(GOSSIPSUB_MODULE,
+    LP_LOGT(GOSSIPSUB_MODULE,
             "propagate_frame MESH_DONE sent=%zu skipped_disconn=%zu skipped_explicit=%zu skipped_excluded=%zu skipped_score=%zu",
             mesh_sent, mesh_skipped_disconnected, mesh_skipped_explicit, mesh_skipped_excluded, mesh_skipped_score);
 
@@ -900,7 +900,7 @@ void gossipsub_propagation_propagate_frame(libp2p_gossipsub_t *gs,
         }
     }
     
-    LP_LOGW(GOSSIPSUB_MODULE, "propagate_frame COMPLETE total_mesh_sent=%zu", mesh_sent);
+    LP_LOGT(GOSSIPSUB_MODULE, "propagate_frame COMPLETE total_mesh_sent=%zu", mesh_sent);
     pthread_mutex_unlock(&gs->lock);
 }
 

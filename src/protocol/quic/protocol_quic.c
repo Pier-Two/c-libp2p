@@ -536,7 +536,7 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
         uint64_t local_err = picoquic_get_local_error(cnx);
         uint64_t remote_err = picoquic_get_remote_error(cnx);
         uint64_t app_err = picoquic_get_application_error(cnx);
-        LP_LOGW("QUIC",
+        LP_LOGD("QUIC",
                 "session_close begin session=%p cnx=%p state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
                 (void *)session,
                 (void *)cnx,

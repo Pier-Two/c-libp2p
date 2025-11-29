@@ -610,7 +610,7 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
 
     if (ms != LIBP2P_MULTISELECT_OK || !accepted)
     {
-        LP_LOGW("QUIC", "run_inbound_handshake multiselect failed ms=%d stream_id=%llu", (int)ms, (unsigned long long)st->stream_id);
+        LP_LOGD("QUIC", "run_inbound_handshake multiselect failed ms=%d stream_id=%llu", (int)ms, (unsigned long long)st->stream_id);
         return 0;
     }
     LP_LOGI("QUIC", "run_inbound_handshake multiselect OK accepted=%s stream_id=%llu", accepted, (unsigned long long)st->stream_id);
@@ -1791,7 +1791,7 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
         uint64_t local_err = picoquic_get_local_error(cnx);
         uint64_t remote_err = picoquic_get_remote_error(cnx);
         uint64_t app_err = picoquic_get_application_error(cnx);
-        LP_LOGW("QUIC",
+        LP_LOGT("QUIC",
                 "session_event=%s session=%p cnx=%p stream=%" PRIu64 " state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
                 libp2p__quic_event_name(event),
                 (void *)session,
