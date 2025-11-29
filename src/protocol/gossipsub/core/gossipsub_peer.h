@@ -37,6 +37,7 @@ void gossipsub_peer_explicit_cancel_timer_locked(libp2p_gossipsub_t *gs,
 void gossipsub_peer_explicit_schedule_dial_locked(libp2p_gossipsub_t *gs,
                                                   gossipsub_peer_entry_t *entry,
                                                   uint64_t delay_ms);
+void gossipsub_peer_retry_backpressure_locked(libp2p_gossipsub_t *gs);
 
 #ifdef __cplusplus
 }

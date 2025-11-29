@@ -322,20 +322,50 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
      * still points to this entry.
      */
     libp2p_stream_t *old_stream = entry->stream;
+    int old_initiator = old_stream ? libp2p_stream_is_initiator(old_stream) : -1;
+    int new_initiator = s ? libp2p_stream_is_initiator(s) : -1;
+
     if (old_stream && old_stream != s)
     {
         char peer_buf[128];
         const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-        int old_initiator = libp2p_stream_is_initiator(old_stream);
-        int new_initiator = s ? libp2p_stream_is_initiator(s) : -1;
         LP_LOGI(
             GOSSIPSUB_MODULE,
-            "peer_attach_stream peer=%s keeping_old_stream=%p (initiator=%d) new_stream=%p (initiator=%d)",
+            "peer_attach_stream peer=%s old_stream=%p (initiator=%d) new_stream=%p (initiator=%d)",
             peer_repr,
             (void *)old_stream,
             old_initiator,
             (void *)s,
             new_initiator);
+
+        /* CRITICAL FIX for rust-libp2p interop:
+         *
+         * rust-libp2p uses separate streams for reading and writing:
+         * - It READS from streams opened TO it (our outbound streams)
+         * - It WRITES on streams it opens (our inbound streams)
+         *
+         * If we have an outbound stream (initiator=1) and receive an inbound stream (initiator=0),
+         * we must NOT replace entry->stream (used for writing) with the inbound stream.
+         * If we do, our writes go to the inbound stream, but rust-libp2p doesn't read from
+         * streams IT opened - it expects to write on them.
+         *
+         * Only replace if:
+         * 1. New stream is outbound (initiator=1) - prefer outbound for writing
+         * 2. Old stream is not outbound (initiator!=1) - no outbound to preserve
+         * 3. New stream is NULL - clearing the stream
+         */
+        if (old_initiator == 1 && new_initiator == 0)
+        {
+            LP_LOGI(
+                GOSSIPSUB_MODULE,
+                "peer_attach_stream peer=%s KEEPING outbound stream for writing, setting user_data on inbound for receiving",
+                peer_repr);
+            /* Set user_data on new inbound stream so it can receive data */
+            if (s)
+                libp2p_stream_set_user_data(s, entry);
+            /* Don't replace entry->stream - keep outbound for writing */
+            return;
+        }
         /* Keep old_stream's user_data pointing to entry so it can still receive data */
     }
 
@@ -406,7 +436,7 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
         
         (void)gossipsub_peer_flush_locked(gs, entry);
         gossipsub_peer_send_current_subscriptions_locked(gs, entry);
-        
+
         /* Log post-send state */
         size_t queued = 0;
         for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
@@ -416,6 +446,21 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
                 peer_repr,
                 queued,
                 (void *)entry->stream);
+
+        /* Schedule a flush if there are pending messages that weren't sent.
+         * This handles the case where messages were enqueued while stream was NULL
+         * (connected=1 but stream not yet attached due to async open), and the
+         * synchronous flush above didn't fully drain the queue (e.g., due to
+         * backpressure or edge cases).
+         */
+        if (entry->sendq_head && !entry->write_backpressure && !entry->flush_scheduled)
+        {
+            LP_LOGD(GOSSIPSUB_MODULE,
+                    "peer_attach_stream peer=%s scheduling_flush_for_pending queued=%zu",
+                    peer_repr,
+                    queued);
+            gossipsub_peer_schedule_flush_locked(gs, entry);
+        }
     }
 }
 
@@ -614,7 +659,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     size_t queued = 0;
     for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
         queued++;
-    LP_LOGD(GOSSIPSUB_MODULE,
+    LP_LOGW(GOSSIPSUB_MODULE,
             "flush START peer=%s stream=%p queued=%zu",
             peer_repr,
             (void *)entry->stream,
@@ -767,7 +812,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         }
     }
 
-    LP_LOGI(GOSSIPSUB_MODULE,
+    LP_LOGW(GOSSIPSUB_MODULE,
             "flush COMPLETE peer=%s frames_written=%zu bytes_written=%zu stream=%p",
             peer_repr,
             frames_written,
@@ -1026,5 +1071,20 @@ void gossipsub_peers_clear(libp2p_gossipsub_t *gs)
         free(head->remote_ip);
         free(head);
         head = next;
+    }
+}
+
+void gossipsub_peer_retry_backpressure_locked(libp2p_gossipsub_t *gs)
+{
+    if (!gs)
+        return;
+
+    for (gossipsub_peer_entry_t *peer = gs->peers; peer; peer = peer->next)
+    {
+        if (peer->write_backpressure && peer->stream && peer->sendq_head)
+        {
+            peer->write_backpressure = 0;
+            gossipsub_peer_schedule_flush_locked(gs, peer);
+        }
     }
 }

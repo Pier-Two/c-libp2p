@@ -706,6 +706,7 @@ void gossipsub_heartbeat_tick(libp2p_gossipsub_t *gs, uint64_t now_ms)
 {
     if (!gs)
         return;
+    gossipsub_peer_retry_backpressure_locked(gs);
     for (gossipsub_peer_entry_t *peer = gs->peers; peer; peer = peer->next)
     {
         peer->ihave_advertisements = 0;

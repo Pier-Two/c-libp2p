@@ -1967,7 +1967,12 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     }
     ssize_t err = LIBP2P_ERR_INTERNAL;
     if (rc == PICOQUIC_ERROR_SEND_BUFFER_TOO_SMALL)
+    {
         err = LIBP2P_ERR_AGAIN;
+        /* Schedule writable callback so higher layers (gossipsub) can retry
+         * when the stream becomes writable again after backpressure clears. */
+        quic_stream_schedule_writable(st);
+    }
     else if (rc == PICOQUIC_ERROR_STREAM_ALREADY_CLOSED)
         err = LIBP2P_ERR_CLOSED;
     else if (rc == PICOQUIC_ERROR_INVALID_STREAM_ID)
