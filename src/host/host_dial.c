@@ -1604,7 +1604,7 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
     ctx->user_data = user_data;
     pthread_t th;
     libp2p__worker_inc(host);
-    LP_LOGI("STREAM_ASYNC", "[async_entry] creating thread for peer=%s proto=%s", peer_str, protocol_id);
+    LP_LOGI("STREAM_ASYNC", "[async_entry] creating thread for peer (size=%zu) proto=%s", peer->size, protocol_id);
     if (pthread_create(&th, NULL, open_stream_async_thread, ctx) != 0)
     {
         LP_LOGE("STREAM_ASYNC", "[async_entry] pthread_create FAILED");
