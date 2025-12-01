@@ -672,9 +672,18 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
         quic_proto_open_task_t *task = (quic_proto_open_task_t *)calloc(1, sizeof(*task));
         if (task)
         {
-            task->def = chosen;
-            task->stream = stream;
-            libp2p__exec_on_cb_thread(host, quic_proto_open_exec, task);
+            /* Retain the stream before queueing to the callback thread.
+             * The stream will be released in quic_proto_open_exec after on_open returns. */
+            if (stream && !libp2p__stream_retain_async(stream))
+            {
+                free(task);
+            }
+            else
+            {
+                task->def = chosen;
+                task->stream = stream;
+                libp2p__exec_on_cb_thread(host, quic_proto_open_exec, task);
+            }
         }
     }
 
