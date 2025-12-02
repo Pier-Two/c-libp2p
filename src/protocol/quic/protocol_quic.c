@@ -761,6 +761,9 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     picoquic_tp_t client_tp = *picoquic_get_default_tp(quic);
     client_tp.enable_loss_bit = 0;
     client_tp.min_ack_delay = 0;
+    /* Set max_idle_timeout to 10 seconds (in milliseconds).
+     * This ensures keep-alive pings (at idle_timeout/2 = 5s) are sent before timeout. */
+    client_tp.max_idle_timeout = 10000;
     if (picoquic_set_default_tp(quic, &client_tp) != 0)
     {
         picoquic_free(quic);
@@ -768,9 +771,10 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
     LP_LOGD("QUIC",
-            "client transport params configured loss_bit=%d min_ack_delay=%" PRIu64,
+            "client transport params configured loss_bit=%d min_ack_delay=%" PRIu64 " max_idle_timeout=%" PRIu64 "ms",
             client_tp.enable_loss_bit,
-            client_tp.min_ack_delay);
+            client_tp.min_ack_delay,
+            client_tp.max_idle_timeout);
 
     ptls_iovec_t *chain = (ptls_iovec_t *)calloc(1, sizeof(*chain));
     if (!chain)
@@ -866,6 +870,10 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     result = quic_wait_for_ready(session, cnx, dial_timeout_ms);
     if (result != LIBP2P_TRANSPORT_OK)
         goto fail;
+
+    /* Enable keep-alive pings AFTER handshake completes, so we use the negotiated idle_timeout.
+     * Passing 0 sets the interval to idle_timeout/2 automatically. */
+    picoquic_enable_keep_alive(cnx, 0);
 
     peer_id_t *tmp_peer = NULL;
     if (libp2p_quic_conn_copy_verified_peer(conn, &tmp_peer) != 0 || !tmp_peer)

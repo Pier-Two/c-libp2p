@@ -696,6 +696,10 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
     {
         case picoquic_callback_ready:
         {
+            /* Enable keep-alive pings to prevent idle timeout disconnections.
+             * Passing 0 sets the interval to idle_timeout/2 automatically. */
+            picoquic_enable_keep_alive(cnx, 0);
+
             libp2p_conn_t *conn = NULL;
             if (quic_listener_make_conn(ctx, cnx, &conn) == 0 && conn)
             {
@@ -901,6 +905,9 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     picoquic_tp_t listener_tp = *picoquic_get_default_tp(quic);
     listener_tp.enable_loss_bit = 0;
     listener_tp.min_ack_delay = 0;
+    /* Set max_idle_timeout to 10 seconds (in milliseconds).
+     * This ensures keep-alive pings (at idle_timeout/2 = 5s) are sent before timeout. */
+    listener_tp.max_idle_timeout = 10000;
     if (picoquic_set_default_tp(quic, &listener_tp) != 0)
     {
         picoquic_free(quic);
@@ -909,9 +916,10 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
     LP_LOGD("QUIC",
-            "listener transport params configured loss_bit=%d min_ack_delay=%" PRIu64,
+            "listener transport params configured loss_bit=%d min_ack_delay=%" PRIu64 " max_idle_timeout=%" PRIu64 "ms",
             listener_tp.enable_loss_bit,
-            listener_tp.min_ack_delay);
+            listener_tp.min_ack_delay,
+            listener_tp.max_idle_timeout);
 
     ptls_iovec_t *chain = (ptls_iovec_t *)calloc(1, sizeof(*chain));
     if (!chain)

@@ -59,6 +59,7 @@ typedef struct quic_stream_ctx
     int fin_remote;
     int fin_local;
     int reset_remote;
+    int stop_sending_received;  /* Peer asked us to stop sending on this stream */
     int closed;
     uint64_t deadline_ms;
     int initiator;
@@ -1654,6 +1655,13 @@ static void quic_stream_mark_reset(quic_stream_ctx_t *ctx)
     ctx->reset_remote = 1;
 }
 
+static void quic_stream_mark_stop_sending(quic_stream_ctx_t *ctx)
+{
+    if (!ctx)
+        return;
+    ctx->stop_sending_received = 1;
+}
+
 static int quic_session_dispatch(libp2p_quic_session_t *session,
                                  quic_muxer_ctx_t *mx,
                                  picoquic_cnx_t *cnx,
@@ -1726,6 +1734,24 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
             else
             {
                 LP_LOGW("QUIC", "reset event for unknown stream %" PRIu64, stream_id);
+            }
+            break;
+        case picoquic_callback_stop_sending:
+            /* Peer sent STOP_SENDING frame - they don't want to receive more data on this stream.
+             * Mark the stream so we stop trying to write to it.
+             * Note: picoquic already sets stream->stop_sending_received, which causes
+             * picoquic_add_to_stream to return -1. By marking it here, we allow higher
+             * layers (like gossipsub) to detect this state and stop retrying writes. */
+            if (st)
+            {
+                pthread_mutex_lock(&st->lock);
+                quic_stream_mark_stop_sending(st);
+                pthread_mutex_unlock(&st->lock);
+                LP_LOGI("QUIC", "stop_sending received for stream %" PRIu64, stream_id);
+            }
+            else
+            {
+                LP_LOGW("QUIC", "stop_sending event for unknown stream %" PRIu64, stream_id);
             }
             break;
         case picoquic_callback_prepare_to_send:
@@ -1911,6 +1937,9 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     /* Fast path bail out if muxer already marked closed. */
     if (atomic_load_explicit(&mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
+    /* Fast path bail out if peer sent STOP_SENDING for this stream. */
+    if (st->stop_sending_received)
+        return LIBP2P_ERR_CLOSED;
     if (len == 0)
         return 0;
     libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
@@ -1986,6 +2015,13 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
         err = LIBP2P_ERR_CLOSED;
     else if (rc == PICOQUIC_ERROR_INVALID_STREAM_ID)
         err = LIBP2P_ERR_INTERNAL;
+    else if (rc == -1)
+    {
+        /* picoquic returns -1 when stream->reset_sent or stream->stop_sending_received is set.
+         * Mark the stream as having received stop_sending so we bail out early on future writes. */
+        st->stop_sending_received = 1;
+        err = LIBP2P_ERR_CLOSED;
+    }
     quic_muxer_release_session(session);
     return err;
 }

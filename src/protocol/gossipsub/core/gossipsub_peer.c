@@ -649,11 +649,33 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
     
     if (!entry->stream)
     {
-        LP_LOGW(GOSSIPSUB_MODULE,
-                "flush NO_STREAM peer=%s entry=%p",
-                peer_repr,
-                (void *)entry);
-        return LIBP2P_ERR_AGAIN;
+        /* For explicit peers, we'll reconnect automatically, so return AGAIN to retry later.
+         * For non-explicit peers, there's no stream and no reconnect - clear the sendq
+         * to avoid infinite retry loops and return OK (nothing more to do). */
+        if (entry->explicit_peering)
+        {
+            LP_LOGD(GOSSIPSUB_MODULE,
+                    "flush NO_STREAM peer=%s entry=%p (explicit, will retry after reconnect)",
+                    peer_repr,
+                    (void *)entry);
+            return LIBP2P_ERR_AGAIN;
+        }
+
+        /* Non-explicit peer with no stream: clear sendq and stop retrying */
+        size_t dropped = 0;
+        for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
+            dropped++;
+
+        if (dropped > 0)
+        {
+            LP_LOGW(GOSSIPSUB_MODULE,
+                    "flush NO_STREAM peer=%s entry=%p dropping %zu queued messages",
+                    peer_repr,
+                    (void *)entry,
+                    dropped);
+            gossipsub_peer_sendq_clear(entry);
+        }
+        return LIBP2P_ERR_OK;
     }
 
     size_t queued = 0;
