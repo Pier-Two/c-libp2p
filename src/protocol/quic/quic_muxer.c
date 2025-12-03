@@ -1677,7 +1677,7 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
     if (!mx)
         return 0;
 
-    LP_LOGI("QUIC", "muxer_stream_event stream_id=%llu event=%d length=%zu", 
+    LP_LOGI("QUIC", "muxer_stream_event stream_id=%llu event=%d length=%zu",
             (unsigned long long)stream_id, (int)event, length);
 
     quic_stream_ctx_t *st = quic_muxer_find_stream(mx, stream_id);
@@ -1694,10 +1694,15 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
             {
                 int schedule_handshake = 0;
                 int handshake_done_now = 0;
+                int already_fin = 0;
                 pthread_mutex_lock(&st->lock);
+                /* Check if FIN was already received - if so, a duplicate FIN event
+                 * with no data is a late-arriving notification that should be ignored
+                 * to avoid spurious EOF returns to higher layers. */
+                already_fin = st->fin_remote;
                 if (length && bytes)
                     quic_stream_push_bytes(st, bytes, length);
-                if (event == picoquic_callback_stream_fin)
+                if (event == picoquic_callback_stream_fin && !already_fin)
                     quic_stream_mark_fin(st);
                 handshake_done_now = st->handshake_done;
                 if (!st->handshake_done && !st->handshake_running)
@@ -1713,7 +1718,9 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                     quic_stream_start_handshake(mx, st);
                 }
 
-                if (handshake_done_now && st->stream)
+                /* Only schedule readable if there's new data or this is the first FIN.
+                 * A duplicate FIN with no data should not trigger a spurious readable event. */
+                if (handshake_done_now && st->stream && (length > 0 || !already_fin))
                     quic_stream_schedule_readable(st);
             }
             else
@@ -2059,6 +2066,14 @@ static int quic_stream_backend_close(void *io_ctx)
     return LIBP2P_ERR_INTERNAL;
 }
 
+/* Half-close: send FIN on the write side while keeping read open.
+ * This is essentially the same as close at QUIC level since QUIC streams
+ * support half-close natively (close just sets fin_local, doesn't affect reads). */
+static int quic_stream_backend_shutdown_write(void *io_ctx)
+{
+    return quic_stream_backend_close(io_ctx);
+}
+
 static int quic_stream_backend_reset(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
@@ -2159,6 +2174,7 @@ static const libp2p_stream_backend_ops_t QUIC_STREAM_OPS = {
     .read = quic_stream_backend_read,
     .write = quic_stream_backend_write,
     .close = quic_stream_backend_close,
+    .shutdown_write = quic_stream_backend_shutdown_write,
     .reset = quic_stream_backend_reset,
     .set_deadline = quic_stream_backend_set_deadline,
     .local_addr = quic_stream_backend_local,

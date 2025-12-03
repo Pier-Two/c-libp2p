@@ -23,6 +23,7 @@ typedef struct libp2p_stream_backend_ops
     ssize_t (*read)(void *io_ctx, void *buf, size_t len);
     ssize_t (*write)(void *io_ctx, const void *buf, size_t len);
     int (*close)(void *io_ctx);
+    int (*shutdown_write)(void *io_ctx); /* Half-close: send FIN on write side, keep read open */
     int (*reset)(void *io_ctx);
     int (*set_deadline)(void *io_ctx, uint64_t ms);
     const multiaddr_t *(*local_addr)(void *io_ctx);

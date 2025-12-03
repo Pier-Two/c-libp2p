@@ -221,6 +221,22 @@ int libp2p_stream_close(libp2p_stream_t *s)
     return rc;
 }
 
+int libp2p_stream_shutdown_write(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st || atomic_load_explicit(&st->freed, memory_order_acquire))
+        return LIBP2P_ERR_NULL_PTR;
+    if (st->closed)
+        return LIBP2P_ERR_CLOSED;
+    /* Call the backend shutdown_write if available; this sends FIN on the
+     * write side while keeping the read side open for receiving responses. */
+    if (st->has_ops && st->ops.shutdown_write)
+        return st->ops.shutdown_write(st->io_ctx);
+    /* Fallback for backends without explicit half-close: just do a full close.
+     * This is suboptimal but maintains compatibility. */
+    return libp2p_stream_close(s);
+}
+
 int libp2p_stream_reset(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);

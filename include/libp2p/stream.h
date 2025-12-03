@@ -25,6 +25,7 @@ typedef void (*libp2p_on_readable_fn)(libp2p_stream_t *s, void *user_data);
 ssize_t libp2p_stream_write(libp2p_stream_t *s, const void *buf, size_t len);
 ssize_t libp2p_stream_writev(libp2p_stream_t *s, const struct iovec *iov, int iovcnt);
 int libp2p_stream_close(libp2p_stream_t *s);
+int libp2p_stream_shutdown_write(libp2p_stream_t *s); /* Half-close: send FIN, keep reading */
 int libp2p_stream_reset(libp2p_stream_t *s);
 void libp2p_stream_free(libp2p_stream_t *s);
 ssize_t libp2p_stream_read(libp2p_stream_t *s, void *buf, size_t len);
