@@ -72,6 +72,13 @@ typedef struct quic_stream_ctx
     size_t push_cap;
 } quic_stream_ctx_t;
 
+/* Simple linked list to track pending STOP_SENDING events for streams not yet created */
+typedef struct pending_stop_sending
+{
+    uint64_t stream_id;
+    struct pending_stop_sending *next;
+} pending_stop_sending_t;
+
 typedef struct quic_muxer_ctx
 {
     libp2p_quic_session_t *session;
@@ -87,10 +94,54 @@ typedef struct quic_muxer_ctx
     _Atomic int closed;
     atomic_uint refcnt;
     pthread_mutex_t write_mtx;
+    pending_stop_sending_t *pending_stop_sending_head;  /* STOP_SENDING for unknown streams */
 } quic_muxer_ctx_t;
 
 static void quic_muxer_ctx_retain(quic_muxer_ctx_t *ctx);
 static void quic_muxer_ctx_release(quic_muxer_ctx_t *ctx);
+
+/* Add a stream ID to the pending STOP_SENDING list. Caller must hold mx->lock. */
+static void quic_muxer_add_pending_stop_sending(quic_muxer_ctx_t *mx, uint64_t stream_id)
+{
+    pending_stop_sending_t *node = malloc(sizeof(pending_stop_sending_t));
+    if (!node)
+        return;
+    node->stream_id = stream_id;
+    node->next = mx->pending_stop_sending_head;
+    mx->pending_stop_sending_head = node;
+}
+
+/* Check and remove a stream ID from the pending STOP_SENDING list.
+ * Returns 1 if found (and removes it), 0 otherwise. Caller must hold mx->lock. */
+static int quic_muxer_check_pending_stop_sending(quic_muxer_ctx_t *mx, uint64_t stream_id)
+{
+    pending_stop_sending_t **pp = &mx->pending_stop_sending_head;
+    while (*pp)
+    {
+        if ((*pp)->stream_id == stream_id)
+        {
+            pending_stop_sending_t *found = *pp;
+            *pp = found->next;
+            free(found);
+            return 1;
+        }
+        pp = &(*pp)->next;
+    }
+    return 0;
+}
+
+/* Free all pending STOP_SENDING entries. Caller must hold mx->lock. */
+static void quic_muxer_free_pending_stop_sending(quic_muxer_ctx_t *mx)
+{
+    pending_stop_sending_t *node = mx->pending_stop_sending_head;
+    while (node)
+    {
+        pending_stop_sending_t *next = node->next;
+        free(node);
+        node = next;
+    }
+    mx->pending_stop_sending_head = NULL;
+}
 
 static libp2p_quic_session_t *quic_muxer_retain_session(quic_muxer_ctx_t *mx)
 {
@@ -1758,7 +1809,13 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
             }
             else
             {
-                LP_LOGW("QUIC", "stop_sending event for unknown stream %" PRIu64, stream_id);
+                /* Stream doesn't exist yet - record this STOP_SENDING so we can apply it
+                 * when the stream is created. This handles the race condition where
+                 * STOP_SENDING arrives before the stream's initial data. */
+                LP_LOGW("QUIC", "stop_sending event for unknown stream %" PRIu64 ", queueing for later", stream_id);
+                pthread_mutex_lock(&mx->lock);
+                quic_muxer_add_pending_stop_sending(mx, stream_id);
+                pthread_mutex_unlock(&mx->lock);
             }
             break;
         case picoquic_callback_prepare_to_send:
@@ -1827,6 +1884,7 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
     int closing_event = (event == picoquic_callback_close ||
                          event == picoquic_callback_application_close ||
                          event == picoquic_callback_stateless_reset);
+
     if (log_state_event && cnx)
     {
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
@@ -2227,7 +2285,17 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
 
     pthread_mutex_lock(&mx->lock);
     quic_muxer_append_stream(mx, st);
+    /* Check if we received STOP_SENDING for this stream before it was created */
+    int had_pending_stop = quic_muxer_check_pending_stop_sending(mx, stream_id);
     pthread_mutex_unlock(&mx->lock);
+
+    if (had_pending_stop)
+    {
+        pthread_mutex_lock(&st->lock);
+        st->stop_sending_received = 1;
+        pthread_mutex_unlock(&st->lock);
+        LP_LOGI("QUIC", "applied pending stop_sending for stream %" PRIu64, stream_id);
+    }
 
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (!cnx)
@@ -2385,6 +2453,7 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
         pthread_mutex_lock(&ctx->lock);
         streams = ctx->streams_head;
         ctx->streams_head = ctx->streams_tail = NULL;
+        quic_muxer_free_pending_stop_sending(ctx);
         pthread_mutex_unlock(&ctx->lock);
         while (streams)
         {
@@ -2469,6 +2538,7 @@ libp2p_muxer_t *libp2p_quic_muxer_new(struct libp2p_host *host,
     ctx->session = session;
     ctx->host = host;
     ctx->streams_head = ctx->streams_tail = NULL;
+    ctx->pending_stop_sending_head = NULL;
     ctx->conn = conn;
     ctx->accepted_count = 0;
     ctx->owner = mx;

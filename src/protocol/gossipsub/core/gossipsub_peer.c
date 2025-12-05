@@ -785,6 +785,8 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                     n,
                     item ? (item->header_len - item->header_sent) : 0);
             gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
+            /* Clear sendq to prevent infinite retry loops when stream is closed */
+            gossipsub_peer_sendq_clear(entry);
             return LIBP2P_ERR_INTERNAL;
         }
 
@@ -816,11 +818,13 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                 }
                 return LIBP2P_ERR_AGAIN;
             }
-            LP_LOGW(GOSSIPSUB_MODULE, 
+            LP_LOGW(GOSSIPSUB_MODULE,
                     "flush WRITE_PAYLOAD_FAIL peer=%s rc=%zd",
                     peer_repr,
                     n);
             gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
+            /* Clear sendq to prevent infinite retry loops when stream is closed */
+            gossipsub_peer_sendq_clear(entry);
             return LIBP2P_ERR_INTERNAL;
         }
 
