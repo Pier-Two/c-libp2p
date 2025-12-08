@@ -62,6 +62,11 @@ void libp2p__quic_session_release(libp2p_quic_session_t *session);
 
 void libp2p__quic_session_set_host(libp2p_quic_session_t *session, struct libp2p_host *host);
 
+/* Set external quic mutex for listener sessions.
+ * For sessions sharing a picoquic context (listener inbound connections),
+ * this allows them to use the listener's mutex instead of their own. */
+void libp2p__quic_session_set_quic_mtx(libp2p_quic_session_t *session, pthread_mutex_t *mtx);
+
 picoquic_quic_t *libp2p__quic_session_quic(libp2p_quic_session_t *session);
 
 picoquic_cnx_t *libp2p__quic_session_native(libp2p_quic_session_t *session);

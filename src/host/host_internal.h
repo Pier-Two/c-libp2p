@@ -171,7 +171,7 @@ struct libp2p_host
     /* Single-threaded application callback executor (protocol/dial on_open) */
     pthread_t cb_thread;
     int cb_thread_started;
-    int cb_stop;
+    atomic_int cb_stop;
     struct cb_task_node *cb_head;
     struct cb_task_node *cb_tail;
     pthread_cond_t cb_cv;

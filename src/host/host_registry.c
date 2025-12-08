@@ -346,6 +346,9 @@ int libp2p_host_listen_selected(struct libp2p_host *host, const libp2p_proto_lis
             return LIBP2P_ERR_UNSUPPORTED;
     }
 
+    /* Notify that local protocols have changed so Identify can update peers */
+    publish_local_protocols_updated(host, true);
+
     *out_server = srv;
     return 0;
 }
@@ -373,6 +376,8 @@ int libp2p_host_unlisten(struct libp2p_host *host, libp2p_protocol_server_t *s)
     for (size_t i = 0; i < s->num_match_entries; i++)
         remove_match_entry_node(host, s->match_entries[i]);
     libp2p_protocol_server_free(s);
+    /* Notify that local protocols have changed (protocol removed) */
+    publish_local_protocols_updated(host, false);
     return 0;
 }
 

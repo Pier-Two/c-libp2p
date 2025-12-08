@@ -1514,13 +1514,22 @@ static void *open_stream_async_thread(void *arg)
                     free((void *)accepted);
                 }
                 LP_LOGW("STREAM_ASYNC", "[open_async] multiselect failed on existing conn, ms=%d", ms);
+                /* If peer explicitly doesn't support the protocol (NA), don't retry with a new connection */
+                if (ms == LIBP2P_MULTISELECT_ERR_UNAVAIL)
+                {
+                    libp2p_stream_close(new_stream);
+                    libp2p_stream_free(new_stream);
+                    schedule_dial_on_open(host, on_open, NULL, ud, LIBP2P_ERR_UNSUPPORTED);
+                    goto out_cleanup;
+                }
             }
             else
             {
                 LP_LOGW("STREAM_ASYNC", "[open_async] could not get IO from stream");
             }
             libp2p_stream_close(new_stream);
-            goto try_dial; /* Protocol negotiation failed, try dialing */
+            libp2p_stream_free(new_stream);
+            goto try_dial; /* Stream/IO issue, try dialing a new connection */
         }
         else
         {

@@ -65,7 +65,9 @@ struct quic_listener_ctx
     picoquic_quic_t *quic;
     picoquic_network_thread_ctx_t *net_thread;
     picoquic_packet_loop_param_t loop_param;
-    pthread_mutex_t lock;
+    pthread_mutex_t lock;        /* protects queue, bound_addr, port_ready */
+    pthread_mutex_t peers_lock;  /* protects verified_peers (separate to avoid deadlock with socket loop) */
+    pthread_mutex_t quic_mtx;    /* protects all picoquic context access (wake tree, streams, etc.) */
     pthread_cond_t cond;
     quic_listener_conn_node_t *queue_head;
     quic_listener_conn_node_t *queue_tail;
@@ -242,10 +244,10 @@ static void quic_listener_bound_addr_update(quic_listener_ctx_t *ctx, const stru
 
 static void quic_listener_free_peers(quic_listener_ctx_t *ctx)
 {
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->peers_lock);
     quic_listener_peer_entry_t *cur = ctx->verified_peers;
     ctx->verified_peers = NULL;
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->peers_lock);
 
     while (cur)
     {
@@ -272,7 +274,7 @@ void quic_listener_store_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx, 
         return;
     }
 
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->peers_lock);
     quic_listener_peer_entry_t *cur = ctx->verified_peers;
     quic_listener_peer_entry_t *prev = NULL;
     while (cur)
@@ -287,7 +289,7 @@ void quic_listener_store_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx, 
         cur = (quic_listener_peer_entry_t *)calloc(1, sizeof(*cur));
         if (!cur)
         {
-            pthread_mutex_unlock(&ctx->lock);
+            pthread_mutex_unlock(&ctx->peers_lock);
             if (peer)
             {
                 peer_id_destroy(peer);
@@ -306,14 +308,16 @@ void quic_listener_store_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx, 
         cur->peer = NULL;
     }
     cur->peer = peer;
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->peers_lock);
 }
 
 peer_id_t *quic_listener_take_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx)
 {
     if (!ctx || !tls_ctx)
         return NULL;
-    pthread_mutex_lock(&ctx->lock);
+
+    pthread_mutex_lock(&ctx->peers_lock);
+
     quic_listener_peer_entry_t *cur = ctx->verified_peers;
     quic_listener_peer_entry_t *prev = NULL;
     while (cur)
@@ -325,14 +329,14 @@ peer_id_t *quic_listener_take_verified_peer(quic_listener_ctx_t *ctx, void *tls_
     }
     if (!cur)
     {
-        pthread_mutex_unlock(&ctx->lock);
+        pthread_mutex_unlock(&ctx->peers_lock);
         return NULL;
     }
     if (prev)
         prev->next = cur->next;
     else
         ctx->verified_peers = cur->next;
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->peers_lock);
 
     peer_id_t *peer = cur->peer;
     free(cur);
@@ -343,7 +347,7 @@ void quic_listener_remove_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx)
 {
     if (!ctx || !tls_ctx)
         return;
-    pthread_mutex_lock(&ctx->lock);
+    pthread_mutex_lock(&ctx->peers_lock);
     quic_listener_peer_entry_t *cur = ctx->verified_peers;
     quic_listener_peer_entry_t *prev = NULL;
     while (cur)
@@ -355,14 +359,14 @@ void quic_listener_remove_verified_peer(quic_listener_ctx_t *ctx, void *tls_ctx)
     }
     if (!cur)
     {
-        pthread_mutex_unlock(&ctx->lock);
+        pthread_mutex_unlock(&ctx->peers_lock);
         return;
     }
     if (prev)
         prev->next = cur->next;
     else
         ctx->verified_peers = cur->next;
-    pthread_mutex_unlock(&ctx->lock);
+    pthread_mutex_unlock(&ctx->peers_lock);
 
     if (cur->peer)
     {
@@ -446,6 +450,8 @@ static void quic_listener_free_ctx(quic_listener_ctx_t *ctx)
     multiaddr_free(ctx->requested_addr);
     multiaddr_free(ctx->bound_addr);
     pthread_mutex_destroy(&ctx->lock);
+    pthread_mutex_destroy(&ctx->peers_lock);
+    pthread_mutex_destroy(&ctx->quic_mtx);
     pthread_cond_destroy(&ctx->cond);
     free(ctx);
 }
@@ -646,6 +652,12 @@ static int quic_listener_make_conn(quic_listener_ctx_t *ctx,
         return -1;
     }
 
+    /* Use the listener's quic mutex for this session since they share the same
+     * picoquic context. This ensures proper synchronization between the socket
+     * loop thread and worker threads (e.g., ping handler) when accessing
+     * picoquic's internal data structures. */
+    libp2p__quic_session_set_quic_mtx(session, &ctx->quic_mtx);
+
     libp2p__quic_session_attach_thread(session, ctx->net_thread);
 
     picoquic_cnx_t *native = libp2p__quic_session_native(session);
@@ -657,6 +669,7 @@ static int quic_listener_make_conn(quic_listener_ctx_t *ctx,
                                                quic_listener_session_close,
                                                quic_listener_session_free,
                                                peer);
+
     multiaddr_free(local);
     multiaddr_free(remote);
 
@@ -701,6 +714,7 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
             picoquic_enable_keep_alive(cnx, 0);
 
             libp2p_conn_t *conn = NULL;
+
             if (quic_listener_make_conn(ctx, cnx, &conn) == 0 && conn)
             {
                 pthread_mutex_lock(&ctx->lock);
@@ -711,6 +725,7 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
             {
                 quic_listener_destroy_connection(conn);
             }
+
             break;
         }
         case picoquic_callback_close:
@@ -731,6 +746,7 @@ static int quic_listener_loop_cb(picoquic_quic_t *quic,
 {
     (void)quic;
     quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)callback_ctx;
+
     if (!ctx)
         return 0;
 
@@ -763,27 +779,29 @@ void quic_listener_handle_connection_closed(quic_listener_ctx_t *ctx, picoquic_c
 {
     if (!ctx || !cnx)
         return;
-    picoquic_state_enum st = picoquic_get_cnx_state(cnx);
-    uint64_t local_err = picoquic_get_local_error(cnx);
-    uint64_t remote_err = picoquic_get_remote_error(cnx);
-    uint64_t app_err = picoquic_get_application_error(cnx);
-    LP_LOGW("QUIC",
-            "listener connection_closed cnx=%p state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
-            (void *)cnx,
-            libp2p__quic_state_name(st),
-            (int)st,
-            picoquic_is_client(cnx),
-            local_err,
-            picoquic_error_name(local_err),
-            remote_err,
-            picoquic_error_name(remote_err),
-            app_err);
     quic_listener_remove_verified_peer(ctx, quic_listener_tls_handle(cnx));
 }
 
 picoquic_quic_t *quic_listener_get_quic(quic_listener_ctx_t *ctx)
 {
     return ctx ? ctx->quic : NULL;
+}
+
+/* Lock/unlock callbacks for socket loop thread synchronization.
+ * These are called by the socket loop to serialize access to picoquic's
+ * internal data structures (especially the cnx_wake_tree splay tree). */
+static void quic_listener_lock_cb(void *ctx_ptr)
+{
+    quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)ctx_ptr;
+    if (ctx)
+        pthread_mutex_lock(&ctx->quic_mtx);
+}
+
+static void quic_listener_unlock_cb(void *ctx_ptr)
+{
+    quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)ctx_ptr;
+    if (ctx)
+        pthread_mutex_unlock(&ctx->quic_mtx);
 }
 
 int quic_listener_start(quic_listener_ctx_t *ctx)
@@ -801,6 +819,14 @@ int quic_listener_start(quic_listener_ctx_t *ctx)
                                                                               &loop_ret);
     if (!net_thread || loop_ret != 0)
         return -1;
+
+    /* Set up thread synchronization callbacks to protect picoquic's internal
+     * data structures (especially the cnx_wake_tree splay tree) from concurrent
+     * access by the socket loop thread and worker threads (e.g., ping handler). */
+    net_thread->lock_fn = quic_listener_lock_cb;
+    net_thread->unlock_fn = quic_listener_unlock_cb;
+    net_thread->lock_ctx = ctx;
+
     ctx->net_thread = net_thread;
 
     uint64_t deadline = picoquic_current_time() + 2000000ULL; /* 2 seconds */
@@ -870,6 +896,8 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     ctx->transport = transport;
     ctx->transport_ctx = transport_ctx;
     pthread_mutex_init(&ctx->lock, NULL);
+    pthread_mutex_init(&ctx->peers_lock, NULL);
+    pthread_mutex_init(&ctx->quic_mtx, NULL);
     pthread_cond_init(&ctx->cond, NULL);
     ctx->port_ready = 0;
     atomic_store(&ctx->closing, 0);
@@ -905,9 +933,10 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     picoquic_tp_t listener_tp = *picoquic_get_default_tp(quic);
     listener_tp.enable_loss_bit = 0;
     listener_tp.min_ack_delay = 0;
-    /* Set max_idle_timeout to 10 seconds (in milliseconds).
-     * This ensures keep-alive pings (at idle_timeout/2 = 5s) are sent before timeout. */
-    listener_tp.max_idle_timeout = 10000;
+    /* Set max_idle_timeout to 60 seconds (in milliseconds).
+     * This ensures keep-alive pings (at idle_timeout/2 = 30s) are sent before timeout.
+     * 60s matches rust-libp2p's default to prevent premature timeout disconnections. */
+    listener_tp.max_idle_timeout = 60000;
     if (picoquic_set_default_tp(quic, &listener_tp) != 0)
     {
         picoquic_free(quic);

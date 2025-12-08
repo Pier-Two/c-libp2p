@@ -1,4 +1,5 @@
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 
 #include "host_internal.h"
@@ -18,11 +19,11 @@ static void *cbexec_thread(void *arg)
     for (;;)
     {
         pthread_mutex_lock(&host->mtx);
-        while (!host->cb_stop && host->cb_head == NULL)
+        while (!atomic_load_explicit(&host->cb_stop, memory_order_acquire) && host->cb_head == NULL)
         {
             pthread_cond_wait(&host->cb_cv, &host->mtx);
         }
-        if (host->cb_stop && host->cb_head == NULL)
+        if (atomic_load_explicit(&host->cb_stop, memory_order_acquire) && host->cb_head == NULL)
         {
             pthread_mutex_unlock(&host->mtx);
             break;
@@ -50,7 +51,7 @@ int libp2p__cbexec_start(libp2p_host_t *host)
     if (!host)
         return LIBP2P_ERR_NULL_PTR;
     pthread_mutex_lock(&host->mtx);
-    host->cb_stop = 0;
+    atomic_store_explicit(&host->cb_stop, 0, memory_order_release);
     host->cb_head = host->cb_tail = NULL;
     pthread_mutex_unlock(&host->mtx);
     if (pthread_cond_init(&host->cb_cv, NULL) != 0)
@@ -68,8 +69,11 @@ void libp2p__cbexec_stop(libp2p_host_t *host)
 {
     if (!host)
         return;
+    /* Set cb_stop atomically BEFORE acquiring the lock so that concurrent
+     * callers of libp2p__exec_on_cb_thread can detect teardown early and
+     * avoid a use-after-free race with pthread_mutex_lock. */
+    atomic_store_explicit(&host->cb_stop, 1, memory_order_release);
     pthread_mutex_lock(&host->mtx);
-    host->cb_stop = 1;
     pthread_cond_broadcast(&host->cb_cv);
     pthread_mutex_unlock(&host->mtx);
     if (host->cb_thread_started)
@@ -96,12 +100,24 @@ void libp2p__exec_on_cb_thread(libp2p_host_t *host, libp2p_cbexec_fn fn, void *u
 {
     if (!host || !fn)
         return;
+    /* Check cb_stop atomically BEFORE acquiring the mutex to avoid a use-after-free
+     * race. If the callback system is stopping/stopped, the host may be freed soon
+     * and we must not touch the mutex. This check works because libp2p__cbexec_stop
+     * sets cb_stop atomically BEFORE acquiring/releasing the mutex. */
+    if (atomic_load_explicit(&host->cb_stop, memory_order_acquire))
+        return;
     cb_task_node_t *node = (cb_task_node_t *)calloc(1, sizeof(*node));
     if (!node)
         return;
     node->fn = fn;
     node->ud = user_data;
     node->next = NULL;
+    /* Double-check cb_stop after allocation but before acquiring lock */
+    if (atomic_load_explicit(&host->cb_stop, memory_order_acquire))
+    {
+        free(node);
+        return;
+    }
     pthread_mutex_lock(&host->mtx);
     if (host->cb_tail)
     {

@@ -419,38 +419,13 @@ static void *ping_srv_thread(void *arg)
         libp2p__stream_release_async(s);
     }
     if (host)
-    {
         libp2p__worker_dec(host);
-    }
     return NULL;
 }
 
 static void ping_on_open(libp2p_stream_t *s, void *ud)
 {
     (void)ud;
-    const peer_id_t *p = s ? libp2p_stream_remote_peer(s) : NULL;
-    char peer_buf[128];
-    const char *peer_str = "<unknown>";
-    if (p && peer_id_to_string(p, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) >= 0)
-        peer_str = peer_buf;
-    const multiaddr_t *remote_addr = s ? libp2p_stream_remote_addr(s) : NULL;
-    char addr_buf[256];
-    const char *addr_str = "<unknown>";
-    if (remote_addr)
-    {
-        int serr = 0;
-        char *tmp = multiaddr_to_str(remote_addr, &serr);
-        if (tmp && serr == MULTIADDR_SUCCESS)
-        {
-            size_t copy = sizeof(addr_buf) - 1;
-            strncpy(addr_buf, tmp, copy);
-            addr_buf[copy] = '\0';
-            addr_str = addr_buf;
-        }
-        if (tmp)
-            free(tmp);
-    }
-    LP_LOGD("PING", "inbound stream open stream=%p peer=%s addr=%s", (void *)s, peer_str, addr_str);
     ping_srv_ctx_t *ctx = (ping_srv_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
     {

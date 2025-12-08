@@ -536,6 +536,7 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
         uint64_t local_err = picoquic_get_local_error(cnx);
         uint64_t remote_err = picoquic_get_remote_error(cnx);
         uint64_t app_err = picoquic_get_application_error(cnx);
+
         LP_LOGD("QUIC",
                 "session_close begin session=%p cnx=%p state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
                 (void *)session,
@@ -569,6 +570,7 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
         uint64_t final_local = picoquic_get_local_error(cnx);
         uint64_t final_remote = picoquic_get_remote_error(cnx);
         uint64_t final_app = picoquic_get_application_error(cnx);
+
         LP_LOGD("QUIC",
                 "session_close end session=%p cnx=%p state=%s(%d) elapsed_us=%" PRIu64 " local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
                 (void *)session,
@@ -761,9 +763,10 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     picoquic_tp_t client_tp = *picoquic_get_default_tp(quic);
     client_tp.enable_loss_bit = 0;
     client_tp.min_ack_delay = 0;
-    /* Set max_idle_timeout to 10 seconds (in milliseconds).
-     * This ensures keep-alive pings (at idle_timeout/2 = 5s) are sent before timeout. */
-    client_tp.max_idle_timeout = 10000;
+    /* Set max_idle_timeout to 60 seconds (in milliseconds).
+     * This ensures keep-alive pings (at idle_timeout/2 = 30s) are sent before timeout.
+     * 60s matches rust-libp2p's default to prevent premature timeout disconnections. */
+    client_tp.max_idle_timeout = 60000;
     if (picoquic_set_default_tp(quic, &client_tp) != 0)
     {
         picoquic_free(quic);

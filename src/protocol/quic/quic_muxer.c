@@ -49,7 +49,7 @@ typedef struct quic_stream_chunk
 
 typedef struct quic_stream_ctx
 {
-    struct quic_muxer_ctx *mx;
+    _Atomic(struct quic_muxer_ctx *) mx;  /* Atomic to allow safe teardown check */
     libp2p_stream_t *stream;
     uint64_t stream_id;
     pthread_mutex_t lock;
@@ -82,7 +82,7 @@ typedef struct pending_stop_sending
 typedef struct quic_muxer_ctx
 {
     libp2p_quic_session_t *session;
-    struct libp2p_host *host;
+    _Atomic(struct libp2p_host *) host;  /* Atomic to allow safe teardown check */
     multiaddr_t *local;
     multiaddr_t *remote;
     pthread_mutex_t lock;
@@ -227,6 +227,8 @@ struct libp2p_quic_session
     quic_muxer_ctx_t *mx;
     _Atomic uint32_t refcnt;
     pthread_mutex_t lock;
+    pthread_mutex_t quic_mtx_storage;  /* Storage for own mutex (used for dial sessions) */
+    pthread_mutex_t *quic_mtx;         /* Pointer to active mutex (own or listener's) */
     struct libp2p_host *host;
     picoquic_packet_loop_param_t loop_param;
     picoquic_network_thread_ctx_t *loop_ctx;
@@ -613,10 +615,11 @@ static int quic_peer_is_identified(libp2p_host_t *host, const peer_id_t *peer)
 
 static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st)
 {
-    if (!mx || !mx->host || !st || !st->stream)
+    if (!mx || !st || !st->stream)
         return 0;
-
-    libp2p_host_t *host = mx->host;
+    libp2p_host_t *host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
+        return 0;
     LP_LOGI("QUIC", "run_inbound_handshake START stream_id=%llu", (unsigned long long)st->stream_id);
 
     if (host->opts.per_conn_max_inbound_streams > 0)
@@ -734,7 +737,17 @@ static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *s
             {
                 task->def = chosen;
                 task->stream = stream;
-                libp2p__exec_on_cb_thread(host, quic_proto_open_exec, task);
+                /* Re-check host right before queueing to avoid use-after-free race */
+                host = atomic_load_explicit(&mx->host, memory_order_acquire);
+                if (!host)
+                {
+                    libp2p__stream_release_async(stream);
+                    free(task);
+                }
+                else
+                {
+                    libp2p__exec_on_cb_thread(host, quic_proto_open_exec, task);
+                }
             }
         }
     }
@@ -902,6 +915,24 @@ static int quic_multiaddr_udp_params(const multiaddr_t *addr, int *af_out, uint1
 
     return 0;
 }
+
+/* Lock/unlock callbacks for socket loop thread synchronization.
+ * These are called by the socket loop to serialize access to picoquic's
+ * internal data structures (especially the cnx_wake_tree splay tree). */
+static void quic_session_lock_cb(void *ctx)
+{
+    libp2p_quic_session_t *session = (libp2p_quic_session_t *)ctx;
+    if (session && session->quic_mtx)
+        pthread_mutex_lock(session->quic_mtx);
+}
+
+static void quic_session_unlock_cb(void *ctx)
+{
+    libp2p_quic_session_t *session = (libp2p_quic_session_t *)ctx;
+    if (session && session->quic_mtx)
+        pthread_mutex_unlock(session->quic_mtx);
+}
+
 void libp2p__quic_session_wake(libp2p_quic_session_t *session)
 {
     if (!session)
@@ -913,6 +944,29 @@ void libp2p__quic_session_wake(libp2p_quic_session_t *session)
     pthread_mutex_unlock(&session->lock);
     if (loop_ctx)
         (void)picoquic_wake_up_network_thread(loop_ctx);
+}
+
+static const char *quic_loop_cb_mode_name(picoquic_packet_loop_cb_enum mode)
+{
+    switch (mode)
+    {
+        case picoquic_packet_loop_ready:
+            return "ready";
+        case picoquic_packet_loop_after_receive:
+            return "after_receive";
+        case picoquic_packet_loop_after_send:
+            return "after_send";
+        case picoquic_packet_loop_port_update:
+            return "port_update";
+        case picoquic_packet_loop_time_check:
+            return "time_check";
+        case picoquic_packet_loop_system_call_duration:
+            return "system_call_duration";
+        case picoquic_packet_loop_wake_up:
+            return "wake_up";
+        default:
+            return "unknown";
+    }
 }
 
 static int quic_packet_loop_cb(picoquic_quic_t *quic,
@@ -1051,6 +1105,13 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
         return LIBP2P_ERR_INTERNAL;
     }
 
+    /* Set up thread synchronization callbacks to protect picoquic's internal
+     * data structures (especially the cnx_wake_tree splay tree) from concurrent
+     * access by the socket loop thread and worker threads (e.g., ping handler). */
+    loop_ctx->lock_fn = quic_session_lock_cb;
+    loop_ctx->unlock_fn = quic_session_unlock_cb;
+    loop_ctx->lock_ctx = session;
+
     /* Wait for the network thread to be ready before returning.
      * This is necessary to ensure the socket is open and packets
      * can be sent/received before we try to use the connection. */
@@ -1113,6 +1174,13 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
         atomic_store_explicit(&session->loop_started, 0, memory_order_release);
         return LIBP2P_ERR_INTERNAL;
     }
+
+    /* Set up thread synchronization callbacks to protect picoquic's internal
+     * data structures (especially the cnx_wake_tree splay tree) from concurrent
+     * access by the socket loop thread and worker threads (e.g., ping handler). */
+    loop_ctx->lock_fn = quic_session_lock_cb;
+    loop_ctx->unlock_fn = quic_session_unlock_cb;
+    loop_ctx->lock_ctx = session;
 
     /* Wait for the network thread to be ready before returning.
      * This is necessary to ensure the socket is open and packets
@@ -1227,10 +1295,11 @@ static void quic_stream_ctx_destroy(quic_stream_ctx_t *ctx)
         quic_push_ctx_free(ctx->push);
         ctx->push = NULL;
     }
-    if (ctx->mx)
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
+    if (mx)
     {
-        quic_muxer_ctx_release(ctx->mx);
-        ctx->mx = NULL;
+        atomic_store_explicit(&ctx->mx, NULL, memory_order_release);
+        quic_muxer_ctx_release(mx);
     }
     pthread_mutex_destroy(&ctx->lock);
     free(ctx);
@@ -1360,6 +1429,15 @@ libp2p_quic_session_t *libp2p__quic_session_wrap(picoquic_quic_t *quic, picoquic
         free(session);
         return NULL;
     }
+    if (pthread_mutex_init(&session->quic_mtx_storage, NULL) != 0)
+    {
+        pthread_mutex_destroy(&session->lock);
+        free(session);
+        return NULL;
+    }
+    /* By default, use the session's own mutex storage.
+     * For listener sessions, this will be overwritten to point to the listener's mutex. */
+    session->quic_mtx = &session->quic_mtx_storage;
     if (cnx)
         picoquic_set_callback(cnx, quic_session_callback, session);
     return session;
@@ -1381,6 +1459,9 @@ void libp2p__quic_session_release(libp2p_quic_session_t *session)
         libp2p__quic_session_stop_loop(session);
         quic_session_clear_pending(session);
         pthread_mutex_destroy(&session->lock);
+        /* Only destroy the storage mutex if we own it (not using listener's mutex) */
+        if (session->quic_mtx == &session->quic_mtx_storage)
+            pthread_mutex_destroy(&session->quic_mtx_storage);
         free(session);
     }
 }
@@ -1392,6 +1473,20 @@ void libp2p__quic_session_set_host(libp2p_quic_session_t *session, struct libp2p
     pthread_mutex_lock(&session->lock);
     session->host = host;
     pthread_mutex_unlock(&session->lock);
+}
+
+void libp2p__quic_session_set_quic_mtx(libp2p_quic_session_t *session, pthread_mutex_t *mtx)
+{
+    if (!session)
+        return;
+    /* For listener sessions, use the listener's mutex instead of our own.
+     * This is safe because the session is being created/configured before any
+     * concurrent access can occur. */
+    if (mtx) {
+        /* We no longer need our own mutex storage since we'll use the external one */
+        pthread_mutex_destroy(&session->quic_mtx_storage);
+        session->quic_mtx = mtx;
+    }
 }
 
 picoquic_cnx_t *libp2p__quic_session_native(libp2p_quic_session_t *session)
@@ -1534,7 +1629,15 @@ static void quic_stream_fire_writable(void *arg)
 
 static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx)
 {
-    if (!ctx || !ctx->mx || !ctx->mx->host || !ctx->stream)
+    if (!ctx || !ctx->stream)
+        return;
+    /* Atomically load muxer to avoid use-after-free during teardown */
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
+    if (!mx)
+        return;
+    /* Atomically load host to avoid use-after-free during teardown */
+    struct libp2p_host *host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
         return;
     libp2p_stream_t *stream = ctx->stream;
     if (!libp2p__stream_retain_async(stream))
@@ -1547,12 +1650,35 @@ static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx)
     }
     task->stream = stream;
     task->st = ctx;  /* Store stream ctx for push-mode fallback */
-    libp2p__exec_on_cb_thread(ctx->mx->host, quic_stream_fire_readable, task);
+    /* Re-check muxer and host right before queueing to avoid use-after-free race */
+    mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
+    if (!mx)
+    {
+        libp2p__stream_release_async(stream);
+        free(task);
+        return;
+    }
+    host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
+    {
+        libp2p__stream_release_async(stream);
+        free(task);
+        return;
+    }
+    libp2p__exec_on_cb_thread(host, quic_stream_fire_readable, task);
 }
 
 static void quic_stream_schedule_writable(quic_stream_ctx_t *ctx)
 {
-    if (!ctx || !ctx->mx || !ctx->mx->host || !ctx->stream)
+    if (!ctx || !ctx->stream)
+        return;
+    /* Atomically load muxer to avoid use-after-free during teardown */
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
+    if (!mx)
+        return;
+    /* Atomically load host to avoid use-after-free during teardown */
+    struct libp2p_host *host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
         return;
     libp2p_stream_t *stream = ctx->stream;
     if (!libp2p__stream_retain_async(stream))
@@ -1564,7 +1690,22 @@ static void quic_stream_schedule_writable(quic_stream_ctx_t *ctx)
         return;
     }
     task->stream = stream;
-    libp2p__exec_on_cb_thread(ctx->mx->host, quic_stream_fire_writable, task);
+    /* Re-check muxer and host right before queueing to avoid use-after-free race */
+    mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
+    if (!mx)
+    {
+        libp2p__stream_release_async(stream);
+        free(task);
+        return;
+    }
+    host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
+    {
+        libp2p__stream_release_async(stream);
+        free(task);
+        return;
+    }
+    libp2p__exec_on_cb_thread(host, quic_stream_fire_writable, task);
 }
 
 static void quic_stream_handshake_exec(void *arg)
@@ -1586,7 +1727,8 @@ static void quic_stream_handshake_exec(void *arg)
 
     int ok = 0;
     libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
-    if (mx && mx->host && session)
+    libp2p_host_t *host = mx ? atomic_load_explicit(&mx->host, memory_order_acquire) : NULL;
+    if (mx && host && session)
         ok = quic_run_inbound_handshake(mx, st);
 
     if (!ok)
@@ -1599,11 +1741,13 @@ static void quic_stream_handshake_exec(void *arg)
         }
         libp2p_stream_t *stream = st->stream;
         int host_tearing_down = 0;
-        if (mx && mx->host)
+        /* Re-load host pointer atomically for teardown check */
+        host = mx ? atomic_load_explicit(&mx->host, memory_order_acquire) : NULL;
+        if (host)
         {
-            pthread_mutex_lock(&mx->host->mtx);
-            host_tearing_down = mx->host->tearing_down;
-            pthread_mutex_unlock(&mx->host->mtx);
+            pthread_mutex_lock(&host->mtx);
+            host_tearing_down = host->tearing_down;
+            pthread_mutex_unlock(&host->mtx);
         }
         else
         {
@@ -1638,7 +1782,8 @@ static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t 
 {
     if (!st)
         return;
-    if (!mx || !mx->host)
+    libp2p_host_t *host = mx ? atomic_load_explicit(&mx->host, memory_order_acquire) : NULL;
+    if (!mx || !host)
     {
         pthread_mutex_lock(&st->lock);
         st->handshake_running = 0;
@@ -1670,7 +1815,26 @@ static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t 
         pthread_mutex_unlock(&st->lock);
         return;
     }
-    libp2p__exec_on_cb_thread(mx->host, quic_stream_handshake_exec, task);
+    /* Re-check host pointer right before queueing to avoid use-after-free race.
+     * Between loading the host pointer and reaching this point, the host may have
+     * been torn down and freed. Re-load atomically to check. */
+    host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    if (!host)
+    {
+        /* Host was freed, clean up */
+        if (task->stream)
+            libp2p__stream_release_async(task->stream);
+        quic_muxer_ctx_release(mx);
+        quic_stream_ctx_release(st);
+        free(task);
+        pthread_mutex_lock(&st->lock);
+        st->handshake_running = 0;
+        if (!st->handshake_done)
+            st->handshake_done = 1;
+        pthread_mutex_unlock(&st->lock);
+        return;
+    }
+    libp2p__exec_on_cb_thread(host, quic_stream_handshake_exec, task);
 }
 
 static void quic_stream_push_bytes(quic_stream_ctx_t *ctx, const uint8_t *data, size_t len)
@@ -1854,13 +2018,21 @@ static void quic_session_flush_pending(libp2p_quic_session_t *session, quic_muxe
     if (!session)
         return;
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    int mx_from_session = 0;
     pthread_mutex_lock(&session->lock);
     if (!mx)
+    {
         mx = session->mx;
+        mx_from_session = 1;
+    }
+    if (mx && mx_from_session)
+        quic_muxer_ctx_retain(mx);
     quic_session_event_t *pending = quic_session_pending_detach_locked(session);
     pthread_mutex_unlock(&session->lock);
     if (pending)
         quic_session_replay_events(session, mx, cnx, pending);
+    if (mx && mx_from_session)
+        quic_muxer_ctx_release(mx);
 }
 
 static int quic_session_callback(picoquic_cnx_t *cnx,
@@ -1875,46 +2047,9 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
     if (!session)
         return 0;
 
-    int log_state_event = (event == picoquic_callback_close ||
-                           event == picoquic_callback_application_close ||
-                           event == picoquic_callback_stateless_reset ||
-                           event == picoquic_callback_ready ||
-                           event == picoquic_callback_almost_ready ||
-                           event == picoquic_callback_version_negotiation);
     int closing_event = (event == picoquic_callback_close ||
                          event == picoquic_callback_application_close ||
                          event == picoquic_callback_stateless_reset);
-
-    if (log_state_event && cnx)
-    {
-        picoquic_state_enum st = picoquic_get_cnx_state(cnx);
-        uint64_t local_err = picoquic_get_local_error(cnx);
-        uint64_t remote_err = picoquic_get_remote_error(cnx);
-        uint64_t app_err = picoquic_get_application_error(cnx);
-        LP_LOGT("QUIC",
-                "session_event=%s session=%p cnx=%p stream=%" PRIu64 " state=%s(%d) client=%d local_err=%" PRIu64 " (%s) remote_err=%" PRIu64 " (%s) app_err=%" PRIu64,
-                libp2p__quic_event_name(event),
-                (void *)session,
-                (void *)cnx,
-                stream_id,
-                libp2p__quic_state_name(st),
-                (int)st,
-                picoquic_is_client(cnx),
-                local_err,
-                picoquic_error_name(local_err),
-                remote_err,
-                picoquic_error_name(remote_err),
-                app_err);
-        if (st < picoquic_state_client_ready_start && closing_event)
-        {
-            LP_LOGW("QUIC",
-                    "session event closed before ready session=%p cnx=%p state=%s(%d)",
-                    (void *)session,
-                    (void *)cnx,
-                    libp2p__quic_state_name(st),
-                    (int)st);
-        }
-    }
 
     if (closing_event)
         quic_session_disable_cnx(session);
@@ -1940,13 +2075,18 @@ static int quic_session_callback(picoquic_cnx_t *cnx,
         pthread_mutex_unlock(&session->lock);
         return 0;
     }
+    /* Retain muxer before releasing session lock to prevent use-after-free.
+     * The muxer could be freed by another thread after we release the lock. */
+    quic_muxer_ctx_retain(mx);
     pending = quic_session_pending_detach_locked(session);
     pthread_mutex_unlock(&session->lock);
 
     if (pending)
         quic_session_replay_events(session, mx, cnx, pending);
 
-    return quic_session_dispatch(session, mx, cnx, stream_id, bytes, length, event, stream_ctx);
+    int ret = quic_session_dispatch(session, mx, cnx, stream_id, bytes, length, event, stream_ctx);
+    quic_muxer_ctx_release(mx);
+    return ret;
 }
 
 static ssize_t quic_stream_backend_read(void *io_ctx, void *buf, size_t len)
@@ -1996,7 +2136,7 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
     if (!st || !buf)
         return LIBP2P_ERR_NULL_PTR;
-    quic_muxer_ctx_t *mx = st->mx;
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
     if (!mx)
         return LIBP2P_ERR_INTERNAL;
     /* Fast path bail out if muxer already marked closed. */
@@ -2043,14 +2183,20 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
             len);
     pthread_mutex_lock(&mx->write_mtx);
     /* Re-check closed/connection after acquiring write lock to narrow race on shutdown. */
-    if (atomic_load_explicit(&mx->closed, memory_order_acquire) ||
-        atomic_load_explicit(&session->cnx, memory_order_acquire) != cnx)
+    int mx_closed = atomic_load_explicit(&mx->closed, memory_order_acquire);
+    picoquic_cnx_t *current_cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    if (mx_closed || current_cnx != cnx)
     {
         pthread_mutex_unlock(&mx->write_mtx);
         quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
+    /* Acquire quic_mtx to synchronize with the socket loop thread.
+     * This prevents concurrent access to picoquic's internal data structures
+     * (especially the cnx_wake_tree splay tree) which are not thread-safe. */
+    pthread_mutex_lock(session->quic_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, (const uint8_t *)buf, len, 0);
+    pthread_mutex_unlock(session->quic_mtx);
     pthread_mutex_unlock(&mx->write_mtx);
     if (rc != 0)
     {
@@ -2094,13 +2240,16 @@ static ssize_t quic_stream_backend_write(void *io_ctx, const void *buf, size_t l
 static int quic_stream_backend_close(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    if (!st || !st->mx)
+    if (!st)
         return LIBP2P_ERR_NULL_PTR;
-    if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
+    if (!mx)
+        return LIBP2P_ERR_NULL_PTR;
+    if (atomic_load_explicit(&mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
     if (st->fin_local)
         return 0;
-    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
     if (!session)
         return LIBP2P_ERR_CLOSED;
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
@@ -2109,9 +2258,9 @@ static int quic_stream_backend_close(void *io_ctx)
         quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
-    pthread_mutex_lock(&st->mx->write_mtx);
+    pthread_mutex_lock(&mx->write_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, NULL, 0, 1);
-    pthread_mutex_unlock(&st->mx->write_mtx);
+    pthread_mutex_unlock(&mx->write_mtx);
     libp2p__quic_session_wake(session);
     quic_muxer_release_session(session);
     if (rc == 0)
@@ -2135,11 +2284,14 @@ static int quic_stream_backend_shutdown_write(void *io_ctx)
 static int quic_stream_backend_reset(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    if (!st || !st->mx)
+    if (!st)
         return LIBP2P_ERR_NULL_PTR;
-    if (atomic_load_explicit(&st->mx->closed, memory_order_acquire))
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
+    if (!mx)
+        return LIBP2P_ERR_NULL_PTR;
+    if (atomic_load_explicit(&mx->closed, memory_order_acquire))
         return LIBP2P_ERR_CLOSED;
-    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
     if (!session)
         return LIBP2P_ERR_CLOSED;
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
@@ -2148,9 +2300,9 @@ static int quic_stream_backend_reset(void *io_ctx)
         quic_muxer_release_session(session);
         return LIBP2P_ERR_CLOSED;
     }
-    pthread_mutex_lock(&st->mx->write_mtx);
+    pthread_mutex_lock(&mx->write_mtx);
     int rc = picoquic_reset_stream(cnx, st->stream_id, 0);
-    pthread_mutex_unlock(&st->mx->write_mtx);
+    pthread_mutex_unlock(&mx->write_mtx);
     libp2p__quic_session_wake(session);
     quic_muxer_release_session(session);
     if (rc == 0)
@@ -2179,13 +2331,19 @@ static int quic_stream_backend_set_deadline(void *io_ctx, uint64_t ms)
 static const multiaddr_t *quic_stream_backend_local(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    return (st && st->mx) ? st->mx->local : NULL;
+    if (!st)
+        return NULL;
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
+    return mx ? mx->local : NULL;
 }
 
 static const multiaddr_t *quic_stream_backend_remote(void *io_ctx)
 {
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
-    return (st && st->mx) ? st->mx->remote : NULL;
+    if (!st)
+        return NULL;
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
+    return mx ? mx->remote : NULL;
 }
 
 static int quic_stream_backend_is_writable(void *io_ctx)
@@ -2210,19 +2368,20 @@ static void quic_stream_backend_free(void *io_ctx)
     quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
     if (!st)
         return;
-    libp2p_quic_session_t *session = quic_muxer_retain_session(st->mx);
+    quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
+    libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
     LP_LOGD("QUIC",
             "backend_free ctx=%p stream_id=%" PRIu64 " mx=%p session=%p",
             (void *)st,
             st->stream_id,
-            (void *)st->mx,
+            (void *)mx,
             (void *)session);
     quic_muxer_release_session(session);
-    if (st->mx)
+    if (mx)
     {
-        pthread_mutex_lock(&st->mx->lock);
-        quic_muxer_remove_stream(st->mx, st);
-        pthread_mutex_unlock(&st->mx->lock);
+        pthread_mutex_lock(&mx->lock);
+        quic_muxer_remove_stream(mx, st);
+        pthread_mutex_unlock(&mx->lock);
     }
     st->stream = NULL;
     quic_stream_ctx_release(st);
@@ -2257,7 +2416,7 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
         return NULL;
     }
 
-    st->mx = mx;
+    atomic_init(&st->mx, mx);
     quic_muxer_ctx_retain(mx);
     st->stream = NULL;
     st->stream_id = stream_id;
@@ -2310,7 +2469,8 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
 
     picoquic_set_app_stream_ctx(cnx, stream_id, st);
 
-    libp2p_stream_t *stream = libp2p_stream_from_ops(mx->host, st, &QUIC_STREAM_OPS, NULL, 0, NULL);
+    libp2p_host_t *host = atomic_load_explicit(&mx->host, memory_order_acquire);
+    libp2p_stream_t *stream = libp2p_stream_from_ops(host, st, &QUIC_STREAM_OPS, NULL, 0, NULL);
     if (!stream)
     {
         pthread_mutex_lock(&mx->lock);
@@ -2370,7 +2530,7 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
         quic_muxer_release_session(session);
         return LIBP2P_MUXER_ERR_INTERNAL;
     }
-    st->mx = ctx;
+    atomic_init(&st->mx, ctx);
     quic_muxer_ctx_retain(ctx);
     st->stream = NULL;
     st->stream_id = stream_id;
@@ -2402,7 +2562,8 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
 
     picoquic_set_app_stream_ctx(cnx, stream_id, st);
 
-    libp2p_stream_t *stream = libp2p_stream_from_ops(ctx->host, st, &QUIC_STREAM_OPS, NULL, 1, NULL);
+    libp2p_host_t *host = atomic_load_explicit(&ctx->host, memory_order_acquire);
+    libp2p_stream_t *stream = libp2p_stream_from_ops(host, st, &QUIC_STREAM_OPS, NULL, 1, NULL);
     if (!stream)
     {
         picoquic_set_app_stream_ctx(cnx, stream_id, NULL);
@@ -2449,6 +2610,10 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
     quic_muxer_ctx_t *ctx = (quic_muxer_ctx_t *)mx->ctx;
     if (ctx)
     {
+        /* Clear host pointer FIRST to prevent use-after-free in stream callbacks
+         * that may fire from the listener's packet loop during teardown */
+        atomic_store_explicit(&ctx->host, NULL, memory_order_release);
+
         quic_stream_ctx_t *streams = NULL;
         pthread_mutex_lock(&ctx->lock);
         streams = ctx->streams_head;
@@ -2487,7 +2652,7 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
             quic_session_attach_muxer(session, NULL);
             libp2p__quic_session_release(session);
         }
-        ctx->host = NULL;
+        /* host was already cleared atomically at function start */
         ctx->owner = NULL;
         ctx->conn = NULL;
         pthread_mutex_destroy(&ctx->write_mtx);
@@ -2536,7 +2701,7 @@ libp2p_muxer_t *libp2p_quic_muxer_new(struct libp2p_host *host,
         goto fail;
 
     ctx->session = session;
-    ctx->host = host;
+    atomic_init(&ctx->host, host);
     ctx->streams_head = ctx->streams_tail = NULL;
     ctx->pending_stop_sending_head = NULL;
     ctx->conn = conn;
