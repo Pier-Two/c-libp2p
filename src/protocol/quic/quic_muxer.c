@@ -1627,19 +1627,15 @@ static void quic_stream_fire_writable(void *arg)
     free(task);
 }
 
-static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx)
+static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx, quic_muxer_ctx_t *mx, libp2p_stream_t *stream)
 {
-    if (!ctx || !ctx->stream)
+    if (!ctx || !stream || !mx)
         return;
-    /* Atomically load muxer to avoid use-after-free during teardown */
-    quic_muxer_ctx_t *mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
-    if (!mx)
-        return;
-    /* Atomically load host to avoid use-after-free during teardown */
+    /* Use the passed-in muxer and stream instead of reloading from ctx to avoid
+     * race conditions where ctx->mx or ctx->stream change between dispatch and here. */
     struct libp2p_host *host = atomic_load_explicit(&mx->host, memory_order_acquire);
     if (!host)
         return;
-    libp2p_stream_t *stream = ctx->stream;
     if (!libp2p__stream_retain_async(stream))
         return;
     quic_stream_cb_task_t *task = (quic_stream_cb_task_t *)calloc(1, sizeof(*task));
@@ -1650,14 +1646,7 @@ static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx)
     }
     task->stream = stream;
     task->st = ctx;  /* Store stream ctx for push-mode fallback */
-    /* Re-check muxer and host right before queueing to avoid use-after-free race */
-    mx = atomic_load_explicit(&ctx->mx, memory_order_acquire);
-    if (!mx)
-    {
-        libp2p__stream_release_async(stream);
-        free(task);
-        return;
-    }
+    /* Re-check host right before queueing to avoid use-after-free race */
     host = atomic_load_explicit(&mx->host, memory_order_acquire);
     if (!host)
     {
@@ -1761,8 +1750,13 @@ static void quic_stream_handshake_exec(void *arg)
     }
     else
     {
-        if (st->stream)
-            quic_stream_schedule_readable(st);
+        /* Capture stream pointer while holding lock to avoid race condition */
+        libp2p_stream_t *stream_for_readable = NULL;
+        pthread_mutex_lock(&st->lock);
+        stream_for_readable = st->stream;
+        pthread_mutex_unlock(&st->lock);
+        if (stream_for_readable)
+            quic_stream_schedule_readable(st, mx, stream_for_readable);
     }
     quic_muxer_release_session(session);
 
@@ -1910,6 +1904,7 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                 int schedule_handshake = 0;
                 int handshake_done_now = 0;
                 int already_fin = 0;
+                libp2p_stream_t *stream_for_readable = NULL;
                 pthread_mutex_lock(&st->lock);
                 /* Check if FIN was already received - if so, a duplicate FIN event
                  * with no data is a late-arriving notification that should be ignored
@@ -1926,17 +1921,17 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                     st->handshake_running = 1;
                     schedule_handshake = 1;
                 }
+                /* Capture stream pointer while holding lock to avoid race condition */
+                stream_for_readable = st->stream;
                 pthread_mutex_unlock(&st->lock);
 
                 if (schedule_handshake)
-                {
                     quic_stream_start_handshake(mx, st);
-                }
 
                 /* Only schedule readable if there's new data or this is the first FIN.
                  * A duplicate FIN with no data should not trigger a spurious readable event. */
-                if (handshake_done_now && st->stream && (length > 0 || !already_fin))
-                    quic_stream_schedule_readable(st);
+                if (handshake_done_now && stream_for_readable && (length > 0 || !already_fin))
+                    quic_stream_schedule_readable(st, mx, stream_for_readable);
             }
             else
             {
@@ -1948,10 +1943,13 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                 st = quic_accept_inbound_stream(mx, stream_id);
             if (st)
             {
+                libp2p_stream_t *stream_for_readable = NULL;
                 pthread_mutex_lock(&st->lock);
                 quic_stream_mark_reset(st);
+                /* Capture stream pointer while holding lock to avoid race condition */
+                stream_for_readable = st->stream;
                 pthread_mutex_unlock(&st->lock);
-                quic_stream_schedule_readable(st);
+                quic_stream_schedule_readable(st, mx, stream_for_readable);
             }
             else
             {
