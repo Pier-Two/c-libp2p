@@ -549,7 +549,14 @@ static void quic_transport_session_close(libp2p_quic_session_t *session)
                 remote_err,
                 picoquic_error_name(remote_err),
                 app_err);
+        /* Acquire quic_mtx to synchronize with the socket loop thread.
+         * picoquic_close modifies internal data structures that are not thread-safe. */
+        pthread_mutex_t *mtx = libp2p__quic_session_get_quic_mtx(session);
+        if (mtx)
+            pthread_mutex_lock(mtx);
         (void)picoquic_close(cnx, 0);
+        if (mtx)
+            pthread_mutex_unlock(mtx);
         libp2p__quic_session_wake(session);
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
         uint64_t elapsed = 0;

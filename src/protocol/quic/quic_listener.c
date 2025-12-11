@@ -473,12 +473,16 @@ static libp2p_listener_err_t quic_listener_close(libp2p_listener_t *l)
     if (ctx->quic)
     {
         picoquic_set_verify_certificate_callback(ctx->quic, NULL, NULL);
+        /* Acquire quic_mtx to synchronize with the socket loop thread.
+         * picoquic_close and iteration over connections modify internal data structures. */
+        pthread_mutex_lock(&ctx->quic_mtx);
         picoquic_cnx_t *cnx = picoquic_get_first_cnx(ctx->quic);
         while (cnx)
         {
             picoquic_close(cnx, 0);
             cnx = picoquic_get_next_cnx(cnx);
         }
+        pthread_mutex_unlock(&ctx->quic_mtx);
     }
 
     quic_listener_wake(ctx);
@@ -550,7 +554,16 @@ static void quic_listener_session_free(libp2p_quic_session_t *session)
         return;
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
     if (cnx)
+    {
+        /* Acquire quic_mtx to synchronize with the socket loop thread.
+         * picoquic_delete_cnx removes from wake list (splay tree) which is not thread-safe. */
+        pthread_mutex_t *mtx = libp2p__quic_session_get_quic_mtx(session);
+        if (mtx)
+            pthread_mutex_lock(mtx);
         picoquic_delete_cnx(cnx);
+        if (mtx)
+            pthread_mutex_unlock(mtx);
+    }
     libp2p__quic_session_release(session);
 }
 
