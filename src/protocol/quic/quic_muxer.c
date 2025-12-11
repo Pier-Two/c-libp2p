@@ -2026,6 +2026,12 @@ static void quic_session_flush_pending(libp2p_quic_session_t *session, quic_muxe
 {
     if (!session)
         return;
+    /* Maintain consistent lock ordering with the socket-loop callbacks: always
+     * acquire quic_mtx before session->lock to avoid deadlock. */
+    pthread_mutex_t *quic_mtx = session->quic_mtx;
+    if (quic_mtx)
+        pthread_mutex_lock(quic_mtx);
+
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     int mx_from_session = 0;
     pthread_mutex_lock(&session->lock);
@@ -2038,19 +2044,17 @@ static void quic_session_flush_pending(libp2p_quic_session_t *session, quic_muxe
         quic_muxer_ctx_retain(mx);
     quic_session_event_t *pending = quic_session_pending_detach_locked(session);
     pthread_mutex_unlock(&session->lock);
+
     if (pending)
     {
-        /* Acquire quic_mtx before replaying events - the dispatch functions may modify
-         * picoquic's internal data structures (splay trees, streams, etc.) which require
-         * synchronization with the socket loop thread. */
-        if (session->quic_mtx)
-            pthread_mutex_lock(session->quic_mtx);
         quic_session_replay_events(session, mx, cnx, pending);
-        if (session->quic_mtx)
-            pthread_mutex_unlock(session->quic_mtx);
     }
+
     if (mx && mx_from_session)
         quic_muxer_ctx_release(mx);
+
+    if (quic_mtx)
+        pthread_mutex_unlock(quic_mtx);
 }
 
 static int quic_session_callback(picoquic_cnx_t *cnx,
