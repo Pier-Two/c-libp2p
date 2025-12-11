@@ -1316,7 +1316,8 @@ static void quic_stream_ctx_release(quic_stream_ctx_t *ctx)
 {
     if (!ctx)
         return;
-    if (atomic_fetch_sub_explicit(&ctx->refcnt, 1U, memory_order_acq_rel) == 1U)
+    unsigned int old = atomic_fetch_sub_explicit(&ctx->refcnt, 1U, memory_order_acq_rel);
+    if (old == 1U)
         quic_stream_ctx_destroy(ctx);
 }
 
@@ -1331,7 +1332,8 @@ static void quic_muxer_ctx_release(quic_muxer_ctx_t *ctx)
 {
     if (!ctx)
         return;
-    if (atomic_fetch_sub_explicit(&ctx->refcnt, 1U, memory_order_acq_rel) == 1U)
+    unsigned int old = atomic_fetch_sub_explicit(&ctx->refcnt, 1U, memory_order_acq_rel);
+    if (old == 1U)
         free(ctx);
 }
 
@@ -1487,6 +1489,11 @@ void libp2p__quic_session_set_quic_mtx(libp2p_quic_session_t *session, pthread_m
         pthread_mutex_destroy(&session->quic_mtx_storage);
         session->quic_mtx = mtx;
     }
+}
+
+pthread_mutex_t *libp2p__quic_session_get_quic_mtx(libp2p_quic_session_t *session)
+{
+    return session ? session->quic_mtx : NULL;
 }
 
 picoquic_cnx_t *libp2p__quic_session_native(libp2p_quic_session_t *session)
@@ -1725,8 +1732,12 @@ static void quic_stream_handshake_exec(void *arg)
         if (session)
         {
             picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
-            if (cnx)
+            if (cnx && session->quic_mtx)
+            {
+                pthread_mutex_lock(session->quic_mtx);
                 picoquic_set_app_stream_ctx(cnx, st->stream_id, NULL);
+                pthread_mutex_unlock(session->quic_mtx);
+            }
         }
         libp2p_stream_t *stream = st->stream;
         int host_tearing_down = 0;
@@ -2028,7 +2039,16 @@ static void quic_session_flush_pending(libp2p_quic_session_t *session, quic_muxe
     quic_session_event_t *pending = quic_session_pending_detach_locked(session);
     pthread_mutex_unlock(&session->lock);
     if (pending)
+    {
+        /* Acquire quic_mtx before replaying events - the dispatch functions may modify
+         * picoquic's internal data structures (splay trees, streams, etc.) which require
+         * synchronization with the socket loop thread. */
+        if (session->quic_mtx)
+            pthread_mutex_lock(session->quic_mtx);
         quic_session_replay_events(session, mx, cnx, pending);
+        if (session->quic_mtx)
+            pthread_mutex_unlock(session->quic_mtx);
+    }
     if (mx && mx_from_session)
         quic_muxer_ctx_release(mx);
 }
@@ -2257,7 +2277,14 @@ static int quic_stream_backend_close(void *io_ctx)
         return LIBP2P_ERR_CLOSED;
     }
     pthread_mutex_lock(&mx->write_mtx);
+    /* Acquire quic_mtx to synchronize with the socket loop thread.
+     * This prevents concurrent access to picoquic's internal data structures
+     * (especially the cnx_wake_tree splay tree) which are not thread-safe. */
+    if (session->quic_mtx)
+        pthread_mutex_lock(session->quic_mtx);
     int rc = picoquic_add_to_stream(cnx, st->stream_id, NULL, 0, 1);
+    if (session->quic_mtx)
+        pthread_mutex_unlock(session->quic_mtx);
     pthread_mutex_unlock(&mx->write_mtx);
     libp2p__quic_session_wake(session);
     quic_muxer_release_session(session);
@@ -2299,7 +2326,14 @@ static int quic_stream_backend_reset(void *io_ctx)
         return LIBP2P_ERR_CLOSED;
     }
     pthread_mutex_lock(&mx->write_mtx);
+    /* Acquire quic_mtx to synchronize with the socket loop thread.
+     * This prevents concurrent access to picoquic's internal data structures
+     * (especially the cnx_wake_tree splay tree) which are not thread-safe. */
+    if (session->quic_mtx)
+        pthread_mutex_lock(session->quic_mtx);
     int rc = picoquic_reset_stream(cnx, st->stream_id, 0);
+    if (session->quic_mtx)
+        pthread_mutex_unlock(session->quic_mtx);
     pthread_mutex_unlock(&mx->write_mtx);
     libp2p__quic_session_wake(session);
     quic_muxer_release_session(session);
@@ -2465,6 +2499,9 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
         return NULL;
     }
 
+    /* NOTE: Do NOT lock quic_mtx here - this function is called from the dispatch callback
+     * which runs inside the socket loop. The socket loop already holds quic_mtx via lock_fn.
+     * Trying to lock here causes a deadlock. */
     picoquic_set_app_stream_ctx(cnx, stream_id, st);
 
     libp2p_host_t *host = atomic_load_explicit(&mx->host, memory_order_acquire);
@@ -2474,6 +2511,7 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
         pthread_mutex_lock(&mx->lock);
         quic_muxer_remove_stream(mx, st);
         pthread_mutex_unlock(&mx->lock);
+        /* NOTE: No quic_mtx lock - already held by socket loop */
         picoquic_set_app_stream_ctx(cnx, stream_id, NULL);
         quic_stream_ctx_release(st);
         quic_muxer_release_session(session);
@@ -2558,13 +2596,21 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
     quic_muxer_append_stream(ctx, st);
     pthread_mutex_unlock(&ctx->lock);
 
+    if (session->quic_mtx)
+        pthread_mutex_lock(session->quic_mtx);
     picoquic_set_app_stream_ctx(cnx, stream_id, st);
+    if (session->quic_mtx)
+        pthread_mutex_unlock(session->quic_mtx);
 
     libp2p_host_t *host = atomic_load_explicit(&ctx->host, memory_order_acquire);
     libp2p_stream_t *stream = libp2p_stream_from_ops(host, st, &QUIC_STREAM_OPS, NULL, 1, NULL);
     if (!stream)
     {
+        if (session->quic_mtx)
+            pthread_mutex_lock(session->quic_mtx);
         picoquic_set_app_stream_ctx(cnx, stream_id, NULL);
+        if (session->quic_mtx)
+            pthread_mutex_unlock(session->quic_mtx);
         pthread_mutex_lock(&ctx->lock);
         quic_muxer_remove_stream(ctx, st);
         pthread_mutex_unlock(&ctx->lock);
@@ -2724,7 +2770,15 @@ libp2p_muxer_t *libp2p_quic_muxer_new(struct libp2p_host *host,
     quic_session_flush_pending(session, ctx);
     cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (cnx)
+    {
+        /* Acquire quic_mtx before mark_active_stream - it may call reinsert_by_wake_time
+         * which modifies the splay tree. Must be synchronized with socket loop thread. */
+        if (session->quic_mtx)
+            pthread_mutex_lock(session->quic_mtx);
         (void)picoquic_mark_active_stream(cnx, 0, 1, NULL);
+        if (session->quic_mtx)
+            pthread_mutex_unlock(session->quic_mtx);
+    }
 
     if (libp2p__quic_session_start_loop(session, ctx->local, ctx->remote) != 0)
         goto fail_with_session;

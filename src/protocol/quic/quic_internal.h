@@ -67,6 +67,11 @@ void libp2p__quic_session_set_host(libp2p_quic_session_t *session, struct libp2p
  * this allows them to use the listener's mutex instead of their own. */
 void libp2p__quic_session_set_quic_mtx(libp2p_quic_session_t *session, pthread_mutex_t *mtx);
 
+/* Get the quic mutex for this session.
+ * Returns the active mutex (own or listener's) that should be used to protect
+ * picoquic API calls that manipulate internal data structures. */
+pthread_mutex_t *libp2p__quic_session_get_quic_mtx(libp2p_quic_session_t *session);
+
 picoquic_quic_t *libp2p__quic_session_quic(libp2p_quic_session_t *session);
 
 picoquic_cnx_t *libp2p__quic_session_native(libp2p_quic_session_t *session);

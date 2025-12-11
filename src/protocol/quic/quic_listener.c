@@ -537,7 +537,11 @@ static void quic_listener_session_close(libp2p_quic_session_t *session)
         return;
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
     if (cnx)
+    {
+        /* NOTE: Do NOT acquire quic_mtx here - the socket loop already holds it via lock_fn
+         * callback. Trying to lock here causes a deadlock. */
         (void)picoquic_close(cnx, 0);
+    }
 }
 
 static void quic_listener_session_free(libp2p_quic_session_t *session)
@@ -714,7 +718,6 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
             picoquic_enable_keep_alive(cnx, 0);
 
             libp2p_conn_t *conn = NULL;
-
             if (quic_listener_make_conn(ctx, cnx, &conn) == 0 && conn)
             {
                 pthread_mutex_lock(&ctx->lock);
@@ -725,7 +728,6 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
             {
                 quic_listener_destroy_connection(conn);
             }
-
             break;
         }
         case picoquic_callback_close:
