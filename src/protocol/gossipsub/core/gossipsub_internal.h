@@ -104,6 +104,7 @@ typedef struct gossipsub_peer_entry
     int connected;
     int explicit_dial_timer_id;
     libp2p_stream_t *stream;
+    libp2p_stream_t *last_detached_stream; /* Used to detect stale stream callbacks */
     int outbound_stream;
     uint64_t last_stream_dir_update_ms;
     gossipsub_sendq_item_t *sendq_head;

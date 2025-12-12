@@ -2557,6 +2557,12 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
     if (!session)
         return LIBP2P_MUXER_ERR_INTERNAL;
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
+    if (!cnx)
+    {
+        /* Connection was closed/destroyed - cannot open new streams */
+        quic_muxer_release_session(session);
+        return LIBP2P_MUXER_ERR_INTERNAL;
+    }
     uint64_t stream_id = picoquic_get_next_local_stream_id(cnx, 0);
     if (stream_id == UINT64_MAX)
     {

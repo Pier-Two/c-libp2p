@@ -9,6 +9,35 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <signal.h>
+#include <execinfo.h>
+
+/* Signal handler for crash diagnostics */
+static void crash_signal_handler(int sig)
+{
+    const char *name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGABRT ? "SIGABRT" : "SIGNAL";
+    fprintf(stderr, "\n[CRASH] Caught %s (%d)!\n", name, sig);
+    fflush(stderr);
+
+    /* Print backtrace */
+    void *bt[32];
+    int nframes = backtrace(bt, 32);
+    fprintf(stderr, "[CRASH] Backtrace (%d frames):\n", nframes);
+    backtrace_symbols_fd(bt, nframes, STDERR_FILENO);
+    fflush(stderr);
+
+    /* Re-raise to get core dump */
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void install_crash_handlers(void)
+{
+    signal(SIGSEGV, crash_signal_handler);
+    signal(SIGABRT, crash_signal_handler);
+    signal(SIGBUS, crash_signal_handler);
+}
 
 #if defined(__linux__)
 #define RT_USE_EPOLL 1
@@ -400,6 +429,15 @@ int libp2p_runtime_run(libp2p_runtime_t *rt)
 {
     if (!rt)
         return -1;
+
+    /* Install crash signal handlers for debugging */
+    static int handlers_installed = 0;
+    if (!handlers_installed)
+    {
+        install_crash_handlers();
+        handlers_installed = 1;
+    }
+
     /* Do not forcibly clear the stop flag here. A concurrent caller may
        have already requested a stop (e.g., during teardown). Clearing it
        would race and potentially lose the stop, causing hangs. The runtime

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "libp2p/runtime.h"
 #include "gossipsub_peer.h"

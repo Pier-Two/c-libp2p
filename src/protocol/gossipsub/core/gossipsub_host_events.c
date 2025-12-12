@@ -4,6 +4,7 @@
 
 #include "gossipsub_host_events.h"
 
+#include <stdio.h>   /* for printf, fflush */
 #include <stdlib.h>  /* for malloc, calloc, free */
 #include <string.h>  /* for memcpy */
 
@@ -122,7 +123,7 @@ void gossipsub_on_stream_open(struct libp2p_stream *s, void *user_data)
 
     const char *protocol_id = libp2p_stream_protocol_id(s);
     int is_initiator = libp2p_stream_is_initiator(s);
-    
+
     pthread_mutex_lock(&gs->lock);
     const peer_id_t *remote = libp2p_stream_remote_peer(s);
     char peer_buf[128] = {0};
@@ -132,12 +133,21 @@ void gossipsub_on_stream_open(struct libp2p_stream *s, void *user_data)
         gossipsub_peer_entry_t *entry = gossipsub_peer_find_or_add_locked(gs, remote);
         if (entry)
         {
+            /* Check for stale stream callback - ignore if this stream was recently detached */
+            if (entry->last_detached_stream == s)
+            {
+                LP_LOGD(GOSSIPSUB_MODULE,
+                        "stream_open ignoring stale callback peer=%s stream=%p",
+                        peer_buf, (void*)s);
+                pthread_mutex_unlock(&gs->lock);
+                return;
+            }
             entry->connected = 1;
             gossipsub_peer_attach_stream_locked(gs, entry, s);
         }
     }
     pthread_mutex_unlock(&gs->lock);
-    LP_LOGD(GOSSIPSUB_MODULE, 
+    LP_LOGD(GOSSIPSUB_MODULE,
             "gossipsub stream opened peer=%s protocol=%s initiator=%d",
             peer_buf[0] ? peer_buf : "(unknown)",
             protocol_id ? protocol_id : "(null)",
@@ -424,9 +434,9 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
             char peer_buf[128] = {0};
             if (evt->u.conn_opened.peer)
                 peer_id_to_string(evt->u.conn_opened.peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-            LP_LOGI(GOSSIPSUB_MODULE, "CONN_OPENED event received peer=%s inbound=%d", 
+            LP_LOGI(GOSSIPSUB_MODULE, "CONN_OPENED event received peer=%s inbound=%d",
                     peer_buf[0] ? peer_buf : "(null)", evt->u.conn_opened.inbound ? 1 : 0);
-            
+
             if (evt->u.conn_opened.peer)
             {
                 pthread_mutex_lock(&gs->lock);
@@ -434,7 +444,7 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
                 if (entry)
                     entry->connected = 1;
                 pthread_mutex_unlock(&gs->lock);
-                
+
                 /* Open an outbound gossipsub stream to the peer.
                  * This ensures we send our subscriptions on a stream where the remote
                  * peer is the responder, which rust-libp2p expects for receiving messages.
@@ -445,6 +455,7 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
             break;
         }
         case LIBP2P_EVT_CONN_CLOSED:
+        {
             if (evt->u.conn_closed.peer)
             {
                 pthread_mutex_lock(&gs->lock);
@@ -459,6 +470,7 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
             }
             LP_LOGD(GOSSIPSUB_MODULE, "connection closed (reason=%d)", evt->u.conn_closed.reason);
             break;
+        }
         default:
             break;
     }

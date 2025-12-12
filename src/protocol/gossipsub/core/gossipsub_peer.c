@@ -293,6 +293,8 @@ void gossipsub_peer_detach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
             entry->outbound_stream);
         libp2p_stream_on_writable(entry->stream, NULL, NULL);
         libp2p_stream_set_user_data(entry->stream, NULL);
+        /* Track the detached stream to detect stale callbacks */
+        entry->last_detached_stream = entry->stream;
         entry->stream = NULL;
         entry->write_backpressure = 0;
         libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
@@ -386,6 +388,8 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
 
     entry->stream = s;
     entry->write_backpressure = 0;
+    /* Clear the stale stream tracker since we have a new valid stream */
+    entry->last_detached_stream = NULL;
     libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
     char peer_buf[128];
     const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
@@ -658,10 +662,10 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
 {
     if (!gs || !entry)
         return LIBP2P_ERR_NULL_PTR;
-    
+
     char peer_buf[128];
     const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
-    
+
     if (!entry->stream)
     {
         /* For explicit peers, we'll reconnect automatically, so return AGAIN to retry later.
@@ -704,7 +708,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
 
     size_t frames_written = 0;
     size_t total_bytes_written = 0;
-    
+
     while (entry->stream && entry->sendq_head)
     {
         gossipsub_sendq_item_t *item = entry->sendq_head;
@@ -940,6 +944,15 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
 {
     if (!gs || !entry || !frame)
         return LIBP2P_ERR_NULL_PTR;
+
+    char peer_buf_enq[128];
+    const char *peer_repr_enq = "-";
+    if (entry->peer)
+    {
+        int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf_enq, sizeof(peer_buf_enq));
+        if (rc > 0)
+            peer_repr_enq = peer_buf_enq;
+    }
 
     libp2p_log_level_t log_level = (libp2p_log_is_enabled(LIBP2P_LOG_TRACE)
                                         ? LIBP2P_LOG_TRACE
