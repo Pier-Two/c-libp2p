@@ -784,6 +784,18 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                     peer_repr,
                     n,
                     item ? (item->header_len - item->header_sent) : 0);
+            /* If the stream reports a terminal condition, mark the peer as disconnected.
+             *
+             * Without this, the peer can remain "connected" (set by CONN_OPENED) even after
+             * its pubsub stream dies, causing propagate_frame() to keep enqueueing messages
+             * for a dead peer and repeatedly re-triggering flush failures.
+             *
+             * rc is a libp2p_err_t returned via libp2p_stream_write().
+             */
+            if (n == LIBP2P_ERR_CLOSED || n == LIBP2P_ERR_RESET || n == LIBP2P_ERR_EOF)
+            {
+                entry->connected = 0;
+            }
             gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
             /* Clear sendq to prevent infinite retry loops when stream is closed */
             gossipsub_peer_sendq_clear(entry);
@@ -822,6 +834,11 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                     "flush WRITE_PAYLOAD_FAIL peer=%s rc=%zd",
                     peer_repr,
                     n);
+            /* See WRITE_HEADER_FAIL above for rationale */
+            if (n == LIBP2P_ERR_CLOSED || n == LIBP2P_ERR_RESET || n == LIBP2P_ERR_EOF)
+            {
+                entry->connected = 0;
+            }
             gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
             /* Clear sendq to prevent infinite retry loops when stream is closed */
             gossipsub_peer_sendq_clear(entry);
