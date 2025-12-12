@@ -296,6 +296,21 @@ void gossipsub_peer_detach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
         entry->stream = NULL;
         entry->write_backpressure = 0;
         libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
+        /* Stream used for writing is gone: stop treating the peer as connected for
+         * propagation, and drop any queued frames to avoid infinite retry / OOM
+         * when a peer goes offline. */
+        entry->connected = 0;
+        if (entry->sendq_head)
+        {
+            size_t dropped = 0;
+            for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
+                dropped++;
+            LP_LOGW(GOSSIPSUB_MODULE,
+                    "peer_detach_stream dropping %zu queued messages peer=%s",
+                    dropped,
+                    peer_repr);
+            gossipsub_peer_sendq_clear(entry);
+        }
         if (entry->explicit_peering)
             gossipsub_peer_explicit_schedule_dial_locked(gs, entry, 0);
     }

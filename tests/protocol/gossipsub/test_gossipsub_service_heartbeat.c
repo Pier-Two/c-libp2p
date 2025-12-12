@@ -11,6 +11,11 @@ typedef struct gossipsub_test_closed_stream_ctx
     int dummy;
 } gossipsub_test_closed_stream_ctx_t;
 
+typedef struct gossipsub_test_again_stream_ctx
+{
+    int dummy;
+} gossipsub_test_again_stream_ctx_t;
+
 static ssize_t gossipsub_test_closed_stream_read(void *io_ctx, void *buf, size_t len)
 {
     (void)io_ctx;
@@ -34,6 +39,33 @@ static int gossipsub_test_closed_stream_close(void *io_ctx)
 }
 
 static void gossipsub_test_closed_stream_free_ctx(void *io_ctx)
+{
+    free(io_ctx);
+}
+
+static ssize_t gossipsub_test_again_stream_read(void *io_ctx, void *buf, size_t len)
+{
+    (void)io_ctx;
+    (void)buf;
+    (void)len;
+    return LIBP2P_ERR_AGAIN;
+}
+
+static ssize_t gossipsub_test_again_stream_write(void *io_ctx, const void *buf, size_t len)
+{
+    (void)io_ctx;
+    (void)buf;
+    (void)len;
+    return LIBP2P_ERR_AGAIN;
+}
+
+static int gossipsub_test_again_stream_close(void *io_ctx)
+{
+    (void)io_ctx;
+    return 0;
+}
+
+static void gossipsub_test_again_stream_free_ctx(void *io_ctx)
 {
     free(io_ctx);
 }
@@ -146,6 +178,135 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
                 libp2p_stream_free(s);
             }
             /* If stream creation failed, free what we own. */
+            if (!s)
+            {
+                if (ctx)
+                    free(ctx);
+                if (remote)
+                {
+                    if (remote->bytes)
+                        peer_id_destroy(remote);
+                    free(remote);
+                }
+            }
+        }
+
+        if (peer_ok)
+            peer_id_destroy(&peer);
+    }
+
+    {
+        /* Regression: when a peer's current writing stream closes, drop queued
+         * frames and mark disconnected so we don't keep retrying writes. */
+        const char *peer_str = "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E";
+        peer_id_t peer = {0};
+        int peer_ok = (peer_id_create_from_string(peer_str, &peer) == PEER_ID_SUCCESS);
+        print_result("gossipsub_stream_close_peer_id", peer_ok);
+        if (!peer_ok)
+            failures++;
+
+        libp2p_stream_t *s = NULL;
+        if (peer_ok)
+        {
+            peer_id_t *remote = (peer_id_t *)calloc(1, sizeof(*remote));
+            int remote_ok = (remote && peer_id_create_from_string(peer_str, remote) == PEER_ID_SUCCESS);
+            print_result("gossipsub_stream_close_remote_peer_alloc", remote_ok);
+            if (!remote_ok)
+                failures++;
+
+            gossipsub_test_again_stream_ctx_t *ctx = (gossipsub_test_again_stream_ctx_t *)calloc(1, sizeof(*ctx));
+            int ctx_ok = (ctx != NULL);
+            print_result("gossipsub_stream_close_ctx_alloc", ctx_ok);
+            if (!ctx_ok)
+                failures++;
+
+            if (remote_ok && ctx_ok)
+            {
+                libp2p_stream_backend_ops_t ops;
+                memset(&ops, 0, sizeof(ops));
+                ops.read = gossipsub_test_again_stream_read;
+                ops.write = gossipsub_test_again_stream_write;
+                ops.close = gossipsub_test_again_stream_close;
+                ops.free_ctx = gossipsub_test_again_stream_free_ctx;
+
+                s = libp2p_stream_from_ops(env->host, ctx, &ops, "/meshsub/1.0.0", 1 /* initiator */, remote);
+                int stream_ok = (s != NULL);
+                print_result("gossipsub_stream_close_stream_created", stream_ok);
+                if (!stream_ok)
+                    failures++;
+
+                if (stream_ok)
+                {
+                    gossipsub_on_stream_open(s, gs);
+                    err = libp2p_gossipsub__topic_mesh_add_peer(gs, "test/topic", &peer, 1);
+                    int mesh_add_ok = (err == LIBP2P_ERR_OK);
+                    print_result("gossipsub_stream_close_mesh_add", mesh_add_ok);
+                    if (!mesh_add_ok)
+                        failures++;
+
+                    /* Clear any subscription frames queued during open. */
+                    (void)libp2p_gossipsub__peer_clear_sendq(gs, &peer);
+                    usleep(2000);
+
+                    const uint8_t payload = 0x43;
+                    libp2p_gossipsub_message_t msg = {
+                        .topic = {
+                            .struct_size = sizeof(msg.topic),
+                            .topic = "test/topic",
+                        },
+                        .data = &payload,
+                        .data_len = 1,
+                        .from = NULL,
+                        .seqno = NULL,
+                        .seqno_len = 0,
+                        .raw_message = NULL,
+                        .raw_message_len = 0,
+                    };
+
+                    err = libp2p_gossipsub_publish(gs, &msg);
+                    int publish_ok = (err == LIBP2P_ERR_OK);
+                    print_result("gossipsub_stream_close_publish_ok", publish_ok);
+                    if (!publish_ok)
+                        failures++;
+
+                    usleep(2000);
+                    size_t qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+                    int queued_ok = (qlen > 0);
+                    print_result("gossipsub_stream_close_has_queue_before_close", queued_ok);
+                    if (!queued_ok)
+                        failures++;
+
+                    /* Simulate close of current writing stream. */
+                    gossipsub_on_stream_close(s, gs);
+
+                    usleep(2000);
+                    qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+                    int cleared_ok = (qlen == 0);
+                    print_result("gossipsub_stream_close_queue_cleared", cleared_ok);
+                    if (!cleared_ok)
+                        failures++;
+
+                    /* Publish again; disconnected peer must not be re-enqueued. */
+                    err = libp2p_gossipsub_publish(gs, &msg);
+                    publish_ok = (err == LIBP2P_ERR_OK);
+                    print_result("gossipsub_stream_close_publish_after_close_ok", publish_ok);
+                    if (!publish_ok)
+                        failures++;
+
+                    usleep(2000);
+                    qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+                    int no_enqueue_ok = (qlen == 0);
+                    print_result("gossipsub_stream_close_no_enqueue_after_close", no_enqueue_ok);
+                    if (!no_enqueue_ok)
+                        failures++;
+                }
+            }
+
+            if (s)
+            {
+                (void)libp2p_stream_close(s);
+                libp2p_stream_free(s);
+            }
             if (!s)
             {
                 if (ctx)
