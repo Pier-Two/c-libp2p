@@ -272,7 +272,9 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
         }
         if (n == LIBP2P_ERR_AGAIN)
         {
-            /* Try again; deadline blocks until writable. */
+            /* Sleep briefly to avoid busy-spinning when stream doesn't block internally. */
+            struct timespec ts = {0, 10000000}; /* 10ms */
+            nanosleep(&ts, NULL);
             continue;
         }
         const peer_id_t *p = libp2p_stream_remote_peer(s);
@@ -327,7 +329,9 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
         if (n == LIBP2P_ERR_AGAIN)
         {
             LP_LOGD("PING", "read would-block stream=%p", (void *)s);
-            /* Try again; deadline blocks until readable. */
+            /* Sleep briefly to avoid busy-spinning when stream doesn't block internally. */
+            struct timespec ts = {0, 10000000}; /* 10ms */
+            nanosleep(&ts, NULL);
             continue;
         }
         if (n == 0 || n == LIBP2P_ERR_EOF || n == LIBP2P_ERR_CLOSED || n == LIBP2P_ERR_RESET || n == LIBP2P_ERR_NULL_PTR)

@@ -14,6 +14,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/multicodec/multicodec_codes.h"
@@ -384,13 +385,36 @@ static libp2p_listener_err_t quic_listener_accept(libp2p_listener_t *l, libp2p_c
     if (!ctx)
         return LIBP2P_LISTENER_ERR_INTERNAL;
 
-    libp2p_conn_t *conn = quic_listener_queue_pop(ctx);
-    if (!conn)
+    pthread_mutex_lock(&ctx->lock);
+    while (!ctx->queue_head)
     {
         if (atomic_load_explicit(&ctx->closing, memory_order_acquire))
+        {
+            pthread_mutex_unlock(&ctx->lock);
             return LIBP2P_LISTENER_ERR_CLOSED;
-        return LIBP2P_LISTENER_ERR_AGAIN;
+        }
+        /* Block until a connection is queued or listener is closing.
+         * Use a 100ms timeout to periodically check the closing flag. */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 100000000; /* 100ms */
+        if (ts.tv_nsec >= 1000000000)
+        {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000;
+        }
+        (void)pthread_cond_timedwait(&ctx->cond, &ctx->lock, &ts);
     }
+
+    /* Pop from queue while still holding the lock */
+    quic_listener_conn_node_t *node = ctx->queue_head;
+    ctx->queue_head = node->next;
+    if (!ctx->queue_head)
+        ctx->queue_tail = NULL;
+    pthread_mutex_unlock(&ctx->lock);
+
+    libp2p_conn_t *conn = node->conn;
+    free(node);
 
     *out_conn = conn;
     return LIBP2P_LISTENER_OK;
