@@ -274,16 +274,15 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
     gossipsub_outbound_dial_ctx_t *ctx = (gossipsub_outbound_dial_ctx_t *)user_data;
     if (!ctx)
         return;
-    
+
     libp2p_gossipsub_t *gs = ctx->gs;
-    if (!gs)
+    if (!gs || !gs->host || !gs->started)
     {
         if (ctx->peer.bytes)
             peer_id_destroy(&ctx->peer);
         free(ctx);
         return;
     }
-    
     char peer_buf[128] = {0};
     peer_id_to_string(&ctx->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
     
@@ -335,8 +334,8 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
     char peer_buf[128] = {0};
     if (peer)
         peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-    
-    if (!gs || !peer || !gs->host)
+
+    if (!gs || !peer || !gs->host || !gs->started)
     {
         LP_LOGW(GOSSIPSUB_MODULE, "try_open_outbound_stream early return: gs=%p peer=%p host=%p",
                 (void*)gs, (void*)peer, gs ? (void*)gs->host : NULL);

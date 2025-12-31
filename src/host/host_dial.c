@@ -1586,6 +1586,21 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
         LP_LOGW("STREAM_ASYNC", "[async_entry] null ptr check failed");
         return LIBP2P_ERR_NULL_PTR;
     }
+    /* Reject async dials while the host is stopping to avoid UAF races. */
+    if (!atomic_load_explicit(&host->running, memory_order_acquire))
+    {
+        LP_LOGW("STREAM_ASYNC", "[async_entry] host not running; rejecting");
+        return LIBP2P_ERR_CLOSED;
+    }
+    int tearing_down = 0;
+    pthread_mutex_lock(&host->mtx);
+    tearing_down = host->tearing_down;
+    pthread_mutex_unlock(&host->mtx);
+    if (tearing_down)
+    {
+        LP_LOGW("STREAM_ASYNC", "[async_entry] host tearing down; rejecting");
+        return LIBP2P_ERR_CLOSED;
+    }
     open_async_ctx_t *ctx = (open_async_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
         return LIBP2P_ERR_INTERNAL;

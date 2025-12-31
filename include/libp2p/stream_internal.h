@@ -61,6 +61,8 @@ int libp2p__stream_release_async(libp2p_stream_t *s);
 typedef void (*libp2p_stream_cleanup_fn)(void *ctx, libp2p_stream_t *s);
 void libp2p__stream_set_cleanup(libp2p_stream_t *s, libp2p_stream_cleanup_fn fn, void *ctx);
 void libp2p__stream_mark_deferred(libp2p_stream_t *s);
+int libp2p__stream_get_parent(libp2p_stream_t *s, libp2p_conn_t **out_conn, struct libp2p_muxer **out_mx, int *out_owns);
+void libp2p__stream_disown_parent(libp2p_stream_t *s);
 
 #include <stddef.h>
 

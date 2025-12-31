@@ -818,6 +818,9 @@ void libp2p_gossipsub_stop(libp2p_gossipsub_t *gs)
         pthread_join(gs->runtime_thread, NULL);
         gs->runtime_thread_started = 0;
     }
+
+    /* Prevent any late callbacks from dereferencing a freed host. */
+    gs->host = NULL;
 }
 
 void libp2p_gossipsub_free(libp2p_gossipsub_t *gs)

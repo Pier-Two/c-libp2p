@@ -667,6 +667,30 @@ void libp2p__stream_mark_deferred(libp2p_stream_t *s)
     }
 }
 
+int libp2p__stream_get_parent(libp2p_stream_t *s, libp2p_conn_t **out_conn, struct libp2p_muxer **out_mx, int *out_owns)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return 0;
+    if (out_conn)
+        *out_conn = st->parent_conn;
+    if (out_mx)
+        *out_mx = st->parent_mx;
+    if (out_owns)
+        *out_owns = st->owns_parent;
+    return 1;
+}
+
+void libp2p__stream_disown_parent(libp2p_stream_t *s)
+{
+    stream_stub_t *st = S(s);
+    if (!st)
+        return;
+    st->owns_parent = 0;
+    st->parent_conn = NULL;
+    st->parent_mx = NULL;
+}
+
 int libp2p__stream_retain_async(libp2p_stream_t *s)
 {
     stream_stub_t *st = S(s);

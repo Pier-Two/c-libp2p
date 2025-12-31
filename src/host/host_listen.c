@@ -125,6 +125,16 @@ static void detach_listeners(libp2p_host_t *host, listener_node_t ***out_arr, si
     *out_head = head;
 }
 
+static int ptr_list_contains(void *const *arr, size_t count, const void *ptr)
+{
+    if (!arr || !ptr || count == 0)
+        return 0;
+    for (size_t i = 0; i < count; i++)
+        if (arr[i] == ptr)
+            return 1;
+    return 0;
+}
+
 /* Free per-session yamux callback context and any retained tracking nodes. */
 static void yamux_cb_ctx_free(yamux_cb_ctx_t *c)
 {
@@ -1549,18 +1559,43 @@ int libp2p_host_stop(libp2p_host_t *host)
     size_t yamux_cb_count = 0, yamux_cb_cap = 0;
     libp2p_conn_t **deferred_conns = NULL;
     size_t deferred_conn_count = 0, deferred_conn_cap = 0;
-    /* Idempotent: if already stopped, return immediately. */
-    if (!atomic_load_explicit(&host->running, memory_order_acquire))
+    libp2p_muxer_t **freed_muxers = NULL;
+    size_t freed_muxer_count = 0, freed_muxer_cap = 0;
+    libp2p_conn_t **session_conns = NULL;
+    size_t session_conn_count = 0;
+    /* Idempotent: ensure only one caller performs teardown. */
+    int was_running = atomic_exchange_explicit(&host->running, 0, memory_order_acq_rel);
+    if (!was_running)
         return 0;
     /* Enter teardown mode: event dispatch enqueue becomes non-blocking to
      * prevent subscriber stalls from delaying shutdown. */
     pthread_mutex_lock(&host->mtx);
     host->tearing_down = 1;
     pthread_mutex_unlock(&host->mtx);
-    atomic_store_explicit(&host->running, 0, memory_order_release);
     /* Stop internal publish service to avoid new async work during teardown */
     libp2p_publish_service_stop(host);
     LP_LOGD("HOST_STOP", "unsubscribed internal subs; closing active streams");
+    /* Snapshot session connections so streams can disown parents managed by sessions. */
+    {
+        pthread_mutex_lock(&host->mtx);
+        size_t scount = 0;
+        for (session_node_t *sn = host->sessions; sn; sn = sn->next)
+            if (sn->conn)
+                scount++;
+        if (scount > 0)
+        {
+            session_conns = (libp2p_conn_t **)calloc(scount, sizeof(*session_conns));
+            if (session_conns)
+            {
+                size_t si = 0;
+                for (session_node_t *sn = host->sessions; sn && si < scount; sn = sn->next)
+                    if (sn->conn)
+                        session_conns[si++] = sn->conn;
+                session_conn_count = si;
+            }
+        }
+        pthread_mutex_unlock(&host->mtx);
+    }
     /* Proactively close any remaining active streams to unblock protocol workers
      * before stopping sessions. */
     {
@@ -1581,6 +1616,16 @@ int libp2p_host_stop(libp2p_host_t *host)
             {
                 libp2p__stream_mark_deferred(pending_streams[i]);
                 libp2p_stream_close(pending_streams[i]);
+                if (session_conn_count > 0)
+                {
+                    libp2p_conn_t *pconn = NULL;
+                    int owns = 0;
+                    if (libp2p__stream_get_parent(pending_streams[i], &pconn, NULL, &owns) && owns && pconn &&
+                        ptr_list_contains((void *const *)session_conns, session_conn_count, pconn))
+                    {
+                        libp2p__stream_disown_parent(pending_streams[i]);
+                    }
+                }
             }
     }
     LP_LOGD("HOST_STOP", "streams closed; proceeding to stop/join sessions");
@@ -1681,39 +1726,80 @@ int libp2p_host_stop(libp2p_host_t *host)
             /* Close immediately to unblock any pending I/O, but defer freeing
              * until worker threads (identify push, ping, etc.) have drained. */
             libp2p_conn_close(sn->conn);
-            if (deferred_conn_count == deferred_conn_cap)
+            if (!ptr_list_contains((void *const *)deferred_conns, deferred_conn_count, sn->conn))
             {
-                size_t ncap = deferred_conn_cap ? (deferred_conn_cap * 2) : 8;
-                void *np = realloc(deferred_conns, ncap * sizeof(*deferred_conns));
-                if (np)
+                if (deferred_conn_count == deferred_conn_cap)
                 {
-                    deferred_conns = (libp2p_conn_t **)np;
-                    deferred_conn_cap = ncap;
+                    size_t ncap = deferred_conn_cap ? (deferred_conn_cap * 2) : 8;
+                    void *np = realloc(deferred_conns, ncap * sizeof(*deferred_conns));
+                    if (np)
+                    {
+                        deferred_conns = (libp2p_conn_t **)np;
+                        deferred_conn_cap = ncap;
+                    }
                 }
-            }
-            if (deferred_conn_count < deferred_conn_cap)
-            {
-                deferred_conns[deferred_conn_count++] = sn->conn;
-            }
-            else
-            {
-                LP_LOGD("HOST_STOP", "deferring conn free failed (OOM); leaking for safety");
+                if (deferred_conn_count < deferred_conn_cap)
+                {
+                    deferred_conns[deferred_conn_count++] = sn->conn;
+                }
+                else
+                {
+                    LP_LOGD("HOST_STOP", "deferring conn free failed (OOM); leaking for safety");
+                }
             }
             sn->conn = NULL;
         }
         if (sn->is_quic && sn->conn)
         {
             libp2p_quic_conn_detach_session(sn->conn);
+            if (!ptr_list_contains((void *const *)deferred_conns, deferred_conn_count, sn->conn))
+            {
+                if (deferred_conn_count == deferred_conn_cap)
+                {
+                    size_t ncap = deferred_conn_cap ? (deferred_conn_cap * 2) : 8;
+                    void *np = realloc(deferred_conns, ncap * sizeof(*deferred_conns));
+                    if (np)
+                    {
+                        deferred_conns = (libp2p_conn_t **)np;
+                        deferred_conn_cap = ncap;
+                    }
+                }
+                if (deferred_conn_count < deferred_conn_cap)
+                {
+                    deferred_conns[deferred_conn_count++] = sn->conn;
+                }
+                else
+                {
+                    LP_LOGD("HOST_STOP", "deferring conn free failed (OOM); leaking for safety");
+                }
+            }
+            sn->conn = NULL;
         }
         if (sn->mx)
         {
-            libp2p_muxer_free(sn->mx);
+            if (!ptr_list_contains((void *const *)freed_muxers, freed_muxer_count, sn->mx))
+            {
+                if (freed_muxer_count == freed_muxer_cap)
+                {
+                    size_t ncap = freed_muxer_cap ? (freed_muxer_cap * 2) : 8;
+                    void *np = realloc(freed_muxers, ncap * sizeof(*freed_muxers));
+                    if (np)
+                    {
+                        freed_muxers = (libp2p_muxer_t **)np;
+                        freed_muxer_cap = ncap;
+                    }
+                }
+                if (freed_muxer_count < freed_muxer_cap)
+                {
+                    freed_muxers[freed_muxer_count++] = sn->mx;
+                    libp2p_muxer_free(sn->mx);
+                }
+                else
+                {
+                    LP_LOGD("HOST_STOP", "muxer free tracking failed (OOM); leaking for safety");
+                }
+            }
             sn->mx = NULL;
-        }
-        if (sn->is_quic && sn->conn)
-        {
-            libp2p_conn_free(sn->conn);
-            sn->conn = NULL;
         }
         /* destroy ready primitives and free */
         pthread_mutex_destroy(&sn->ready_mtx);
@@ -1845,6 +1931,8 @@ int libp2p_host_stop(libp2p_host_t *host)
     for (size_t i = 0; i < deferred_conn_count; i++)
         libp2p_conn_free(deferred_conns[i]);
     free(deferred_conns);
+    free(freed_muxers);
+    free(session_conns);
     LP_LOGD("HOST_STOP", "end");
     /* Do not force-reset worker_count here; host_free waits for it to reach 0. */
     return 0;
