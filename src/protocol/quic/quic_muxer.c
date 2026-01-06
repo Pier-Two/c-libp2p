@@ -301,6 +301,22 @@ static void quic_push_cleanup(void *arg, libp2p_stream_t *s)
     st->push = NULL;
 }
 
+static void quic_stream_cleanup(void *arg, libp2p_stream_t *s)
+{
+    (void)s;
+    quic_stream_ctx_t *st = (quic_stream_ctx_t *)arg;
+    if (!st)
+        return;
+    pthread_mutex_lock(&st->lock);
+    if (st->push)
+    {
+        quic_push_ctx_free(st->push);
+        st->push = NULL;
+    }
+    st->stream = NULL;
+    pthread_mutex_unlock(&st->lock);
+}
+
 static void quic_push_on_readable(libp2p_stream_t *s, void *ud)
 {
     quic_push_ctx_t *ctx = (quic_push_ctx_t *)ud;
@@ -359,7 +375,6 @@ static void quic_attach_push(quic_stream_ctx_t *st, const libp2p_protocol_def_t 
     st->push = ctx;
     st->proto_def = *def;
     st->push_cap = cap;
-    libp2p__stream_set_cleanup(st->stream, quic_push_cleanup, st);
     libp2p_stream_set_read_interest(st->stream, true);
     libp2p_stream_on_readable(st->stream, quic_push_on_readable, ctx);
     quic_push_on_readable(st->stream, ctx);
@@ -1575,6 +1590,7 @@ static quic_stream_ctx_t *quic_muxer_find_stream(quic_muxer_ctx_t *mx, uint64_t 
     {
         if (cur->stream_id == stream_id)
         {
+            quic_stream_ctx_retain(cur);
             pthread_mutex_unlock(&mx->lock);
             return cur;
         }
@@ -1739,7 +1755,12 @@ static void quic_stream_handshake_exec(void *arg)
                 pthread_mutex_unlock(session->quic_mtx);
             }
         }
-        libp2p_stream_t *stream = st->stream;
+        libp2p_stream_t *stream = NULL;
+        pthread_mutex_lock(&st->lock);
+        stream = st->stream;
+        if (stream)
+            st->stream = NULL;
+        pthread_mutex_unlock(&st->lock);
         int host_tearing_down = 0;
         /* Re-load host pointer atomically for teardown check */
         host = mx ? atomic_load_explicit(&mx->host, memory_order_acquire) : NULL;
@@ -1783,10 +1804,19 @@ static void quic_stream_handshake_exec(void *arg)
         libp2p__stream_release_async(stream);
 }
 
-static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st)
+static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st, libp2p_stream_t *stream_for_handshake)
 {
     if (!st)
         return;
+    if (!stream_for_handshake)
+    {
+        pthread_mutex_lock(&st->lock);
+        st->handshake_running = 0;
+        if (!st->handshake_done)
+            st->handshake_done = 1;
+        pthread_mutex_unlock(&st->lock);
+        return;
+    }
     libp2p_host_t *host = mx ? atomic_load_explicit(&mx->host, memory_order_acquire) : NULL;
     if (!mx || !host)
     {
@@ -1807,10 +1837,15 @@ static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t 
     }
     task->mx = mx;
     task->st = st;
-    task->stream = st->stream;
+    task->stream = stream_for_handshake;
     quic_stream_ctx_retain(st);
     quic_muxer_ctx_retain(mx);
-    if (task->stream && !libp2p__stream_retain_async(task->stream))
+    int retained = 0;
+    pthread_mutex_lock(&st->lock);
+    if (st->stream == stream_for_handshake)
+        retained = libp2p__stream_retain_async(stream_for_handshake);
+    pthread_mutex_unlock(&st->lock);
+    if (task->stream && !retained)
     {
         quic_muxer_ctx_release(mx);
         quic_stream_ctx_release(st);
@@ -1839,6 +1874,23 @@ static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t 
         pthread_mutex_unlock(&st->lock);
         return;
     }
+    pthread_mutex_lock(&st->lock);
+    if (st->stream != stream_for_handshake)
+    {
+        pthread_mutex_unlock(&st->lock);
+        if (task->stream)
+            libp2p__stream_release_async(task->stream);
+        quic_muxer_ctx_release(mx);
+        quic_stream_ctx_release(st);
+        free(task);
+        pthread_mutex_lock(&st->lock);
+        st->handshake_running = 0;
+        if (!st->handshake_done)
+            st->handshake_done = 1;
+        pthread_mutex_unlock(&st->lock);
+        return;
+    }
+    pthread_mutex_unlock(&st->lock);
     libp2p__exec_on_cb_thread(host, quic_stream_handshake_exec, task);
 }
 
@@ -1916,6 +1968,7 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                 int handshake_done_now = 0;
                 int already_fin = 0;
                 libp2p_stream_t *stream_for_readable = NULL;
+                libp2p_stream_t *stream_for_handshake = NULL;
                 pthread_mutex_lock(&st->lock);
                 /* Check if FIN was already received - if so, a duplicate FIN event
                  * with no data is a late-arriving notification that should be ignored
@@ -1934,10 +1987,11 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
                 }
                 /* Capture stream pointer while holding lock to avoid race condition */
                 stream_for_readable = st->stream;
+                stream_for_handshake = st->stream;
                 pthread_mutex_unlock(&st->lock);
 
                 if (schedule_handshake)
-                    quic_stream_start_handshake(mx, st);
+                    quic_stream_start_handshake(mx, st, stream_for_handshake);
 
                 /* Only schedule readable if there's new data or this is the first FIN.
                  * A duplicate FIN with no data should not trigger a spurious readable event. */
@@ -1997,6 +2051,8 @@ static int quic_session_dispatch(libp2p_quic_session_t *session,
         default:
             break;
     }
+    if (st)
+        quic_stream_ctx_release(st);
     return 0;
 }
 
@@ -2419,7 +2475,9 @@ static void quic_stream_backend_free(void *io_ctx)
         quic_muxer_remove_stream(mx, st);
         pthread_mutex_unlock(&mx->lock);
     }
+    pthread_mutex_lock(&st->lock);
     st->stream = NULL;
+    pthread_mutex_unlock(&st->lock);
     quic_stream_ctx_release(st);
 }
 
@@ -2522,7 +2580,10 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
         return NULL;
     }
 
+    pthread_mutex_lock(&st->lock);
     st->stream = stream;
+    pthread_mutex_unlock(&st->lock);
+    libp2p__stream_set_cleanup(stream, quic_stream_cleanup, st);
     if (mx->owner)
         libp2p_stream_set_parent(stream, NULL, mx->owner, 0);
 
@@ -2530,7 +2591,8 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
     st->handshake_started = 1;
     st->handshake_running = 1;
     pthread_mutex_unlock(&st->lock);
-    quic_stream_start_handshake(mx, st);
+    quic_stream_start_handshake(mx, st, stream);
+    quic_stream_ctx_retain(st);
     quic_muxer_release_session(session);
     return st;
 }
@@ -2630,6 +2692,7 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
     }
 
     st->stream = stream;
+    libp2p__stream_set_cleanup(stream, quic_stream_cleanup, st);
     libp2p_stream_set_parent(stream, NULL, mx, 0);
     *out = stream;
     quic_muxer_release_session(session);
@@ -2679,9 +2742,21 @@ static void quic_muxer_free(libp2p_muxer_t *mx)
             quic_stream_ctx_t *next = streams->next;
             if (streams->stream)
             {
-                libp2p__stream_mark_deferred(streams->stream);
-                libp2p_stream_close(streams->stream);
-                libp2p_stream_free(streams->stream);
+                libp2p_stream_t *stream = NULL;
+                pthread_mutex_lock(&streams->lock);
+                stream = streams->stream;
+                streams->stream = NULL;
+                pthread_mutex_unlock(&streams->lock);
+                if (stream)
+                {
+                    libp2p__stream_mark_deferred(stream);
+                    libp2p_stream_close(stream);
+                    libp2p_stream_free(stream);
+                }
+                else
+                {
+                    quic_stream_ctx_release(streams);
+                }
             }
             else
             {
