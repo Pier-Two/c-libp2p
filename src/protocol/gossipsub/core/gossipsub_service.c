@@ -637,6 +637,7 @@ libp2p_err_t libp2p_gossipsub_new(libp2p_host_t *host, const libp2p_gossipsub_co
     if (!gs)
         return LIBP2P_ERR_INTERNAL;
 
+    atomic_init(&gs->refcount, 1);
     gs->host = host;
     gossipsub_init_config(&gs->cfg, cfg);
 
@@ -829,7 +830,13 @@ void libp2p_gossipsub_free(libp2p_gossipsub_t *gs)
         return;
 
     libp2p_gossipsub_stop(gs);
+    gossipsub_release(gs);
+}
 
+static void gossipsub_free_internal(libp2p_gossipsub_t *gs)
+{
+    if (!gs)
+        return;
     gossipsub_score_deinit(gs);
     gossipsub_promises_clear(&gs->promises);
     gossipsub_topics_clear(gs->topics);
@@ -843,6 +850,21 @@ void libp2p_gossipsub_free(libp2p_gossipsub_t *gs)
 
     pthread_mutex_destroy(&gs->lock);
     free(gs);
+}
+
+void gossipsub_retain(libp2p_gossipsub_t *gs)
+{
+    if (!gs)
+        return;
+    atomic_fetch_add_explicit(&gs->refcount, 1, memory_order_relaxed);
+}
+
+void gossipsub_release(libp2p_gossipsub_t *gs)
+{
+    if (!gs)
+        return;
+    if (atomic_fetch_sub_explicit(&gs->refcount, 1, memory_order_acq_rel) == 1)
+        gossipsub_free_internal(gs);
 }
 
 libp2p_err_t libp2p_gossipsub_start(libp2p_gossipsub_t *gs)

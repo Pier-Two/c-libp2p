@@ -338,7 +338,8 @@ static libp2p_ping_err_t stream_read_exact(libp2p_stream_t *s, uint8_t *buf, siz
         {
             LP_LOGD("PING", "stream closed stream=%p rc=%zd", (void *)s, n);
             (void)libp2p_stream_set_deadline(s, 0);
-            return LIBP2P_PING_OK;
+            /* Treat as IO error so callers stop before attempting to write. */
+            return LIBP2P_PING_ERR_IO;
         }
         LP_LOGE("PING", "stream_read_exact error n=%zd", n);
         (void)libp2p_stream_set_deadline(s, 0);

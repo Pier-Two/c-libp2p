@@ -166,6 +166,7 @@ typedef struct gossipsub_validation_ctx
     libp2p_gossipsub_validation_result_t final_result;
     int completed;
     pthread_mutex_t mtx;
+    atomic_int refcount;
 } gossipsub_validation_ctx_t;
 
 static void gossipsub_validator_array_release(libp2p_gossipsub_validator_handle_t **handles, size_t count)
@@ -200,8 +201,25 @@ static void gossipsub_validation_ctx_free(gossipsub_validation_ctx_t *ctx)
         free(ctx->raw_buf);
     if (ctx->from_copy)
         gossipsub_peer_free(ctx->from_copy);
+    if (ctx->gs)
+        gossipsub_release(ctx->gs);
     pthread_mutex_destroy(&ctx->mtx);
     free(ctx);
+}
+
+static void gossipsub_validation_ctx_retain(gossipsub_validation_ctx_t *ctx)
+{
+    if (!ctx)
+        return;
+    atomic_fetch_add_explicit(&ctx->refcount, 1, memory_order_relaxed);
+}
+
+static void gossipsub_validation_ctx_release(gossipsub_validation_ctx_t *ctx)
+{
+    if (!ctx)
+        return;
+    if (atomic_fetch_sub_explicit(&ctx->refcount, 1, memory_order_acq_rel) == 1)
+        gossipsub_validation_ctx_free(ctx);
 }
 
 static libp2p_err_t gossipsub_message_clone_into_ctx(gossipsub_validation_ctx_t *ctx,
@@ -279,7 +297,13 @@ static void gossipsub_validation_schedule_finish(gossipsub_validation_ctx_t *ctx
     }
     pthread_mutex_unlock(&ctx->mtx);
     if (should_schedule)
-        libp2p__exec_on_cb_thread(ctx->gs->host, gossipsub_validation_finish_exec, ctx);
+    {
+        libp2p_host_t *host = (ctx->gs) ? ctx->gs->host : NULL;
+        if (host)
+            libp2p__exec_on_cb_thread(host, gossipsub_validation_finish_exec, ctx);
+        else
+            gossipsub_validation_ctx_release(ctx);
+    }
 }
 
 static libp2p_gossipsub_validation_result_t gossipsub_run_sync_validators(gossipsub_validation_ctx_t *ctx,
@@ -344,6 +368,7 @@ static void gossipsub_async_done_trampoline(libp2p_gossipsub_validation_result_t
     gossipsub_validation_ctx_t *ctx = done_ctx->ctx;
     free(done_ctx);
     gossipsub_validation_mark_async_result(ctx, result);
+    gossipsub_validation_ctx_release(ctx);
 }
 
 static void gossipsub_async_timer_cb(void *user_data)
@@ -358,6 +383,7 @@ static void gossipsub_async_timer_cb(void *user_data)
     if (!ctx || !handle || !handle->async_fn)
     {
         gossipsub_validation_mark_async_result(ctx, LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
+        gossipsub_validation_ctx_release(ctx);
         free(task);
         return;
     }
@@ -366,6 +392,7 @@ static void gossipsub_async_timer_cb(void *user_data)
     if (!done_ctx)
     {
         gossipsub_validation_mark_async_result(ctx, LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
+        gossipsub_validation_ctx_release(ctx);
         free(task);
         return;
     }
@@ -402,12 +429,14 @@ static void gossipsub_validation_launch_async(gossipsub_validation_ctx_t *ctx, s
             continue;
 
         gossipsub_async_task_t *task = (gossipsub_async_task_t *)calloc(1, sizeof(*task));
+        gossipsub_validation_ctx_retain(ctx);
         pthread_mutex_lock(&ctx->mtx);
         ctx->pending_async++;
         pthread_mutex_unlock(&ctx->mtx);
 
         if (!task)
         {
+            gossipsub_validation_ctx_release(ctx);
             gossipsub_validation_mark_async_result(ctx, LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
             continue;
         }
@@ -418,6 +447,7 @@ static void gossipsub_validation_launch_async(gossipsub_validation_ctx_t *ctx, s
         if (gossipsub_runtime_dispatch(ctx->gs, task) != 0)
         {
             free(task);
+            gossipsub_validation_ctx_release(ctx);
             gossipsub_validation_mark_async_result(ctx, LIBP2P_GOSSIPSUB_VALIDATION_IGNORE);
             continue;
         }
@@ -514,7 +544,7 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
     libp2p_gossipsub_t *gs = ctx->gs;
     if (!gs)
     {
-        gossipsub_validation_ctx_free(ctx);
+        gossipsub_validation_ctx_release(ctx);
         return;
     }
 
@@ -536,7 +566,7 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
             if (message_id)
                 free(message_id);
         }
-        gossipsub_validation_ctx_free(ctx);
+        gossipsub_validation_ctx_release(ctx);
         return;
     }
 
@@ -597,7 +627,7 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
                 free(encoded_frame);
             if (message_id)
                 free(message_id);
-            gossipsub_validation_ctx_free(ctx);
+            gossipsub_validation_ctx_release(ctx);
             return;
         }
         frame = encoded_frame;
@@ -681,7 +711,7 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
         free(encoded_frame);
     if (message_id)
         free(message_id);
-    gossipsub_validation_ctx_free(ctx);
+    gossipsub_validation_ctx_release(ctx);
 }
 
 static void gossipsub_validation_finish_exec(void *user_data)
@@ -777,6 +807,11 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs,
                                            const libp2p_gossipsub_message_t *msg,
                                            int propagate_on_accept)
 {
+    if (!gs || !gs->host)
+    {
+        gossipsub_validator_array_release(validators, validator_count);
+        return LIBP2P_ERR_INTERNAL;
+    }
     gossipsub_validation_ctx_t *ctx = (gossipsub_validation_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
     {
@@ -792,18 +827,20 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs,
     ctx->final_result = LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT;
     ctx->pending_async = 0;
     ctx->completed = 0;
+    atomic_init(&ctx->refcount, 1);
+    gossipsub_retain(gs);
 
     if (pthread_mutex_init(&ctx->mtx, NULL) != 0)
     {
         gossipsub_validator_array_release(validators, validator_count);
-        free(ctx);
+        gossipsub_validation_ctx_release(ctx);
         return LIBP2P_ERR_INTERNAL;
     }
 
     libp2p_err_t clone_rc = gossipsub_message_clone_into_ctx(ctx, msg);
     if (clone_rc != LIBP2P_ERR_OK)
     {
-        gossipsub_validation_ctx_free(ctx);
+        gossipsub_validation_ctx_release(ctx);
         return clone_rc;
     }
 
@@ -813,7 +850,10 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs,
             propagate_on_accept ? "publish" : "inbound",
             topic_label,
             msg->data_len);
-    libp2p__exec_on_cb_thread(gs->host, gossipsub_validation_begin_exec, ctx);
+    if (gs->host)
+        libp2p__exec_on_cb_thread(gs->host, gossipsub_validation_begin_exec, ctx);
+    else
+        gossipsub_validation_ctx_release(ctx);
     return LIBP2P_ERR_OK;
 }
 

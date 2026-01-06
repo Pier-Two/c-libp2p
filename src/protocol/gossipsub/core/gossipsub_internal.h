@@ -152,6 +152,7 @@ struct libp2p_gossipsub_validator_handle
 
 struct libp2p_gossipsub
 {
+    atomic_int refcount;
     libp2p_host_t *host;
     libp2p_runtime_t *runtime;
     int owns_runtime;
@@ -190,5 +191,7 @@ uint64_t gossipsub_now_ms(void);
 uint64_t gossipsub_random_u64(void);
 void gossipsub_validator_handle_retain(libp2p_gossipsub_validator_handle_t *handle);
 void gossipsub_validator_handle_release(libp2p_gossipsub_validator_handle_t *handle);
+void gossipsub_retain(libp2p_gossipsub_t *gs);
+void gossipsub_release(libp2p_gossipsub_t *gs);
 
 #endif /* LIBP2P_GOSSIPSUB_INTERNAL_H */
