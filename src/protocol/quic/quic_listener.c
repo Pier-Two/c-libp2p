@@ -59,6 +59,20 @@ typedef struct quic_listener_peer_entry
     struct quic_listener_peer_entry *next;
 } quic_listener_peer_entry_t;
 
+static uint64_t quic_now_mono_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000ull);
+}
+
+static uint64_t quic_now_mono_us(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)(ts.tv_nsec / 1000ull);
+}
+
 struct quic_listener_ctx
 {
     libp2p_transport_t *transport;
@@ -76,6 +90,7 @@ struct quic_listener_ctx
     multiaddr_t *requested_addr; /* original listen address */
     multiaddr_t *bound_addr;     /* resolved local address (without /quic) */
     int port_ready;
+    uint64_t last_flush_ms;
     _Atomic int closing;
     _Atomic int loop_stop;
 };
@@ -577,6 +592,8 @@ static void quic_listener_session_free(libp2p_quic_session_t *session)
     if (!session)
         return;
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
+    /* Ensure other threads stop using cnx before we delete it. */
+    libp2p__quic_session_disable_cnx(session);
     if (cnx)
     {
         /* Acquire quic_mtx to synchronize with the socket loop thread.
@@ -778,6 +795,25 @@ static int quic_listener_conn_cb(picoquic_cnx_t *cnx,
     return 0;
 }
 
+static void quic_listener_flush_outgoing(quic_listener_ctx_t *ctx)
+{
+    if (!ctx || !ctx->quic)
+        return;
+    size_t cnx_count = 0;
+    pthread_mutex_lock(&ctx->quic_mtx);
+    picoquic_cnx_t *cnx = picoquic_get_first_cnx(ctx->quic);
+    while (cnx)
+    {
+        libp2p_quic_session_t *session =
+            (libp2p_quic_session_t *)picoquic_get_callback_context(cnx);
+        if (session)
+            libp2p__quic_session_flush_outgoing_locked(session, cnx);
+        cnx_count++;
+        cnx = picoquic_get_next_cnx(cnx);
+    }
+    pthread_mutex_unlock(&ctx->quic_mtx);
+}
+
 static int quic_listener_loop_cb(picoquic_quic_t *quic,
                                  picoquic_packet_loop_cb_enum cb_mode,
                                  void *callback_ctx,
@@ -806,6 +842,20 @@ static int quic_listener_loop_cb(picoquic_quic_t *quic,
 #endif
         if (len)
             quic_listener_bound_addr_update(ctx, addr, len);
+    }
+    else if (cb_mode == picoquic_packet_loop_after_send)
+    {
+        uint64_t now_ms = quic_now_mono_ms();
+        if (now_ms - ctx->last_flush_ms >= 10)
+        {
+            quic_listener_flush_outgoing(ctx);
+            ctx->last_flush_ms = now_ms;
+        }
+    }
+    else if (cb_mode == picoquic_packet_loop_wake_up)
+    {
+        quic_listener_flush_outgoing(ctx);
+        ctx->last_flush_ms = quic_now_mono_ms();
     }
 
     if (atomic_load(&ctx->loop_stop))
@@ -945,7 +995,18 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
 
     libp2p_quic_config_t cfg = libp2p__quic_transport_get_config(transport_ctx);
 
-    picoquic_quic_t *quic = picoquic_create(16,
+    uint32_t max_connections = 64;
+    const char *max_env = getenv("LANTERN_QUIC_MAX_CONNECTIONS");
+    if (max_env && max_env[0] != '\0')
+    {
+        char *endptr = NULL;
+        unsigned long parsed = strtoul(max_env, &endptr, 10);
+        if (endptr && endptr != max_env && parsed > 0 && parsed <= UINT32_MAX)
+            max_connections = (uint32_t)parsed;
+    }
+    LP_LOGI("QUIC", "listener picoquic max_connections=%" PRIu32, max_connections);
+
+    picoquic_quic_t *quic = picoquic_create(max_connections,
                                             NULL,
                                             NULL,
                                             NULL,
@@ -1032,6 +1093,7 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
 #endif
     else
         ctx->loop_param.local_port = 0;
+    ctx->loop_param.socket_buffer_size = libp2p__quic_socket_buffer_size();
 
     ctx->bound_addr = libp2p__quic_multiaddr_from_sockaddr((struct sockaddr *)&listen_ss, listen_len);
     if (!ctx->bound_addr)

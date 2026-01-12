@@ -38,6 +38,41 @@
 static uint64_t g_quic_handshake_seq = 0;
 static uint32_t g_quic_handshake_pending = 0;
 
+static void strip_peer_suffix(const char *addr, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+        return;
+    out[0] = '\0';
+    if (!addr)
+        return;
+    const char *cut = strstr(addr, "/p2p/");
+    if (!cut)
+        cut = strstr(addr, "/ipfs/");
+    size_t len = cut ? (size_t)(cut - addr) : strlen(addr);
+    if (len >= out_len)
+        len = out_len - 1;
+    memcpy(out, addr, len);
+    out[len] = '\0';
+}
+
+static peer_id_t *peer_id_dup(const peer_id_t *src)
+{
+    if (!src || !src->bytes || src->size == 0)
+        return NULL;
+    peer_id_t *dup = (peer_id_t *)calloc(1, sizeof(*dup));
+    if (!dup)
+        return NULL;
+    dup->bytes = (uint8_t *)malloc(src->size);
+    if (!dup->bytes)
+    {
+        free(dup);
+        return NULL;
+    }
+    memcpy(dup->bytes, src->bytes, src->size);
+    dup->size = src->size;
+    return dup;
+}
+
 static uint64_t host_dial_quic_trace_begin(const char *remote)
 {
     uint64_t id = __atomic_fetch_add(&g_quic_handshake_seq, 1u, __ATOMIC_RELAXED) + 1u;
@@ -469,6 +504,206 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
     /* Emit DIALING event before attempting to connect */
     libp2p__emit_dialing(host, remote_multiaddr);
 
+    /* Fast path: reuse existing session to this peer if available. */
+    {
+        peer_id_t peer = {0};
+        int have_peer = 0;
+        const char *p = strstr(remote_multiaddr, "/p2p/");
+        size_t skip = 5;
+        if (!p)
+        {
+            p = strstr(remote_multiaddr, "/ipfs/");
+            skip = 6;
+        }
+        if (p)
+        {
+            p += skip;
+            const char *end = strchr(p, '/');
+            size_t len = end ? (size_t)(end - p) : strlen(p);
+            if (len > 0 && len < 128)
+            {
+                char peer_str[128];
+                memcpy(peer_str, p, len);
+                peer_str[len] = '\0';
+                if (peer_id_create_from_string(peer_str, &peer) == PEER_ID_SUCCESS)
+                    have_peer = 1;
+            }
+        }
+
+        if (have_peer)
+        {
+            libp2p_muxer_t *mx = NULL;
+            peer_id_t *peer_copy = NULL;
+            pthread_mutex_lock(&host->mtx);
+            for (session_node_t *sess = host->sessions; sess; sess = sess->next)
+            {
+                if (!sess->mx || !sess->mx->vt || !sess->mx->vt->open_stream)
+                    continue;
+                if (!sess->remote_peer || !sess->remote_peer->bytes || !peer.bytes)
+                    continue;
+                if (sess->remote_peer->size != peer.size)
+                    continue;
+                if (memcmp(sess->remote_peer->bytes, peer.bytes, peer.size) != 0)
+                    continue;
+                mx = sess->mx;
+                peer_copy = peer_id_dup(sess->remote_peer);
+                break;
+            }
+            pthread_mutex_unlock(&host->mtx);
+
+            if (mx)
+            {
+                if (cancel && libp2p_cancel_token_is_canceled(cancel))
+                {
+                    peer_id_destroy(&peer);
+                    return LIBP2P_ERR_CANCELED;
+                }
+                libp2p_stream_t *s = NULL;
+                if (mx->vt->open_stream(mx, NULL, 0, &s) == LIBP2P_MUXER_OK && s)
+                {
+                    libp2p_io_t *io = libp2p_io_from_stream(s);
+                    const char *accepted = NULL;
+                    if (io)
+                    {
+                        libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(
+                            io, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+                        libp2p_io_free(io);
+                        if (ms == LIBP2P_MULTISELECT_OK && accepted)
+                        {
+                            if (accepted_out)
+                                *accepted_out = accepted;
+                            else
+                                free((void *)accepted);
+                            if (peer_copy)
+                            {
+                                if (libp2p_stream_set_remote_peer(s, peer_copy) != 0)
+                                {
+                                    peer_id_destroy(peer_copy);
+                                    free(peer_copy);
+                                }
+                            }
+                            *out_stream = s;
+                            peer_id_destroy(&peer);
+                            LP_LOGD("HOST_DIAL", "reused existing session for %s", remote_multiaddr);
+                            fprintf(stderr, "[LANTERN DIAL] reused existing session by peer %s\n",
+                                    remote_multiaddr ? remote_multiaddr : "(unknown)");
+                            return 0;
+                        }
+                    }
+                    if (accepted)
+                        free((void *)accepted);
+                    if (peer_copy)
+                    {
+                        peer_id_destroy(peer_copy);
+                        free(peer_copy);
+                    }
+                    libp2p_stream_free(s);
+                }
+                else if (peer_copy)
+                {
+                    peer_id_destroy(peer_copy);
+                    free(peer_copy);
+                }
+            }
+            peer_id_destroy(&peer);
+        }
+    }
+
+    /* Secondary fast path: reuse existing session by remote address (strip /p2p suffix). */
+    {
+        char base_remote[256];
+        strip_peer_suffix(remote_multiaddr, base_remote, sizeof(base_remote));
+        if (base_remote[0] != '\0')
+        {
+            libp2p_muxer_t *mx = NULL;
+            peer_id_t *peer_copy = NULL;
+            pthread_mutex_lock(&host->mtx);
+            for (session_node_t *sess = host->sessions; sess; sess = sess->next)
+            {
+                if (!sess->mx || !sess->mx->vt || !sess->mx->vt->open_stream)
+                    continue;
+                const multiaddr_t *ra = sess->conn ? libp2p_conn_remote_addr(sess->conn) : NULL;
+                if (!ra)
+                    continue;
+                int err = 0;
+                char *ra_str = multiaddr_to_str(ra, &err);
+                if (!ra_str || err != 0)
+                {
+                    if (ra_str)
+                        free(ra_str);
+                    continue;
+                }
+                char base_sess[256];
+                strip_peer_suffix(ra_str, base_sess, sizeof(base_sess));
+                free(ra_str);
+                if (strcmp(base_sess, base_remote) != 0)
+                    continue;
+                mx = sess->mx;
+                peer_copy = peer_id_dup(sess->remote_peer);
+                break;
+            }
+            pthread_mutex_unlock(&host->mtx);
+
+            if (mx)
+            {
+                if (cancel && libp2p_cancel_token_is_canceled(cancel))
+                {
+                    if (peer_copy)
+                    {
+                        peer_id_destroy(peer_copy);
+                        free(peer_copy);
+                    }
+                    return LIBP2P_ERR_CANCELED;
+                }
+                libp2p_stream_t *s = NULL;
+                if (mx->vt->open_stream(mx, NULL, 0, &s) == LIBP2P_MUXER_OK && s)
+                {
+                    libp2p_io_t *io = libp2p_io_from_stream(s);
+                    const char *accepted = NULL;
+                    if (io)
+                    {
+                        libp2p_multiselect_err_t ms = libp2p_multiselect_dial_io(
+                            io, proposals, host->opts.multiselect_handshake_timeout_ms, &accepted);
+                        libp2p_io_free(io);
+                        if (ms == LIBP2P_MULTISELECT_OK && accepted)
+                        {
+                            if (accepted_out)
+                                *accepted_out = accepted;
+                            else
+                                free((void *)accepted);
+                            if (peer_copy)
+                            {
+                                if (libp2p_stream_set_remote_peer(s, peer_copy) != 0)
+                                {
+                                    peer_id_destroy(peer_copy);
+                                    free(peer_copy);
+                                }
+                            }
+                            *out_stream = s;
+                            LP_LOGD("HOST_DIAL", "reused existing session for %s (addr match)", remote_multiaddr);
+                            fprintf(stderr, "[LANTERN DIAL] reused existing session by addr %s\n",
+                                    remote_multiaddr ? remote_multiaddr : "(unknown)");
+                            return 0;
+                        }
+                    }
+                    if (accepted)
+                        free((void *)accepted);
+                    if (peer_copy)
+                    {
+                        peer_id_destroy(peer_copy);
+                        free(peer_copy);
+                    }
+                    libp2p_stream_free(s);
+                }
+                else if (peer_copy)
+                {
+                    peer_id_destroy(peer_copy);
+                    free(peer_copy);
+                }
+            }
+        }
+    }
+
     int ma_err = 0;
     multiaddr_t *addr = multiaddr_new_from_str(remote_multiaddr, &ma_err);
     if (!addr)
@@ -639,6 +874,12 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             }
             if (emit_ms_error)
             {
+                fprintf(stderr,
+                        "[LANTERN DIAL] multistream failed remote=%s ms=%d rc=%d timeout_ms=%d\n",
+                        remote_multiaddr ? remote_multiaddr : "(unknown)",
+                        (int)ms,
+                        rc,
+                        host->opts.multiselect_handshake_timeout_ms);
                 libp2p_event_t evt = {0};
                 evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
                 evt.u.outgoing_conn_error.peer = NULL;

@@ -697,19 +697,30 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
         return LIBP2P_ERR_OK;
     }
 
+    libp2p_stream_t *stream = entry->stream;
+    if (!libp2p__stream_retain_async(stream))
+    {
+        LP_LOGW(GOSSIPSUB_MODULE,
+                "flush RETAIN_FAIL peer=%s stream=%p",
+                peer_repr,
+                (void *)stream);
+        gossipsub_peer_detach_stream_locked(gs, entry, stream);
+        return entry->explicit_peering ? LIBP2P_ERR_AGAIN : LIBP2P_ERR_OK;
+    }
+
     size_t queued = 0;
     for (gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
         queued++;
     LP_LOGT(GOSSIPSUB_MODULE,
             "flush START peer=%s stream=%p queued=%zu",
             peer_repr,
-            (void *)entry->stream,
+            (void *)stream,
             queued);
 
     size_t frames_written = 0;
     size_t total_bytes_written = 0;
 
-    while (entry->stream && entry->sendq_head)
+    while (entry->stream == stream && entry->sendq_head)
     {
         gossipsub_sendq_item_t *item = entry->sendq_head;
         if (item && item->payload && item->payload_len && item->payload_sent == 0 && item->header_sent == 0)
@@ -772,7 +783,7 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
 
         while (item && item->header_sent < item->header_len)
         {
-            ssize_t n = libp2p_stream_write(entry->stream, item->header + item->header_sent, item->header_len - item->header_sent);
+            ssize_t n = libp2p_stream_write(stream, item->header + item->header_sent, item->header_len - item->header_sent);
             LP_LOGD(GOSSIPSUB_MODULE,
                     "flush WRITE_HEADER peer=%s wrote=%zd remaining=%zu",
                     peer_repr,
@@ -794,8 +805,9 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                 if (!entry->write_backpressure)
                 {
                     entry->write_backpressure = 1;
-                    libp2p_stream_on_writable(entry->stream, gossipsub_stream_writable_cb, gs);
+                    libp2p_stream_on_writable(stream, gossipsub_stream_writable_cb, gs);
                 }
+                libp2p__stream_release_async(stream);
                 return LIBP2P_ERR_AGAIN;
             }
             LP_LOGW(GOSSIPSUB_MODULE,
@@ -815,15 +827,16 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
             {
                 entry->connected = 0;
             }
-            gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
+            gossipsub_peer_detach_stream_locked(gs, entry, stream);
             /* Clear sendq to prevent infinite retry loops when stream is closed */
             gossipsub_peer_sendq_clear(entry);
+            libp2p__stream_release_async(stream);
             return LIBP2P_ERR_INTERNAL;
         }
 
         while (item && item->payload_sent < item->payload_len)
         {
-            ssize_t n = libp2p_stream_write(entry->stream, item->payload + item->payload_sent, item->payload_len - item->payload_sent);
+            ssize_t n = libp2p_stream_write(stream, item->payload + item->payload_sent, item->payload_len - item->payload_sent);
             LP_LOGD(GOSSIPSUB_MODULE,
                     "flush WRITE_PAYLOAD peer=%s wrote=%zd remaining=%zu",
                     peer_repr,
@@ -845,8 +858,9 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
                 if (!entry->write_backpressure)
                 {
                     entry->write_backpressure = 1;
-                    libp2p_stream_on_writable(entry->stream, gossipsub_stream_writable_cb, gs);
+                    libp2p_stream_on_writable(stream, gossipsub_stream_writable_cb, gs);
                 }
+                libp2p__stream_release_async(stream);
                 return LIBP2P_ERR_AGAIN;
             }
             LP_LOGW(GOSSIPSUB_MODULE,
@@ -858,9 +872,10 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
             {
                 entry->connected = 0;
             }
-            gossipsub_peer_detach_stream_locked(gs, entry, entry->stream);
+            gossipsub_peer_detach_stream_locked(gs, entry, stream);
             /* Clear sendq to prevent infinite retry loops when stream is closed */
             gossipsub_peer_sendq_clear(entry);
+            libp2p__stream_release_async(stream);
             return LIBP2P_ERR_INTERNAL;
         }
 
@@ -879,8 +894,9 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
             peer_repr,
             frames_written,
             total_bytes_written,
-            (void *)entry->stream);
+            (void *)stream);
     
+    libp2p__stream_release_async(stream);
     entry->write_backpressure = 0;
     return LIBP2P_ERR_OK;
 }

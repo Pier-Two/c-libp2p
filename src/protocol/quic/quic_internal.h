@@ -9,6 +9,8 @@
 #include "picoquic_packet_loop.h"
 #include "picoquic_set_textlog.h"
 
+#include <limits.h>
+
 static inline void libp2p__quic_configure_textlog(picoquic_quic_t *quic)
 {
     const char *path = getenv("LIBP2P_QUIC_TEXTLOG");
@@ -16,6 +18,19 @@ static inline void libp2p__quic_configure_textlog(picoquic_quic_t *quic)
         return;
     }
     picoquic_set_textlog(quic, path);
+}
+
+static inline int libp2p__quic_socket_buffer_size(void)
+{
+    const char *env = getenv("LANTERN_QUIC_SOCKET_BUFFER");
+    if (env && env[0] != '\0') {
+        char *endptr = NULL;
+        unsigned long val = strtoul(env, &endptr, 10);
+        if (endptr && endptr != env && *endptr == '\0' && val > 0 && val <= INT_MAX) {
+            return (int)val;
+        }
+    }
+    return 4 * 1024 * 1024;
 }
 
 #ifndef _WIN32
@@ -62,6 +77,9 @@ void libp2p__quic_session_release(libp2p_quic_session_t *session);
 
 void libp2p__quic_session_set_host(libp2p_quic_session_t *session, struct libp2p_host *host);
 
+/* Disable and detach a session's cnx pointer so other threads stop using it. */
+void libp2p__quic_session_disable_cnx(libp2p_quic_session_t *session);
+
 /* Set external quic mutex for listener sessions.
  * For sessions sharing a picoquic context (listener inbound connections),
  * this allows them to use the listener's mutex instead of their own. */
@@ -72,11 +90,25 @@ void libp2p__quic_session_set_quic_mtx(libp2p_quic_session_t *session, pthread_m
  * picoquic API calls that manipulate internal data structures. */
 pthread_mutex_t *libp2p__quic_session_get_quic_mtx(libp2p_quic_session_t *session);
 
+/* Record packet loop IO stats for diagnostics. */
+void libp2p__quic_session_note_rx(libp2p_quic_session_t *session, uint64_t now_ms);
+void libp2p__quic_session_note_tx(libp2p_quic_session_t *session, uint64_t now_ms);
+void libp2p__quic_session_get_io_stats(libp2p_quic_session_t *session,
+                                       uint64_t *last_rx_ms,
+                                       uint64_t *last_tx_ms,
+                                       uint64_t *rx_count,
+                                       uint64_t *tx_count);
+uint16_t libp2p__quic_session_last_local_port(libp2p_quic_session_t *session);
+
 picoquic_quic_t *libp2p__quic_session_quic(libp2p_quic_session_t *session);
 
 picoquic_cnx_t *libp2p__quic_session_native(libp2p_quic_session_t *session);
 
 void libp2p__quic_session_wake(libp2p_quic_session_t *session);
+
+/* Flush queued outgoing stream data on the network thread. quic_mtx must be held. */
+void libp2p__quic_session_flush_outgoing_locked(libp2p_quic_session_t *session,
+                                                picoquic_cnx_t *cnx);
 
 int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
                                     const multiaddr_t *local_addr,

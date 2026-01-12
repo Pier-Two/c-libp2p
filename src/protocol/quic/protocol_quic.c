@@ -33,6 +33,7 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -66,6 +67,88 @@ static const uint16_t VERIFY_ALGOS[] = {
     PTLS_SIGNATURE_ECDSA_SECP256R1_SHA256,
     PTLS_SIGNATURE_RSA_PKCS1_SHA256,
     UINT16_MAX};
+
+typedef struct quic_dial_guard_entry
+{
+    char *key;
+    struct quic_dial_guard_entry *next;
+} quic_dial_guard_entry_t;
+
+static pthread_mutex_t g_quic_dial_guard_mtx = PTHREAD_MUTEX_INITIALIZER;
+static quic_dial_guard_entry_t *g_quic_dial_guard = NULL;
+
+static void quic_strip_peer_suffix(const char *addr, char *out, size_t out_len)
+{
+    if (!out || out_len == 0)
+        return;
+    out[0] = '\0';
+    if (!addr)
+        return;
+    const char *cut = strstr(addr, "/p2p/");
+    if (!cut)
+        cut = strstr(addr, "/ipfs/");
+    size_t len = cut ? (size_t)(cut - addr) : strlen(addr);
+    if (len >= out_len)
+        len = out_len - 1;
+    memcpy(out, addr, len);
+    out[len] = '\0';
+}
+
+static int quic_dial_guard_try_add(const char *key)
+{
+    if (!key || key[0] == '\0')
+        return 0;
+    pthread_mutex_lock(&g_quic_dial_guard_mtx);
+    for (quic_dial_guard_entry_t *it = g_quic_dial_guard; it; it = it->next)
+    {
+        if (strcmp(it->key, key) == 0)
+        {
+            pthread_mutex_unlock(&g_quic_dial_guard_mtx);
+            return 1;
+        }
+    }
+    quic_dial_guard_entry_t *ent = (quic_dial_guard_entry_t *)calloc(1, sizeof(*ent));
+    if (ent)
+    {
+        ent->key = strdup(key);
+        if (!ent->key)
+        {
+            free(ent);
+        }
+        else
+        {
+            ent->next = g_quic_dial_guard;
+            g_quic_dial_guard = ent;
+        }
+    }
+    pthread_mutex_unlock(&g_quic_dial_guard_mtx);
+    return 0;
+}
+
+static void quic_dial_guard_remove(const char *key)
+{
+    if (!key || key[0] == '\0')
+        return;
+    pthread_mutex_lock(&g_quic_dial_guard_mtx);
+    quic_dial_guard_entry_t *prev = NULL;
+    quic_dial_guard_entry_t *cur = g_quic_dial_guard;
+    while (cur)
+    {
+        if (strcmp(cur->key, key) == 0)
+        {
+            if (prev)
+                prev->next = cur->next;
+            else
+                g_quic_dial_guard = cur->next;
+            free(cur->key);
+            free(cur);
+            break;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+    pthread_mutex_unlock(&g_quic_dial_guard_mtx);
+}
 
 static void quic_log_handshake_diag(const char *reason,
                                     picoquic_cnx_t *cnx,
@@ -118,6 +201,13 @@ static void quic_log_handshake_diag(const char *reason,
         free(remote_addr);
     if (local_addr)
         free(local_addr);
+}
+
+static uint64_t quic_now_mono_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000ull);
 }
 
 int libp2p__quic_transport_copy_identity(quic_transport_ctx_t *ctx,
@@ -469,6 +559,19 @@ static void quic_sni_from_sockaddr(const struct sockaddr *sa, char *buf, size_t 
         snprintf(buf, len, "localhost");
 }
 
+static uint16_t quic_sockaddr_port(const struct sockaddr *sa)
+{
+    if (!sa)
+        return 0;
+    if (sa->sa_family == AF_INET)
+        return ntohs(((const struct sockaddr_in *)sa)->sin_port);
+#ifdef AF_INET6
+    if (sa->sa_family == AF_INET6)
+        return ntohs(((const struct sockaddr_in6 *)sa)->sin6_port);
+#endif
+    return 0;
+}
+
 static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session,
                                                   picoquic_cnx_t *cnx,
                                                   uint64_t timeout_ms)
@@ -483,11 +586,38 @@ static libp2p_transport_err_t quic_wait_for_ready(libp2p_quic_session_t *session
         picoquic_state_enum st = picoquic_get_cnx_state(cnx);
         if (st != last_state)
         {
-            LP_LOGT("QUIC", "wait state=%s(%d)", libp2p__quic_state_name(st), st);
+            uint64_t last_rx_ms = 0;
+            uint64_t last_tx_ms = 0;
+            uint64_t rx_count = 0;
+            uint64_t tx_count = 0;
+            libp2p__quic_session_get_io_stats(session, &last_rx_ms, &last_tx_ms, &rx_count, &tx_count);
+            uint64_t now_ms = quic_now_mono_ms();
+            int rx_seen = (last_rx_ms != 0);
+            int tx_seen = (last_tx_ms != 0);
+            uint64_t rx_age = rx_seen ? (now_ms - last_rx_ms) : 0;
+            uint64_t tx_age = tx_seen ? (now_ms - last_tx_ms) : 0;
+            LP_LOGT("QUIC",
+                    "wait state=%s(%d) rx_count=%" PRIu64 " tx_count=%" PRIu64 " rx_seen=%d rx_age_ms=%" PRIu64 " tx_seen=%d tx_age_ms=%" PRIu64,
+                    libp2p__quic_state_name(st),
+                    st,
+                    rx_count,
+                    tx_count,
+                    rx_seen,
+                    rx_age,
+                    tx_seen,
+                    tx_age);
             last_state = st;
         }
         if (st == picoquic_state_ready)
             return LIBP2P_TRANSPORT_OK;
+        if (st == picoquic_state_client_ready_start)
+        {
+            int is_client = picoquic_is_client(cnx);
+            if (is_client)
+            {
+                return LIBP2P_TRANSPORT_OK;
+            }
+        }
         if (st == picoquic_state_disconnected || st == picoquic_state_handshake_failure ||
             st == picoquic_state_handshake_failure_resend || st == picoquic_state_disconnecting ||
             st == picoquic_state_closing || st == picoquic_state_closing_received || st == picoquic_state_draining)
@@ -600,6 +730,8 @@ static void quic_transport_session_free(libp2p_quic_session_t *session)
         return;
     picoquic_quic_t *quic = libp2p__quic_session_quic(session);
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
+    /* Ensure other threads stop using cnx before we tear down the session. */
+    libp2p__quic_session_disable_cnx(session);
     if (cnx)
         picoquic_set_callback(cnx, NULL, NULL);
     libp2p__quic_session_stop_loop(session);
@@ -696,6 +828,35 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     if (libp2p__quic_multiaddr_to_sockaddr_udp(addr, &remote_ss, &remote_len) != 0)
         return LIBP2P_TRANSPORT_ERR_INVALID_ARG;
 
+#define QUIC_DIAL_RETURN(_rc)                 \
+    do                                       \
+    {                                        \
+        if (guard_active)                    \
+            quic_dial_guard_remove(dial_key); \
+        return (_rc);                        \
+    } while (0)
+
+    int guard_active = 0;
+    char dial_key[256];
+    dial_key[0] = '\0';
+    {
+        int serr = 0;
+        char *addr_str = multiaddr_to_str(addr, &serr);
+        if (addr_str)
+        {
+            quic_strip_peer_suffix(addr_str, dial_key, sizeof(dial_key));
+            free(addr_str);
+        }
+    }
+    if (dial_key[0] != '\0')
+    {
+        if (quic_dial_guard_try_add(dial_key))
+        {
+            return LIBP2P_TRANSPORT_ERR_SOCKOPT_NO_RESOURCES;
+        }
+        guard_active = 1;
+    }
+
     uint8_t *identity_copy = NULL;
     size_t identity_len = 0;
     uint64_t identity_type = 0;
@@ -722,7 +883,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
             memset(identity_copy, 0, identity_len);
             free(identity_copy);
         }
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     libp2p_quic_tls_cert_options_t cert_opts = libp2p_quic_tls_cert_options_default();
@@ -736,7 +897,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     {
         memset(identity_copy, 0, identity_len);
         free(identity_copy);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     memset(identity_copy, 0, identity_len);
@@ -762,7 +923,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     if (!quic)
     {
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     picoquic_set_default_lossbit_policy(quic, picoquic_lossbit_none);
@@ -778,7 +939,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     {
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
     LP_LOGD("QUIC",
             "client transport params configured loss_bit=%d min_ack_delay=%" PRIu64 " max_idle_timeout=%" PRIu64 "ms",
@@ -791,7 +952,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     {
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
     chain[0].base = cert.cert_der;
     chain[0].len = cert.cert_len;
@@ -803,7 +964,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     {
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     quic_transport_verify_ctx_t *verify_ctx = (quic_transport_verify_ctx_t *)calloc(1, sizeof(*verify_ctx));
@@ -811,7 +972,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     {
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
     verify_ctx->super.cb = quic_transport_verify_cb;
     verify_ctx->super.algos = VERIFY_ALGOS;
@@ -834,7 +995,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
         quic_transport_verify_ctx_free(&verify_ctx->super);
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     libp2p_quic_session_t *session = libp2p__quic_session_wrap(quic, cnx);
@@ -843,7 +1004,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
         quic_transport_verify_ctx_free(&verify_ctx->super);
         picoquic_free(quic);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     libp2p_conn_t *conn = libp2p_quic_conn_new(NULL, addr, session, quic_transport_session_close, quic_transport_session_free, NULL);
@@ -852,7 +1013,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
         quic_transport_verify_ctx_free(&verify_ctx->super);
         quic_transport_session_free(session);
         libp2p_quic_tls_certificate_clear(&cert);
-        return LIBP2P_TRANSPORT_ERR_INTERNAL;
+        QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_ERR_INTERNAL);
     }
 
     verify_ctx->conn = conn;
@@ -928,9 +1089,11 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
 
     libp2p_quic_tls_certificate_clear(&cert);
     *out = conn;
-    return LIBP2P_TRANSPORT_OK;
+    QUIC_DIAL_RETURN(LIBP2P_TRANSPORT_OK);
 
 fail:
+    if (guard_active)
+        quic_dial_guard_remove(dial_key);
     if (conn)
     {
         libp2p_conn_close(conn);
