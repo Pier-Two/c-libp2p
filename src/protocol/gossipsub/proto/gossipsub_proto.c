@@ -10,9 +10,9 @@
 #endif
 
 #include "libp2p/log.h"
-#include "libp2p/lpmsg.h"
 #include "libp2p/stream.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+#include "protocol/tcp/protocol_tcp_util.h"
 #include "noise/protobufs.h"
 #include "noise/protocol/constants.h"
 #include "peer_id/peer_id.h"
@@ -20,7 +20,8 @@
 #include "gossipsub_rpc.pb.h"
 
 #define GOSSIPSUB_PROTO_MODULE "gossipsub_proto"
-#define GOSSIPSUB_RPC_DEFAULT_MAX (1024U * 1024U)
+/* No fixed size cap in the gossipsub specs; leave unlimited by default. */
+#define GOSSIPSUB_RPC_DEFAULT_MAX SIZE_MAX
 
 static inline int varint_is_minimal(uint64_t v, size_t len)
 {
@@ -31,6 +32,94 @@ static inline int varint_is_minimal(uint64_t v, size_t len)
     if (unsigned_varint_encode(v, tmp, sizeof(tmp), &needed) != UNSIGNED_VARINT_OK)
         return 0;
     return needed == len;
+}
+
+static libp2p_err_t gossipsub_read_lp_frame(libp2p_stream_t *stream, uint8_t **out_buf, size_t *out_len)
+{
+    if (!stream || !out_buf || !out_len)
+        return LIBP2P_ERR_NULL_PTR;
+
+    /* Default stall timeout per stage (header/payload). */
+    const uint64_t slow_ms = 2000;
+
+    uint8_t hdr[10];
+    size_t used = 0;
+    uint64_t need = 0;
+    size_t consumed = 0;
+    uint64_t start = now_mono_ms();
+
+    /* Read varint header byte-by-byte; tolerate EAGAIN while making progress. */
+    while (used < sizeof(hdr))
+    {
+        uint64_t elapsed = now_mono_ms() - start;
+        uint64_t remain = (elapsed < slow_ms) ? (slow_ms - elapsed) : 0;
+        if (used > 0 && remain == 0)
+            return LIBP2P_ERR_TIMEOUT;
+        if (remain)
+            (void)libp2p_stream_set_deadline(stream, remain);
+
+        ssize_t n = libp2p_stream_read(stream, &hdr[used], 1);
+        if (n == 1)
+        {
+            used += 1;
+            start = now_mono_ms();
+            if (unsigned_varint_decode(hdr, used, &need, &consumed) == UNSIGNED_VARINT_OK)
+                break; /* got full length */
+            continue;
+        }
+        if (n == LIBP2P_ERR_AGAIN)
+        {
+            if (used == 0)
+                return LIBP2P_ERR_AGAIN; /* no progress yet; let caller interleave */
+            continue;                    /* keep blocking until header complete or timeout */
+        }
+        /* EOF or fatal */
+        return (libp2p_err_t)n;
+    }
+
+    if (used == sizeof(hdr) && unsigned_varint_decode(hdr, used, &need, &consumed) != UNSIGNED_VARINT_OK)
+        return LIBP2P_ERR_INTERNAL;
+    if (!varint_is_minimal(need, consumed))
+        return LIBP2P_ERR_INTERNAL;
+    if (need > SIZE_MAX)
+        return LIBP2P_ERR_MSG_TOO_LARGE;
+
+    size_t frame_len = (size_t)need;
+    uint8_t *buffer = (uint8_t *)malloc(frame_len > 0 ? frame_len : 1u);
+    if (!buffer)
+        return LIBP2P_ERR_INTERNAL;
+
+    /* Read payload with EAGAIN tolerance */
+    size_t got = 0;
+    start = now_mono_ms();
+    while (got < frame_len)
+    {
+        uint64_t elapsed = now_mono_ms() - start;
+        uint64_t remain = (elapsed < slow_ms) ? (slow_ms - elapsed) : 0;
+        if (remain == 0)
+        {
+            free(buffer);
+            return LIBP2P_ERR_TIMEOUT;
+        }
+        (void)libp2p_stream_set_deadline(stream, remain);
+
+        ssize_t n = libp2p_stream_read(stream, buffer + got, frame_len - got);
+        if (n > 0)
+        {
+            got += (size_t)n;
+            start = now_mono_ms();
+            continue;
+        }
+        if (n == LIBP2P_ERR_AGAIN)
+            continue;
+        free(buffer);
+        return (libp2p_err_t)n; /* EOF/fatal */
+    }
+    (void)libp2p_stream_set_deadline(stream, 0);
+
+    *out_buf = buffer;
+    *out_len = frame_len;
+    return LIBP2P_ERR_OK;
 }
 
 libp2p_err_t libp2p_gossipsub_rpc_encode_publish(const libp2p_gossipsub_message_t *msg,
@@ -263,19 +352,11 @@ libp2p_err_t libp2p_gossipsub_rpc_read_stream(libp2p_stream_t *stream,
     if (!out_buf && !out_rpc && !out_len)
         return LIBP2P_ERR_NULL_PTR;
 
-    uint8_t *buffer = (uint8_t *)malloc(GOSSIPSUB_RPC_DEFAULT_MAX);
-    if (!buffer)
-        return LIBP2P_ERR_INTERNAL;
-
-    ssize_t n = libp2p_lp_recv(stream, buffer, GOSSIPSUB_RPC_DEFAULT_MAX);
-    if (n < 0)
-    {
-        libp2p_err_t err = (libp2p_err_t)n;
-        free(buffer);
-        return err;
-    }
-
-    size_t frame_len = (size_t)n;
+    uint8_t *buffer = NULL;
+    size_t frame_len = 0;
+    libp2p_err_t read_rc = gossipsub_read_lp_frame(stream, &buffer, &frame_len);
+    if (read_rc != LIBP2P_ERR_OK)
+        return read_rc;
     libp2p_gossipsub_RPC *rpc = NULL;
     if (out_rpc)
     {
@@ -291,23 +372,7 @@ libp2p_err_t libp2p_gossipsub_rpc_read_stream(libp2p_stream_t *stream,
         *out_len = frame_len;
 
     if (out_buf)
-    {
-        uint8_t *result = buffer;
-        if (frame_len > 0)
-        {
-            uint8_t *shrunk = (uint8_t *)realloc(buffer, frame_len);
-            if (shrunk)
-                result = shrunk;
-        }
-        else
-        {
-            /* Keep a single byte so callers may free() safely even when len=0. */
-            uint8_t *shrunk = (uint8_t *)realloc(buffer, 1);
-            if (shrunk)
-                result = shrunk;
-        }
-        *out_buf = result;
-    }
+        *out_buf = buffer;
     else
     {
         free(buffer);
