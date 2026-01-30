@@ -23,6 +23,8 @@ static void ms_dump_hex(const char *label, const uint8_t *buf, size_t len, const
 {
     if (!buf || !len || !label)
         return;
+    if (!libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
+        return;
     const size_t max = len < 32 ? len : 32;
     char hex[3 * 32 + 1];
     size_t off = 0;
@@ -39,13 +41,14 @@ static void ms_dump_hex(const char *label, const uint8_t *buf, size_t len, const
         }
     }
     hex[off < sizeof(hex) ? off : sizeof(hex) - 1] = '\0';
-    fprintf(stderr,
-            "[LANTERN MS] %s io=%p len=%zu hex=%s%s\n",
-            label,
-            io,
-            len,
-            hex,
-            len > max ? " ..." : "");
+    LP_LOGT(
+        "MULTISELECT",
+        "%s io=%p len=%zu hex=%s%s",
+        label,
+        io,
+        len,
+        hex,
+        len > max ? " ..." : "");
 }
 
 static inline libp2p_multiselect_err_t map_conn_err(ssize_t v)
@@ -247,11 +250,12 @@ static libp2p_multiselect_err_t recv_msg_io(libp2p_io_t *io, char **out, uint64_
     }
     if (!pl_len || pl_len > MS_MAX_MESSAGE_SIZE)
     {
-        fprintf(stderr,
-                "[LANTERN MS] proto_mal bad_len io=%p pl_len=%" PRIu64 " var_len=%zu\n",
-                (void *)io,
-                pl_len,
-                used);
+        LP_LOGD(
+            "MULTISELECT",
+            "proto_mal bad_len io=%p pl_len=%" PRIu64 " var_len=%zu",
+            (void *)io,
+            pl_len,
+            used);
         ms_dump_hex("proto_mal varint", var, used, io);
         return LIBP2P_MULTISELECT_ERR_PROTO_MAL;
     }
@@ -800,22 +804,24 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
     libp2p_multiselect_err_t rc = send_msg_io(io, LIBP2P_MULTISELECT_PROTO_ID, deadline_ms);
     if (rc)
     {
-        fprintf(stderr,
-                "[LANTERN MS] dial send header rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                (int)rc,
-                timeout_ms,
-                (void *)io);
+        LP_LOGD(
+            "MULTISELECT",
+            "dial send header rc=%d timeout_ms=%" PRIu64 " io=%p",
+            (int)rc,
+            timeout_ms,
+            (void *)io);
         goto done;
     }
     char *msg = NULL;
     rc = recv_msg_io(io, &msg, deadline_ms);
     if (rc)
     {
-        fprintf(stderr,
-                "[LANTERN MS] dial recv header rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                (int)rc,
-                timeout_ms,
-                (void *)io);
+        LP_LOGD(
+            "MULTISELECT",
+            "dial recv header rc=%d timeout_ms=%" PRIu64 " io=%p",
+            (int)rc,
+            timeout_ms,
+            (void *)io);
         goto done;
     }
     if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
@@ -866,13 +872,14 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
     rc = send_msg_io(io, proposals[idx], deadline_ms);
     if (rc)
     {
-        fprintf(stderr,
-                "[LANTERN MS] dial send proposal idx=%zu proto=%s rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                idx,
-                proposals[idx] ? proposals[idx] : "(null)",
-                (int)rc,
-                timeout_ms,
-                (void *)io);
+        LP_LOGD(
+            "MULTISELECT",
+            "dial send proposal idx=%zu proto=%s rc=%d timeout_ms=%" PRIu64 " io=%p",
+            idx,
+            proposals[idx] ? proposals[idx] : "(null)",
+            (int)rc,
+            timeout_ms,
+            (void *)io);
         goto done;
     }
     while (proposals[idx])
@@ -880,12 +887,13 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         rc = recv_msg_io(io, &msg, deadline_ms);
         if (rc)
         {
-            fprintf(stderr,
-                    "[LANTERN MS] dial recv response idx=%zu rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                    idx,
-                    (int)rc,
-                    timeout_ms,
-                    (void *)io);
+            LP_LOGD(
+                "MULTISELECT",
+                "dial recv response idx=%zu rc=%d timeout_ms=%" PRIu64 " io=%p",
+                idx,
+                (int)rc,
+                timeout_ms,
+                (void *)io);
             goto done;
         }
         if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
@@ -911,13 +919,14 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
             rc = send_msg_io(io, proposals[idx], deadline_ms);
             if (rc)
             {
-                fprintf(stderr,
-                        "[LANTERN MS] dial send proposal idx=%zu proto=%s rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                        idx,
-                        proposals[idx] ? proposals[idx] : "(null)",
-                        (int)rc,
-                        (unsigned long long)timeout_ms,
-                        (void *)io);
+                LP_LOGD(
+                    "MULTISELECT",
+                    "dial send proposal idx=%zu proto=%s rc=%d timeout_ms=%" PRIu64 " io=%p",
+                    idx,
+                    proposals[idx] ? proposals[idx] : "(null)",
+                    (int)rc,
+                    (unsigned long long)timeout_ms,
+                    (void *)io);
                 goto done;
             }
             continue;
@@ -996,12 +1005,13 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
         rc = recv_msg_io(io, &msg, deadline_ms);
         if (rc)
         {
-            fprintf(stderr,
-                    "[LANTERN MS] listen recv msg header_received=%d rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                    header_received ? 1 : 0,
-                    (int)rc,
-                    cfg.handshake_timeout_ms,
-                    (void *)io);
+            LP_LOGD(
+                "MULTISELECT",
+                "listen recv msg header_received=%d rc=%d timeout_ms=%" PRIu64 " io=%p",
+                header_received ? 1 : 0,
+                (int)rc,
+                cfg.handshake_timeout_ms,
+                (void *)io);
             goto fail;
         }
         if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
@@ -1021,11 +1031,12 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 rc = send_msg_io(io, LIBP2P_MULTISELECT_PROTO_ID, deadline_ms);
                 if (rc)
                 {
-                    fprintf(stderr,
-                            "[LANTERN MS] listen send header rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                            (int)rc,
-                            cfg.handshake_timeout_ms,
-                            (void *)io);
+                    LP_LOGD(
+                        "MULTISELECT",
+                        "listen send header rc=%d timeout_ms=%" PRIu64 " io=%p",
+                        (int)rc,
+                        cfg.handshake_timeout_ms,
+                        (void *)io);
                     goto fail;
                 }
                 header_sent = true;
@@ -1042,11 +1053,12 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
                 rc = send_msg_io(io, LIBP2P_MULTISELECT_PROTO_ID, deadline_ms);
                 if (rc)
                 {
-                    fprintf(stderr,
-                            "[LANTERN MS] listen re-send header rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                            (int)rc,
-                            cfg.handshake_timeout_ms,
-                            (void *)io);
+                    LP_LOGD(
+                        "MULTISELECT",
+                        "listen re-send header rc=%d timeout_ms=%" PRIu64 " io=%p",
+                        (int)rc,
+                        cfg.handshake_timeout_ms,
+                        (void *)io);
                     goto fail;
                 }
                 header_sent = true;
@@ -1061,11 +1073,12 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
             rc = cfg.enable_ls ? send_ls_response_io(io, supported) : send_msg_io(io, LIBP2P_MULTISELECT_NA, deadline_ms);
             if (rc)
             {
-                fprintf(stderr,
-                        "[LANTERN MS] listen send ls/na rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                        (int)rc,
-                        cfg.handshake_timeout_ms,
-                        (void *)io);
+                LP_LOGD(
+                    "MULTISELECT",
+                    "listen send ls/na rc=%d timeout_ms=%" PRIu64 " io=%p",
+                    (int)rc,
+                    cfg.handshake_timeout_ms,
+                    (void *)io);
                 goto fail;
             }
             if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
@@ -1077,11 +1090,12 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
             rc = send_msg_io(io, msg, deadline_ms);
             if (rc)
             {
-                fprintf(stderr,
-                        "[LANTERN MS] listen send accept rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                        (int)rc,
-                        cfg.handshake_timeout_ms,
-                        (void *)io);
+                LP_LOGD(
+                    "MULTISELECT",
+                    "listen send accept rc=%d timeout_ms=%" PRIu64 " io=%p",
+                    (int)rc,
+                    cfg.handshake_timeout_ms,
+                    (void *)io);
                 free(msg);
                 goto fail;
             }
@@ -1101,11 +1115,12 @@ libp2p_multiselect_err_t libp2p_multiselect_listen_io(libp2p_io_t *io, const cha
         free(msg);
         if (rc)
         {
-            fprintf(stderr,
-                    "[LANTERN MS] listen send na rc=%d timeout_ms=%" PRIu64 " io=%p\n",
-                    (int)rc,
-                    cfg.handshake_timeout_ms,
-                    (void *)io);
+            LP_LOGD(
+                "MULTISELECT",
+                "listen send na rc=%d timeout_ms=%" PRIu64 " io=%p",
+                (int)rc,
+                cfg.handshake_timeout_ms,
+                (void *)io);
             goto fail;
         }
     }

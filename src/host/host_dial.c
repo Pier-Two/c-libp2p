@@ -585,8 +585,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
                             *out_stream = s;
                             peer_id_destroy(&peer);
                             LP_LOGD("HOST_DIAL", "reused existing session for %s", remote_multiaddr);
-                            fprintf(stderr, "[LANTERN DIAL] reused existing session by peer %s\n",
-                                    remote_multiaddr ? remote_multiaddr : "(unknown)");
                             return 0;
                         }
                     }
@@ -681,8 +679,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
                             }
                             *out_stream = s;
                             LP_LOGD("HOST_DIAL", "reused existing session for %s (addr match)", remote_multiaddr);
-                            fprintf(stderr, "[LANTERN DIAL] reused existing session by addr %s\n",
-                                    remote_multiaddr ? remote_multiaddr : "(unknown)");
                             return 0;
                         }
                     }
@@ -874,12 +870,13 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
             }
             if (emit_ms_error)
             {
-                fprintf(stderr,
-                        "[LANTERN DIAL] multistream failed remote=%s ms=%d rc=%d timeout_ms=%d\n",
-                        remote_multiaddr ? remote_multiaddr : "(unknown)",
-                        (int)ms,
-                        rc,
-                        host->opts.multiselect_handshake_timeout_ms);
+                LP_LOGD(
+                    "HOST_DIAL",
+                    "multistream failed remote=%s ms=%d rc=%d timeout_ms=%d",
+                    remote_multiaddr ? remote_multiaddr : "(unknown)",
+                    (int)ms,
+                    rc,
+                    host->opts.multiselect_handshake_timeout_ms);
                 libp2p_event_t evt = {0};
                 evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
                 evt.u.outgoing_conn_error.peer = NULL;
