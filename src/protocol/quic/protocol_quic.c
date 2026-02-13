@@ -860,6 +860,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     uint8_t *identity_copy = NULL;
     size_t identity_len = 0;
     uint64_t identity_type = 0;
+    uint32_t cert_lifetime_s = libp2p_quic_tls_cert_options_default().not_after_lifetime;
     uint32_t dial_timeout_ms = 0;
 
     pthread_mutex_lock(&ctx->lock);
@@ -873,6 +874,8 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
             identity_type = ctx->identity_key_type;
         }
     }
+    if (ctx->cert_lifetime_s > 0)
+        cert_lifetime_s = ctx->cert_lifetime_s;
     dial_timeout_ms = ctx->dial_timeout_ms;
     pthread_mutex_unlock(&ctx->lock);
 
@@ -890,6 +893,7 @@ static libp2p_transport_err_t quic_dial(libp2p_transport_t *self, const multiadd
     cert_opts.identity_key_type = identity_type;
     cert_opts.identity_key = identity_copy;
     cert_opts.identity_key_len = identity_len;
+    cert_opts.not_after_lifetime = cert_lifetime_s;
 
     libp2p_quic_tls_certificate_t cert;
     memset(&cert, 0, sizeof(cert));
@@ -1184,6 +1188,9 @@ int libp2p_quic_transport_set_identity(libp2p_transport_t *t, const libp2p_quic_
         ctx->identity_key_len = opts->identity_key_len;
         ctx->identity_key_type = opts->identity_key_type;
     }
+    ctx->cert_lifetime_s = (opts && opts->not_after_lifetime > 0)
+                               ? opts->not_after_lifetime
+                               : libp2p_quic_tls_cert_options_default().not_after_lifetime;
 
     pthread_mutex_unlock(&ctx->lock);
     return 0;
@@ -1270,6 +1277,7 @@ libp2p_transport_t *libp2p_quic_transport_new(const libp2p_quic_config_t *cfg)
     state->identity_key = NULL;
     state->identity_key_len = 0;
     state->identity_key_type = 0;
+    state->cert_lifetime_s = libp2p_quic_tls_cert_options_default().not_after_lifetime;
     state->dial_timeout_ms = 0;
     t->vt = &QUIC_VTBL;
     t->ctx = state;

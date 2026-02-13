@@ -13,6 +13,8 @@
 #include <unistd.h>
 
 #define KEY_TYPE_ED25519 1
+#define TEST_SERVER_CERT_LIFETIME_S 4
+#define TEST_CERT_ROTATION_WAIT_US (4500 * 1000)
 
 static void print_result(const char *name, const char *details, int ok)
 {
@@ -127,6 +129,7 @@ int main(void)
     server_opts.identity_key_type = KEY_TYPE_ED25519;
     server_opts.identity_key = SERVER_ID_KEY;
     server_opts.identity_key_len = sizeof(SERVER_ID_KEY);
+    server_opts.not_after_lifetime = TEST_SERVER_CERT_LIFETIME_S;
     TEST_CHECK("Server identity setup", libp2p_quic_transport_set_identity(server, &server_opts) == 0, "set identity failed");
 
     libp2p_transport_t *client = libp2p_quic_transport_new(NULL);
@@ -214,13 +217,56 @@ int main(void)
 
     if (client_conn)
     {
-        libp2p_conn_close(client_conn);
         libp2p_conn_free(client_conn);
+        client_conn = NULL;
     }
     if (server_conn)
     {
-        libp2p_conn_close(server_conn);
         libp2p_conn_free(server_conn);
+        server_conn = NULL;
+    }
+
+    usleep(TEST_CERT_ROTATION_WAIT_US);
+
+    dial_rc = libp2p_transport_dial(client, bound_addr, &client_conn);
+    TEST_CHECK("Client dial after certificate rotation", dial_rc == LIBP2P_TRANSPORT_OK && client_conn != NULL, "dial rc=%d", dial_rc);
+
+    acc_rc = accept_with_backoff(listener, &server_conn);
+    TEST_CHECK("Server accept after certificate rotation", acc_rc == LIBP2P_LISTENER_OK && server_conn != NULL, "accept rc=%d", acc_rc);
+
+    client_peer = NULL;
+    if (client_conn)
+    {
+        int prc = libp2p_quic_conn_copy_verified_peer(client_conn, &client_peer);
+        TEST_CHECK("Client verified peer after rotation", prc == LIBP2P_ERR_OK && client_peer != NULL, "rc=%d", prc);
+    }
+    if (client_peer)
+    {
+        peer_id_destroy(client_peer);
+        free(client_peer);
+    }
+
+    server_peer = NULL;
+    if (server_conn)
+    {
+        int prc = libp2p_quic_conn_copy_verified_peer(server_conn, &server_peer);
+        TEST_CHECK("Server verified peer after rotation", prc == LIBP2P_ERR_OK && server_peer != NULL, "rc=%d", prc);
+    }
+    if (server_peer)
+    {
+        peer_id_destroy(server_peer);
+        free(server_peer);
+    }
+
+    if (client_conn)
+    {
+        libp2p_conn_free(client_conn);
+        client_conn = NULL;
+    }
+    if (server_conn)
+    {
+        libp2p_conn_free(server_conn);
+        server_conn = NULL;
     }
 
     if (listener)

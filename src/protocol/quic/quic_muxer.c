@@ -327,6 +327,7 @@ struct libp2p_quic_session
     struct libp2p_host *host;
     picoquic_packet_loop_param_t loop_param;
     picoquic_network_thread_ctx_t *loop_ctx;
+    int loop_ctx_owned;
     _Atomic int loop_started;
     _Atomic int loop_stop;
     quic_session_event_t *pending_head;
@@ -1255,6 +1256,9 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
     picoquic_cnx_t *cnx = atomic_load_explicit(&session->cnx, memory_order_acquire);
     if (cnx && !picoquic_is_client(cnx))
     {
+        pthread_mutex_lock(&session->lock);
+        session->loop_ctx_owned = 0;
+        pthread_mutex_unlock(&session->lock);
         /* Mark as started since the listener loop is handling it */
         atomic_store_explicit(&session->loop_started, 1, memory_order_release);
         return 0;
@@ -1380,6 +1384,7 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
 
     pthread_mutex_lock(&session->lock);
     session->loop_ctx = loop_ctx;
+    session->loop_ctx_owned = 1;
     pthread_mutex_unlock(&session->lock);
 
     return 0;
@@ -1450,6 +1455,7 @@ int libp2p__quic_session_start_loop(libp2p_quic_session_t *session,
 
     pthread_mutex_lock(&session->lock);
     session->loop_ctx = loop_ctx;
+    session->loop_ctx_owned = 1;
     pthread_mutex_unlock(&session->lock);
 
     return 0;
@@ -1467,16 +1473,20 @@ void libp2p__quic_session_stop_loop(libp2p_quic_session_t *session)
     atomic_store_explicit(&session->loop_stop, 1, memory_order_release);
 
     picoquic_network_thread_ctx_t *loop_ctx = NULL;
+    int loop_ctx_owned = 0;
 
     pthread_mutex_lock(&session->lock);
     loop_ctx = session->loop_ctx;
+    loop_ctx_owned = session->loop_ctx_owned;
     session->loop_ctx = NULL;
+    session->loop_ctx_owned = 0;
     pthread_mutex_unlock(&session->lock);
 
     if (loop_ctx)
     {
         (void)picoquic_wake_up_network_thread(loop_ctx);
-        picoquic_delete_network_thread(loop_ctx);
+        if (loop_ctx_owned)
+            picoquic_delete_network_thread(loop_ctx);
     }
 
     atomic_store_explicit(&session->loop_started, 0, memory_order_release);
@@ -1489,6 +1499,7 @@ void libp2p__quic_session_attach_thread(libp2p_quic_session_t *session,
         return;
     pthread_mutex_lock(&session->lock);
     session->loop_ctx = thread_ctx;
+    session->loop_ctx_owned = 0;
     pthread_mutex_unlock(&session->lock);
 }
 
@@ -1782,6 +1793,7 @@ libp2p_quic_session_t *libp2p__quic_session_wrap(picoquic_quic_t *quic, picoquic
    atomic_store(&session->refcnt, 1);
     memset(&session->loop_param, 0, sizeof(session->loop_param));
     session->loop_ctx = NULL;
+    session->loop_ctx_owned = 0;
     atomic_store(&session->loop_started, 0);
     atomic_store(&session->loop_stop, 0);
     if (pthread_mutex_init(&session->lock, NULL) != 0)

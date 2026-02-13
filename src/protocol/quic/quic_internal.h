@@ -53,6 +53,8 @@ typedef struct quic_transport_ctx
     uint8_t *identity_key;
     size_t identity_key_len;
     uint64_t identity_key_type;
+    /* Validity duration for generated QUIC TLS leaf certificates. */
+    uint32_t cert_lifetime_s;
     uint32_t dial_timeout_ms;
 } quic_transport_ctx_t;
 

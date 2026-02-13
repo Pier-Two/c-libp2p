@@ -38,6 +38,10 @@
 #endif
 #include "picoquic_packet_loop.h"
 
+#define QUIC_CERT_ROTATION_THREAD_IDLE_MS 250ULL
+#define QUIC_CERT_ROTATION_RETRY_BASE_MS 1000ULL
+#define QUIC_CERT_ROTATION_RETRY_CAP_MS 30000ULL
+
 static ptls_t *quic_listener_tls_handle(picoquic_cnx_t *cnx)
 {
     if (!cnx || !cnx->tls_ctx)
@@ -66,13 +70,6 @@ static uint64_t quic_now_mono_ms(void)
     return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)(ts.tv_nsec / 1000000ull);
 }
 
-static uint64_t quic_now_mono_us(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)(ts.tv_nsec / 1000ull);
-}
-
 struct quic_listener_ctx
 {
     libp2p_transport_t *transport;
@@ -87,6 +84,14 @@ struct quic_listener_ctx
     quic_listener_conn_node_t *queue_head;
     quic_listener_conn_node_t *queue_tail;
     quic_listener_peer_entry_t *verified_peers;
+    uint8_t *identity_key;
+    size_t identity_key_len;
+    uint64_t identity_key_type;
+    uint32_t cert_lifetime_s;
+    uint64_t cert_rotate_at_ms;
+    uint32_t cert_rotation_failures;
+    pthread_t cert_thread;
+    int cert_thread_started;
     multiaddr_t *requested_addr; /* original listen address */
     multiaddr_t *bound_addr;     /* resolved local address (without /quic) */
     int port_ready;
@@ -94,6 +99,175 @@ struct quic_listener_ctx
     _Atomic int closing;
     _Atomic int loop_stop;
 };
+
+static uint64_t quic_listener_cert_renew_lead_ms(uint32_t lifetime_s)
+{
+    uint64_t lifetime_ms = (uint64_t)lifetime_s * 1000ULL;
+    if (lifetime_ms == 0)
+        return 1000ULL;
+
+    /* Rotate with at least 10% headroom, but avoid pathological values. */
+    uint64_t lead_ms = lifetime_ms / 10ULL;
+    if (lead_ms < 1000ULL)
+        lead_ms = 1000ULL;
+    if (lead_ms > lifetime_ms / 2ULL)
+        lead_ms = lifetime_ms / 2ULL;
+    if (lead_ms == 0)
+        lead_ms = 1ULL;
+    return lead_ms;
+}
+
+static void quic_listener_schedule_cert_rotation(quic_listener_ctx_t *ctx, uint64_t now_ms)
+{
+    if (!ctx)
+        return;
+    uint32_t lifetime_s = ctx->cert_lifetime_s ? ctx->cert_lifetime_s
+                                               : libp2p_quic_tls_cert_options_default().not_after_lifetime;
+    if (lifetime_s == 0)
+        lifetime_s = 1;
+    uint64_t lifetime_ms = (uint64_t)lifetime_s * 1000ULL;
+    uint64_t lead_ms = quic_listener_cert_renew_lead_ms(lifetime_s);
+    if (lead_ms >= lifetime_ms)
+        lead_ms = lifetime_ms / 2ULL;
+    ctx->cert_rotate_at_ms = now_ms + lifetime_ms - lead_ms;
+}
+
+static uint64_t quic_listener_rotation_retry_delay_ms(uint32_t failures)
+{
+    uint64_t retry_ms = QUIC_CERT_ROTATION_RETRY_BASE_MS;
+    uint32_t shift = failures;
+    if (shift > 5)
+        shift = 5;
+    retry_ms <<= shift;
+    if (retry_ms > QUIC_CERT_ROTATION_RETRY_CAP_MS)
+        retry_ms = QUIC_CERT_ROTATION_RETRY_CAP_MS;
+    return retry_ms;
+}
+
+static int quic_listener_rotate_certificate_locked(quic_listener_ctx_t *ctx, uint64_t now_ms)
+{
+    if (!ctx || !ctx->quic || !ctx->identity_key || ctx->identity_key_len == 0)
+        return -1;
+    if (picoquic_get_first_cnx(ctx->quic) != NULL)
+        return 1;
+
+    libp2p_quic_tls_cert_options_t cert_opts = libp2p_quic_tls_cert_options_default();
+    cert_opts.identity_key = ctx->identity_key;
+    cert_opts.identity_key_len = ctx->identity_key_len;
+    cert_opts.identity_key_type = ctx->identity_key_type;
+    cert_opts.not_after_lifetime = ctx->cert_lifetime_s;
+
+    libp2p_quic_tls_certificate_t cert = {0};
+    if (libp2p_quic_tls_generate_certificate(&cert_opts, &cert) != 0)
+        return -1;
+
+    ptls_iovec_t *chain = (ptls_iovec_t *)calloc(1, sizeof(*chain));
+    if (!chain)
+    {
+        libp2p_quic_tls_certificate_clear(&cert);
+        return -1;
+    }
+    chain[0].base = cert.cert_der;
+    chain[0].len = cert.cert_len;
+
+    if (libp2p__quic_apply_tls_key(ctx->quic, cert.key_der, cert.key_len) != 0)
+    {
+        free(chain);
+        libp2p_quic_tls_certificate_clear(&cert);
+        return -1;
+    }
+
+    picoquic_set_tls_certificate_chain(ctx->quic, chain, 1);
+    cert.cert_der = NULL;
+    cert.cert_len = 0;
+    libp2p_quic_tls_certificate_clear(&cert);
+
+    ctx->cert_rotation_failures = 0;
+    quic_listener_schedule_cert_rotation(ctx, now_ms);
+    LP_LOGI("QUIC",
+            "listener TLS certificate rotated successfully; next rotation in %" PRIu64 " ms",
+            (ctx->cert_rotate_at_ms > now_ms) ? (ctx->cert_rotate_at_ms - now_ms) : 0ULL);
+    return 0;
+}
+
+static void *quic_listener_cert_rotation_thread_main(void *arg)
+{
+    quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)arg;
+    if (!ctx)
+        return NULL;
+
+    while (!atomic_load_explicit(&ctx->closing, memory_order_acquire))
+    {
+        uint64_t now_ms = quic_now_mono_ms();
+        uint64_t rotate_at_ms = ctx->cert_rotate_at_ms;
+
+        if (rotate_at_ms > 0 && now_ms >= rotate_at_ms)
+        {
+            pthread_mutex_lock(&ctx->quic_mtx);
+            if (ctx->quic &&
+                !atomic_load_explicit(&ctx->closing, memory_order_acquire) &&
+                ctx->cert_rotate_at_ms > 0 &&
+                now_ms >= ctx->cert_rotate_at_ms)
+            {
+                int rotate_rc = quic_listener_rotate_certificate_locked(ctx, now_ms);
+                if (rotate_rc == 1)
+                {
+                    ctx->cert_rotate_at_ms = now_ms + QUIC_CERT_ROTATION_RETRY_BASE_MS;
+                }
+                else if (rotate_rc != 0)
+                {
+                    uint64_t retry_ms = quic_listener_rotation_retry_delay_ms(ctx->cert_rotation_failures);
+                    if (ctx->cert_rotation_failures < UINT32_MAX)
+                        ctx->cert_rotation_failures++;
+                    ctx->cert_rotate_at_ms = now_ms + retry_ms;
+                    LP_LOGW("QUIC",
+                            "listener TLS certificate rotation failed; retrying in %" PRIu64 " ms",
+                            retry_ms);
+                }
+            }
+            pthread_mutex_unlock(&ctx->quic_mtx);
+            continue;
+        }
+
+        uint64_t sleep_ms = QUIC_CERT_ROTATION_THREAD_IDLE_MS;
+        if (rotate_at_ms > now_ms)
+        {
+            uint64_t until_rotation_ms = rotate_at_ms - now_ms;
+            if (until_rotation_ms < sleep_ms)
+                sleep_ms = until_rotation_ms;
+        }
+        if (sleep_ms == 0)
+            sleep_ms = 1;
+
+        struct timespec ts = {
+            .tv_sec = (time_t)(sleep_ms / 1000ULL),
+            .tv_nsec = (long)((sleep_ms % 1000ULL) * 1000000ULL),
+        };
+        nanosleep(&ts, NULL);
+    }
+
+    return NULL;
+}
+
+static int quic_listener_start_rotation_thread(quic_listener_ctx_t *ctx)
+{
+    if (!ctx)
+        return -1;
+    if (ctx->cert_thread_started)
+        return 0;
+    if (pthread_create(&ctx->cert_thread, NULL, quic_listener_cert_rotation_thread_main, ctx) != 0)
+        return -1;
+    ctx->cert_thread_started = 1;
+    return 0;
+}
+
+static void quic_listener_stop_rotation_thread(quic_listener_ctx_t *ctx)
+{
+    if (!ctx || !ctx->cert_thread_started)
+        return;
+    pthread_join(ctx->cert_thread, NULL);
+    ctx->cert_thread_started = 0;
+}
 
 static bool multiaddr_is_unspecified(const multiaddr_t *addr)
 {
@@ -484,8 +658,19 @@ static void quic_listener_free_ctx(quic_listener_ctx_t *ctx)
 {
     if (!ctx)
         return;
+    atomic_store_explicit(&ctx->closing, 1, memory_order_release);
+    atomic_store_explicit(&ctx->loop_stop, 1, memory_order_release);
+    quic_listener_stop_rotation_thread(ctx);
     quic_listener_queue_clear(ctx);
     quic_listener_free_peers(ctx);
+    if (ctx->identity_key)
+    {
+        libp2p__quic_transport_clear_buffer(ctx->identity_key, ctx->identity_key_len);
+        free(ctx->identity_key);
+        ctx->identity_key = NULL;
+        ctx->identity_key_len = 0;
+        ctx->identity_key_type = 0;
+    }
     multiaddr_free(ctx->requested_addr);
     multiaddr_free(ctx->bound_addr);
     pthread_mutex_destroy(&ctx->lock);
@@ -508,6 +693,7 @@ static libp2p_listener_err_t quic_listener_close(libp2p_listener_t *l)
         return LIBP2P_LISTENER_ERR_CLOSED;
 
     atomic_store(&ctx->loop_stop, 1);
+    quic_listener_stop_rotation_thread(ctx);
 
     if (ctx->quic)
     {
@@ -546,6 +732,7 @@ static void quic_listener_free(libp2p_listener_t *l)
 {
     if (!l)
         return;
+    (void)quic_listener_close(l);
     quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)atomic_load_explicit(&l->ctx, memory_order_acquire);
     quic_listener_free_ctx(ctx);
     free(l);
@@ -581,10 +768,15 @@ static void quic_listener_session_close(libp2p_quic_session_t *session)
     picoquic_cnx_t *cnx = libp2p__quic_session_native(session);
     if (cnx)
     {
-        /* NOTE: Do NOT acquire quic_mtx here - the socket loop already holds it via lock_fn
-         * callback. Trying to lock here causes a deadlock. */
+        /* Synchronize close with the socket loop to avoid racy cnx state updates. */
+        pthread_mutex_t *mtx = libp2p__quic_session_get_quic_mtx(session);
+        if (mtx)
+            pthread_mutex_lock(mtx);
         (void)picoquic_close(cnx, 0);
+        if (mtx)
+            pthread_mutex_unlock(mtx);
     }
+    libp2p__quic_session_wake(session);
 }
 
 static void quic_listener_session_free(libp2p_quic_session_t *session)
@@ -938,6 +1130,15 @@ int quic_listener_start(quic_listener_ctx_t *ctx)
         }
         usleep(1000);
     }
+
+    if (quic_listener_start_rotation_thread(ctx) != 0)
+    {
+        atomic_store(&ctx->loop_stop, 1);
+        quic_listener_wake(ctx);
+        picoquic_delete_network_thread(net_thread);
+        ctx->net_thread = NULL;
+        return -1;
+    }
     return 0;
 }
 
@@ -960,10 +1161,18 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     if (libp2p__quic_transport_copy_identity(transport_ctx, &identity_key, &identity_len, &identity_type) != 0)
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
 
+    uint32_t cert_lifetime_s = libp2p_quic_tls_cert_options_default().not_after_lifetime;
+    pthread_mutex_lock(&transport_ctx->lock);
+    if (transport_ctx->cert_lifetime_s > 0)
+        cert_lifetime_s = transport_ctx->cert_lifetime_s;
+    pthread_mutex_unlock(&transport_ctx->lock);
+    LP_LOGI("QUIC", "listener cert lifetime configured to %" PRIu32 "s", cert_lifetime_s);
+
     libp2p_quic_tls_cert_options_t cert_opts = libp2p_quic_tls_cert_options_default();
     cert_opts.identity_key = identity_key;
     cert_opts.identity_key_len = identity_len;
     cert_opts.identity_key_type = identity_type;
+    cert_opts.not_after_lifetime = cert_lifetime_s;
 
     libp2p_quic_tls_certificate_t cert = {0};
     if (libp2p_quic_tls_generate_certificate(&cert_opts, &cert) != 0)
@@ -973,13 +1182,12 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
 
-    libp2p__quic_transport_clear_buffer(identity_key, identity_len);
-    free(identity_key);
-
     quic_listener_ctx_t *ctx = (quic_listener_ctx_t *)calloc(1, sizeof(*ctx));
     if (!ctx)
     {
         libp2p_quic_tls_certificate_clear(&cert);
+        libp2p__quic_transport_clear_buffer(identity_key, identity_len);
+        free(identity_key);
         return LIBP2P_TRANSPORT_ERR_INTERNAL;
     }
     ctx->transport = transport;
@@ -991,6 +1199,15 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     ctx->port_ready = 0;
     atomic_store(&ctx->closing, 0);
     atomic_store(&ctx->loop_stop, 0);
+    ctx->identity_key = identity_key;
+    ctx->identity_key_len = identity_len;
+    ctx->identity_key_type = identity_type;
+    ctx->cert_lifetime_s = cert_lifetime_s;
+    ctx->cert_rotate_at_ms = 0;
+    ctx->cert_rotation_failures = 0;
+    ctx->cert_thread_started = 0;
+    identity_key = NULL;
+    identity_len = 0;
     ctx->requested_addr = multiaddr_copy(addr, NULL);
 
     libp2p_quic_config_t cfg = libp2p__quic_transport_get_config(transport_ctx);
@@ -1148,6 +1365,7 @@ libp2p_transport_err_t quic_listener_create(libp2p_transport_t *transport,
     }
 
     quic_listener_prepare_listener(listener, ctx);
+    quic_listener_schedule_cert_rotation(ctx, quic_now_mono_ms());
 
     *out = listener;
     return LIBP2P_TRANSPORT_OK;

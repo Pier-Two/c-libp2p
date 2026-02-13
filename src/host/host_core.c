@@ -1,5 +1,5 @@
-#include <errno.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +73,9 @@ static int duplicate_const_string_array(const char *const *src, size_t count, co
     *dst_out = (const char *const *)copy;
     return 0;
 }
+
+/* 90 days in seconds. */
+static const uint32_t HOST_QUIC_CERT_LIFETIME_S = 7776000U;
 
 static int dup_opts(const libp2p_host_options_t *in, libp2p_host_options_t *out)
 {
@@ -730,6 +733,7 @@ int libp2p_host_set_private_key(libp2p_host_t *host, const uint8_t *privkey_pb, 
         qopts.identity_key_type = (uint64_t)host->identity_type;
         qopts.identity_key = host->identity_key;
         qopts.identity_key_len = host->identity_key_len;
+        qopts.not_after_lifetime = HOST_QUIC_CERT_LIFETIME_S;
         for (size_t i = 0; i < host->num_transports; i++)
         {
             if (libp2p_quic_transport_is(host->transports[i]))
