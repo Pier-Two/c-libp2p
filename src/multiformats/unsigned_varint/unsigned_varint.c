@@ -23,8 +23,7 @@ static size_t unsigned_varint_size_internal(uint64_t value)
 	return encoded_size;
 }
 
-unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out,
-					     size_t out_size, size_t *written)
+unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_t out_size, size_t *written)
 {
 	unsigned_varint_err_t status;
 	uint64_t remaining_value;
@@ -61,13 +60,11 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out,
 				{
 					uint8_t byte;
 
-					byte = (uint8_t)(remaining_value &
-							 UINT64_C(0x7F));
+					byte = (uint8_t)(remaining_value & UINT64_C(0x7F));
 					remaining_value >>= 7U;
 					if (remaining_value != UINT64_C(0))
 					{
-						byte = (uint8_t)(byte |
-								 UINT8_C(0x80));
+						byte = (uint8_t)(byte | UINT8_C(0x80));
 					}
 
 					out[index] = byte;
@@ -81,8 +78,7 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out,
 	return status;
 }
 
-unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size,
-					     uint64_t *value, size_t *read)
+unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, uint64_t *value, size_t *read)
 {
 	unsigned_varint_err_t status;
 	uint64_t decoded_value;
@@ -113,37 +109,25 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size,
 				byte = in[index];
 				if (index < UNSIGNED_VARINT_MAX_ENCODED_SIZE)
 				{
-					decoded_value |=
-						((uint64_t)(byte &
-							    UINT8_C(0x7F)))
-						<< shift;
-					if ((byte & UINT8_C(0x80)) ==
-					    UINT8_C(0))
+					decoded_value |= ((uint64_t)(byte & UINT8_C(0x7F))) << shift;
+					if ((byte & UINT8_C(0x80)) == UINT8_C(0))
 					{
 						size_t encoded_size;
 
-						encoded_size =
-							index + (size_t)1U;
-						if (decoded_value >
-						    UNSIGNED_VARINT_MAX_VALUE)
+						encoded_size = index + (size_t)1U;
+						if (decoded_value > UNSIGNED_VARINT_MAX_VALUE)
 						{
-							status =
-								UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
+							status = UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
 						}
-						else if (
-							unsigned_varint_size_internal(
-								decoded_value) !=
-							encoded_size)
+						else if (unsigned_varint_size_internal(decoded_value) != encoded_size)
 						{
-							status =
-								UNSIGNED_VARINT_ERR_NOT_MINIMAL;
+							status = UNSIGNED_VARINT_ERR_NOT_MINIMAL;
 						}
 						else
 						{
 							*value = decoded_value;
 							*read = encoded_size;
-							status =
-								UNSIGNED_VARINT_OK;
+							status = UNSIGNED_VARINT_OK;
 						}
 						break;
 					}
@@ -158,34 +142,25 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size,
 					 * forms, and reject any continuation
 					 * beyond this point.
 					 */
-					if (index >
-					    UNSIGNED_VARINT_MAX_ENCODED_SIZE)
+					if (index > UNSIGNED_VARINT_MAX_ENCODED_SIZE)
 					{
-						status =
-							UNSIGNED_VARINT_ERR_TOO_LONG;
+						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x80)) !=
-						 UINT8_C(0))
+					else if ((byte & UINT8_C(0x80)) != UINT8_C(0))
 					{
-						status =
-							UNSIGNED_VARINT_ERR_TOO_LONG;
+						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x7F)) ==
-						 UINT8_C(0))
+					else if ((byte & UINT8_C(0x7F)) == UINT8_C(0))
 					{
-						status =
-							UNSIGNED_VARINT_ERR_TOO_LONG;
+						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x7F)) ==
-						 UINT8_C(1))
+					else if ((byte & UINT8_C(0x7F)) == UINT8_C(1))
 					{
-						status =
-							UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
+						status = UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
 					}
 					else
 					{
-						status =
-							UNSIGNED_VARINT_ERR_TOO_LONG;
+						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
 					break;
 				}

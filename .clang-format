@@ -17,8 +17,9 @@ IndentWidth: 8
 TabWidth: 8
 UseTab: Always
 ContinuationIndentWidth: 8
+AllowShortFunctionsOnASingleLine: None
 IndentCaseLabels: false
-ColumnLimit: 80
+ColumnLimit: 120
 SpaceBeforeParens: ControlStatements
 PointerAlignment: Right
 
