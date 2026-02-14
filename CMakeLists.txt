@@ -11,6 +11,13 @@ project(libp2p
     LANGUAGES C
 )
 
+# Windows shared builds rely on import libraries for inter-target linking.
+# Most project targets do not annotate exports with __declspec(dllexport), so
+# ask CMake to auto-export global symbols and emit the required import .lib.
+if(WIN32 AND BUILD_SHARED_LIBS)
+  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
 if(NOT DEFINED OPENSSL_ROOT_DIR AND DEFINED ENV{OPENSSL_ROOT_DIR})
   set(OPENSSL_ROOT_DIR "$ENV{OPENSSL_ROOT_DIR}" CACHE PATH "Path to custom OpenSSL installation" FORCE)
 endif()
