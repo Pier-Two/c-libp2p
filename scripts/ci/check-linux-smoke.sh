@@ -10,7 +10,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   exit 1
 fi
 
-for cmd in cmake ctest clang-format cppcheck doxygen git; do
+for cmd in cmake ctest clang-format clang-tidy cppcheck doxygen git; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     echo "error: required command '${cmd}' is not available in PATH." >&2
     exit 1
@@ -61,7 +61,7 @@ if [ -n "${range}" ]; then
     cat > "${doc_doxyfile}" <<EOF
 PROJECT_NAME           = c-libp2p-doc-gate
 OUTPUT_DIRECTORY       = ${doc_gate_dir}/out
-GENERATE_HTML          = NO
+GENERATE_HTML          = YES
 GENERATE_LATEX         = NO
 GENERATE_XML           = NO
 QUIET                  = YES
@@ -75,7 +75,7 @@ RECURSIVE              = NO
 EXTRACT_ALL            = YES
 EXTRACT_STATIC         = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
-ENABLE_PREPROCESSING   = NO
+ENABLE_PREPROCESSING   = YES
 EOF
 
     echo "Doxygen doc check scope:"
@@ -83,6 +83,84 @@ EOF
     doxygen "${doc_doxyfile}"
     rm -rf "${doc_gate_dir}"
     trap - EXIT
+  fi
+fi
+
+if [ -n "${range}" ]; then
+  misra_scope="$(git diff --name-only "${range}" -- '*.c' '*.h' | grep -E '^(src|include)/multiformats/(unsigned_varint|multicodec)/' || true)"
+  if [ -z "${misra_scope}" ]; then
+    echo "No changed files in targeted MISRA scope (multiformats/{unsigned_varint,multicodec}); skipping MISRA check."
+  else
+    misra_addon=""
+    for candidate in \
+      "/usr/share/cppcheck/addons/misra.py" \
+      "/usr/lib/cppcheck/addons/misra.py" \
+      "/usr/lib/x86_64-linux-gnu/cppcheck/addons/misra.py" \
+      "/usr/local/share/cppcheck/addons/misra.py" \
+      "/opt/homebrew/share/cppcheck/addons/misra.py" \
+      "/opt/homebrew/Cellar/cppcheck/2.19.0/share/cppcheck/addons/misra.py"; do
+      if [ -f "${candidate}" ]; then
+        misra_addon="${candidate}"
+        break
+      fi
+    done
+
+    if [ -z "${misra_addon}" ]; then
+      echo "error: cppcheck MISRA addon (misra.py) not found in known locations." >&2
+      exit 1
+    fi
+
+    echo "MISRA check scope:"
+    echo "${misra_scope}"
+    misra_log="$(mktemp)"
+    cppcheck \
+      --std=c99 \
+      --enable=all \
+      --check-level=exhaustive \
+      --quiet \
+      --suppress=missingIncludeSystem \
+      --suppressions-list=scripts/ci/cppcheck-misra-suppressions.txt \
+      --addon="${misra_addon}" \
+      -I include \
+      src/multiformats/unsigned_varint/unsigned_varint.c \
+      src/multiformats/multicodec/multicodec.c \
+      include/multiformats/unsigned_varint/unsigned_varint.h \
+      include/multiformats/multicodec/multicodec.h \
+      include/multiformats/multicodec/multicodec_table.h \
+      >"${misra_log}" 2>&1 || true
+
+    misra_hits="$(grep -E 'misra-c2012-(8\.11|15\.5|8\.7)' "${misra_log}" || true)"
+    rm -f "${misra_log}"
+    if [ -n "${misra_hits}" ]; then
+      echo "error: targeted MISRA findings detected (rules 8.7/8.11/15.5):" >&2
+      echo "${misra_hits}" >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [ -n "${range}" ]; then
+  cert_sources="$(git diff --name-only "${range}" -- '*.c' | grep -E '^src/multiformats/(unsigned_varint|multicodec)/' || true)"
+  if [ -z "${cert_sources}" ]; then
+    echo "No changed C sources in targeted CERT scope (src/multiformats/{unsigned_varint,multicodec}); skipping cert-* clang-tidy check."
+  else
+    if [ ! -f "build/linux-smoke/compile_commands.json" ]; then
+      echo "error: missing build/linux-smoke/compile_commands.json for clang-tidy cert check." >&2
+      exit 1
+    fi
+
+    echo "CERT clang-tidy scope:"
+    echo "${cert_sources}"
+    while IFS= read -r cert_file; do
+      if [ -n "${cert_file}" ]; then
+        clang-tidy \
+          -quiet \
+          -p build/linux-smoke \
+          -checks='-*,cert-*' \
+          -warnings-as-errors='cert-*' \
+          "${cert_file}"
+      fi
+    done <<< "${cert_sources}"
   fi
 fi
 

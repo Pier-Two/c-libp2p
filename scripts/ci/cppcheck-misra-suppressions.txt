@@ -1,0 +1,5 @@
+# Advisory MISRA C:2012 Rule 8.7 suppressions for exported public API symbols.
+# These functions are intentionally externally linked and declared in public
+# headers for cross-module consumption.
+misra-c2012-8.7:src/multiformats/unsigned_varint/unsigned_varint.c
+misra-c2012-8.7:src/multiformats/multicodec/multicodec.c
