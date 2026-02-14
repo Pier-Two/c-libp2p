@@ -40,7 +40,8 @@
       "displayName": "Windows smoke",
       "inherits": "smoke-base",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_SHARED_LIBS": "OFF"
       }
     }
   ],
