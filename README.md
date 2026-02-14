@@ -39,6 +39,44 @@ ctest --test-dir build -C Release
 
 When building shared libraries on Windows the produced DLLs are copied next to the test executables automatically.
 
+## CI lanes
+
+Validation is split into two lanes:
+
+- Fast lane (`.github/workflows/ci-fast.yml`, required for PRs):
+  - `macos-smoke`
+  - `linux-smoke`
+  - `windows-smoke`
+- Full lane (`.github/workflows/ci-full.yml`, runs on `main`, nightly, and manual dispatch):
+  - `macos-full`
+  - `linux-gcc-full`
+  - `linux-clang-full`
+  - `linux-sanitizers` (ASan/UBSan)
+  - `windows-full`
+
+The lane presets are versioned in `CMakePresets.json` and can be run locally:
+
+```sh
+# fast lane (macOS example)
+cmake --preset macos-smoke
+cmake --build --preset macos-smoke
+ctest --preset macos-smoke
+
+# full lane (macOS example)
+cmake --preset macos-full
+cmake --build --preset macos-full
+ctest --preset macos-full
+```
+
+For Windows validation from non-Windows development machines, trigger and monitor the full lane with GitHub CLI:
+
+```sh
+gh workflow run ci-full.yml --ref <branch>
+gh run list --workflow ci-full.yml
+gh run watch <run-id>
+gh run view <run-id> --log
+```
+
 ## Project Structure
 
 - `src/` – library source code
