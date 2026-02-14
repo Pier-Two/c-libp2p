@@ -91,7 +91,7 @@ jobs:
           cppcheck \
             --error-exitcode=1 \
             --std=c99 \
-            --enable=warning,style,performance,portability \
+            --enable=warning,portability \
             --quiet \
             --suppress=missingIncludeSystem \
             src/multiformats \

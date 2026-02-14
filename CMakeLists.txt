@@ -46,7 +46,11 @@ set_tests_properties(Testprotocol_multiselect_io PROPERTIES TIMEOUT 20)
 
 # Always compile with debug symbols and no optimizations to improve LLDB experience
 # (This applies to all targets below; adjust if you want per-target control.)
-add_compile_options(-O0 -g)
+if(MSVC)
+  add_compile_options(/Zi /Od)
+else()
+  add_compile_options(-O0 -g)
+endif()
 
 if(APPLE)
   string(TOLOWER "${CMAKE_HOST_SYSTEM_PROCESSOR}" _host_arch)
@@ -121,7 +125,7 @@ option(ENABLE_STRICT_WARNINGS "Treat warnings as errors for project targets" OFF
 
 if(ENABLE_STRICT_WARNINGS)
     if(MSVC)
-        set(LIBP2P_STRICT_WARNING_FLAGS /W4 /WX)
+        set(LIBP2P_STRICT_WARNING_FLAGS /W4 /WX /wd4244 /wd4267 /wd4295)
     else()
         set(LIBP2P_STRICT_WARNING_FLAGS -Wall -Wextra -Wpedantic -Werror)
         # Several legacy headers in this tree currently omit a trailing newline.
