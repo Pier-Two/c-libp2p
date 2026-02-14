@@ -49,9 +49,9 @@ if [ -n "${range}" ]; then
 fi
 
 if [ -n "${range}" ]; then
-  doc_headers="$(git diff --name-only "${range}" -- '*.h' | grep -E '^include/multiformats/(unsigned_varint|multicodec)/' || true)"
+  doc_headers="$(git diff --name-only "${range}" -- '*.h' | grep -E '^include/multiformats/.+\.h$' || true)"
   if [ -z "${doc_headers}" ]; then
-    echo "No changed headers in targeted Doxygen scope (include/multiformats/{unsigned_varint,multicodec}); skipping doc check."
+    echo "No changed headers in include/multiformats; skipping doc check."
   else
     doc_gate_dir="$(mktemp -d)"
     trap 'rm -rf "${doc_gate_dir}"' EXIT
@@ -88,9 +88,9 @@ EOF
 fi
 
 if [ -n "${range}" ]; then
-  misra_scope="$(git diff --name-only "${range}" -- '*.c' '*.h' | grep -E '^(src|include)/multiformats/(unsigned_varint|multicodec)/' || true)"
-  if [ -z "${misra_scope}" ]; then
-    echo "No changed files in targeted MISRA scope (multiformats/{unsigned_varint,multicodec}); skipping MISRA check."
+  changed_multiformats="$(git diff --name-only "${range}" -- '*.c' '*.h' | grep -E '^(src|include|tests)/multiformats/' || true)"
+  if [ -z "${changed_multiformats}" ]; then
+    echo "No changed files in multiformats scope; skipping MISRA check."
   else
     misra_addon=""
     for candidate in \
@@ -111,40 +111,52 @@ if [ -n "${range}" ]; then
       exit 1
     fi
 
-    echo "MISRA check scope:"
-    echo "${misra_scope}"
-    misra_log="$(mktemp)"
-    cppcheck \
-      --std=c99 \
-      --enable=all \
-      --check-level=exhaustive \
-      --quiet \
-      --suppress=missingIncludeSystem \
-      --suppress=unmatchedSuppression \
-      --suppressions-list=scripts/ci/cppcheck-misra-suppressions.txt \
-      --addon="${misra_addon}" \
-      -I include \
-      src/multiformats/unsigned_varint/unsigned_varint.c \
-      src/multiformats/multicodec/multicodec.c \
-      include/multiformats/unsigned_varint/unsigned_varint.h \
-      include/multiformats/multicodec/multicodec.h \
-      include/multiformats/multicodec/multicodec_table.h \
-      >"${misra_log}" 2>&1 || true
+    mapfile -t changed_modules < <(printf '%s\n' "${changed_multiformats}" | awk -F/ '{print $3}' | sort -u)
+    misra_inputs=()
+    for module in "${changed_modules[@]}"; do
+      for base in src include tests; do
+        module_dir="${base}/multiformats/${module}"
+        if [ -d "${module_dir}" ]; then
+          misra_inputs+=("${module_dir}")
+        fi
+      done
+    done
 
-    misra_hits="$(grep -E 'misra violation .*\[misra-c2012-(8\.11|15\.5|8\.7)\]' "${misra_log}" || true)"
-    rm -f "${misra_log}"
-    if [ -n "${misra_hits}" ]; then
-      echo "error: targeted MISRA findings detected (rules 8.7/8.11/15.5):" >&2
-      echo "${misra_hits}" >&2
-      exit 1
+    if [ "${#misra_inputs[@]}" -eq 0 ]; then
+      echo "No existing multiformats module directories found for MISRA scope; skipping MISRA check."
+    else
+      echo "MISRA check modules:"
+      printf '  - %s\n' "${changed_modules[@]}"
+      echo "MISRA analysis paths:"
+      printf '  - %s\n' "${misra_inputs[@]}"
+      misra_log="$(mktemp)"
+      cppcheck \
+        --std=c99 \
+        --enable=all \
+        --check-level=exhaustive \
+        --quiet \
+        --suppress=missingIncludeSystem \
+        --suppress='*:tests/*' \
+        --addon="${misra_addon}" \
+        -I include \
+        "${misra_inputs[@]}" \
+        >"${misra_log}" 2>&1 || true
+
+      misra_hits="$(grep -E 'misra violation ' "${misra_log}" || true)"
+      rm -f "${misra_log}"
+      if [ -n "${misra_hits}" ]; then
+        echo "error: MISRA findings detected in multiformats changed-module scope:" >&2
+        echo "${misra_hits}" >&2
+        exit 1
+      fi
     fi
   fi
 fi
 
 if [ -n "${range}" ]; then
-  cert_sources="$(git diff --name-only "${range}" -- '*.c' | grep -E '^src/multiformats/(unsigned_varint|multicodec)/' || true)"
+  cert_sources="$(git diff --name-only "${range}" -- '*.c' | grep -E '^src/multiformats/.+\.c$' || true)"
   if [ -z "${cert_sources}" ]; then
-    echo "No changed C sources in targeted CERT scope (src/multiformats/{unsigned_varint,multicodec}); skipping cert-* clang-tidy check."
+    echo "No changed C sources in src/multiformats; skipping cert-* clang-tidy check."
   else
     if [ ! -f "build/linux-smoke/compile_commands.json" ]; then
       echo "error: missing build/linux-smoke/compile_commands.json for clang-tidy cert check." >&2

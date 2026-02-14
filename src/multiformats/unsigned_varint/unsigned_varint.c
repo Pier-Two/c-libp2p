@@ -105,7 +105,9 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 			for (index = 0; index < in_size; ++index)
 			{
 				uint8_t byte;
+				uint8_t terminate_loop;
 
+				terminate_loop = UINT8_C(0);
 				byte = in[index];
 				if (index < UNSIGNED_VARINT_MAX_ENCODED_SIZE)
 				{
@@ -129,9 +131,12 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 							*read = encoded_size;
 							status = UNSIGNED_VARINT_OK;
 						}
-						break;
+						terminate_loop = UINT8_C(1);
 					}
-					shift += 7U;
+					else
+					{
+						shift += 7U;
+					}
 				}
 				else
 				{
@@ -162,6 +167,11 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 					{
 						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
+					terminate_loop = UINT8_C(1);
+				}
+
+				if (terminate_loop != UINT8_C(0))
+				{
 					break;
 				}
 			}
