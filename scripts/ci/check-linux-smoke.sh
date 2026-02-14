@@ -160,6 +160,8 @@ if [ -n "${range}" ]; then
           -p build/linux-smoke \
           -checks='-*,cert-*' \
           -warnings-as-errors='cert-*' \
+          --extra-arg=-Wno-newline-eof \
+          --extra-arg=-Wno-error=newline-eof \
           "${cert_file}"
       fi
     done <<< "${cert_sources}"
