@@ -12,7 +12,8 @@ extern "C" {
  * @enum unsigned_varint_err_t
  * @brief Error codes for varint operations.
  */
-typedef enum {
+typedef enum
+{
 	UNSIGNED_VARINT_OK = 0,			/**< No error. */
 	UNSIGNED_VARINT_ERR_NULL_PTR = -1,	/**< A required pointer argument was NULL. */
 	UNSIGNED_VARINT_ERR_BUFFER_OVER = -2,	/**< The output buffer is not large enough. */

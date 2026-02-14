@@ -1,15 +1,15 @@
 BasedOnStyle: LLVM
 
-# Linux-style formatting profile (tabs/8-column indent, K&R control braces,
-# function opening braces on the next line).
+# Linux-style formatting profile (tabs/8-column indent) with full Allman
+# brace placement.
 BreakBeforeBraces: Custom
 BraceWrapping:
   AfterControlStatement: Always
   AfterFunction: true
-  AfterClass: false
-  AfterStruct: false
-  AfterUnion: false
-  AfterEnum: false
+  AfterClass: true
+  AfterStruct: true
+  AfterUnion: true
+  AfterEnum: true
   BeforeElse: true
   BeforeCatch: false
   BeforeWhile: true

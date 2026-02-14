@@ -6,7 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
+typedef struct
+{
 	const char *name;
 	uint64_t value;
 	uint8_t encoding[UNSIGNED_VARINT_MAX_ENCODED_SIZE];
