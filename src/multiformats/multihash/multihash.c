@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../../../external/sha3/sha3.h"
+#include "sha3_compat.h"
 #include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
 #include "../../../external/wjcryptlib/lib/WjCryptLib_Sha512.h"
 

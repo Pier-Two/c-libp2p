@@ -419,6 +419,9 @@ set(USE_LIBSODIUM OFF CACHE BOOL "" FORCE)
 set(USE_OPENSSL OFF CACHE BOOL "" FORCE)
 _add_subdirectory_no_tests(external/noise-c)
 set_target_properties(noiseprotocol PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(TARGET noiseprotobufs)
+  set_target_properties(noiseprotobufs PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 
 if(LIBP2P_VENDOR_PICOQUIC)
     # Add picoquic QUIC stack with bundled picotls.
@@ -1050,7 +1053,28 @@ target_include_directories(wjcryptlib PUBLIC ${PROJECT_SOURCE_DIR}/external/wjcr
 add_library(sha3
     external/sha3/sha3.c
 )
-target_include_directories(sha3 PUBLIC ${PROJECT_SOURCE_DIR}/external/sha3/lib)
+if(MSVC)
+  # MSVC's C front-end rejects C99 array parameter qualifiers ("[static N]").
+  # Generate a local compatibility copy of the vendor source/header with that
+  # qualifier stripped, without modifying the sha3 submodule checkout.
+  set(SHA3_COMPAT_DIR "${CMAKE_BINARY_DIR}/generated/sha3_compat")
+  file(MAKE_DIRECTORY "${SHA3_COMPAT_DIR}")
+
+  file(READ "${PROJECT_SOURCE_DIR}/external/sha3/sha3.h" SHA3_H_CONTENT)
+  string(REPLACE "[const static " "[" SHA3_H_CONTENT "${SHA3_H_CONTENT}")
+  string(REPLACE "[static " "[" SHA3_H_CONTENT "${SHA3_H_CONTENT}")
+  file(WRITE "${SHA3_COMPAT_DIR}/sha3.h" "${SHA3_H_CONTENT}")
+
+  file(READ "${PROJECT_SOURCE_DIR}/external/sha3/sha3.c" SHA3_C_CONTENT)
+  string(REPLACE "[const static " "[" SHA3_C_CONTENT "${SHA3_C_CONTENT}")
+  string(REPLACE "[static " "[" SHA3_C_CONTENT "${SHA3_C_CONTENT}")
+  file(WRITE "${SHA3_COMPAT_DIR}/sha3.c" "${SHA3_C_CONTENT}")
+
+  set_property(TARGET sha3 PROPERTY SOURCES "${SHA3_COMPAT_DIR}/sha3.c")
+  target_include_directories(sha3 PUBLIC "${SHA3_COMPAT_DIR}")
+else()
+  target_include_directories(sha3 PUBLIC ${PROJECT_SOURCE_DIR}/external/sha3)
+endif()
 
 
 # ---------------------------------------------

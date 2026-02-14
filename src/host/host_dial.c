@@ -1779,6 +1779,7 @@ static void *open_stream_async_thread(void *arg)
     pthread_mutex_unlock(&host->mtx); /* No matching session found */
 
 try_dial:
+    ;
 
     /* No existing session found; dial using selector (blocking call inside this thread) */
     libp2p_proto_selector_t sel = {
