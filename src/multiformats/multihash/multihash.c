@@ -1,249 +1,374 @@
-#include <stdlib.h>
+#include "multiformats/multihash/multihash.h"
+
+#include <limits.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
-#include "sha3_compat.h"
-#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
-#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha512.h"
-
-#include "multiformats/multicodec/multicodec.h"
-#include "multiformats/multihash/multihash.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+#include "sha3_compat.h"
 
-/**
- * @brief Define the sizes of the SHA3 hash functions.
- */
-#define SHA3_224_HASH_SIZE 28
-#define SHA3_256_HASH_SIZE 32
-#define SHA3_384_HASH_SIZE 48
-#define SHA3_512_HASH_SIZE 64
+#define MULTIHASH_SHA2_256_HASH_SIZE ((size_t)32U)
+#define MULTIHASH_SHA2_512_HASH_SIZE ((size_t)64U)
+#define MULTIHASH_SHA3_224_HASH_SIZE ((size_t)28U)
+#define MULTIHASH_SHA3_256_HASH_SIZE ((size_t)32U)
+#define MULTIHASH_SHA3_384_HASH_SIZE ((size_t)48U)
+#define MULTIHASH_SHA3_512_HASH_SIZE ((size_t)64U)
+#define MULTIHASH_SHA2_INPUT_LIMIT ((size_t)UINT32_MAX)
+#define MULTIHASH_SHA512_CONTEXT_BUFFER_SIZE ((size_t)256U)
 
-/**
- * @brief Returns the expected digest size for the given hash function code.
- *
- * @param code The hash function code.
- * @return The digest size in bytes, or 0 if the code is unsupported.
- */
-static size_t expected_digest_size(uint64_t code, size_t data_len)
+extern void Sha256Calculate(void const *buffer, uint32_t buffer_size, void *digest);
+extern void Sha512Initialise(void *context);
+extern void Sha512Update(void *context, void const *buffer, uint32_t buffer_size);
+extern void Sha512Finalise(void *context, void *digest);
+
+static int multihash_is_supported_code(uint64_t code)
 {
-    switch (code)
-    {
-        case MULTICODEC_SHA2_256:
-            return SHA256_HASH_SIZE;
-        case MULTICODEC_SHA2_512:
-            return SHA512_HASH_SIZE;
-        case MULTICODEC_SHA3_224:
-            return SHA3_224_HASH_SIZE;
-        case MULTICODEC_SHA3_256:
-            return SHA3_256_HASH_SIZE;
-        case MULTICODEC_SHA3_384:
-            return SHA3_384_HASH_SIZE;
-        case MULTICODEC_SHA3_512:
-            return SHA3_512_HASH_SIZE;
-        case MULTICODEC_IDENTITY:
-            return data_len;
-        default:
-            return 0;
-    }
+	int supported;
+
+	supported = 0;
+	switch (code)
+	{
+	case MULTIHASH_CODE_SHA2_256:
+	case MULTIHASH_CODE_SHA2_512:
+	case MULTIHASH_CODE_SHA3_224:
+	case MULTIHASH_CODE_SHA3_256:
+	case MULTIHASH_CODE_SHA3_384:
+	case MULTIHASH_CODE_SHA3_512:
+	case MULTIHASH_CODE_IDENTITY:
+		supported = 1;
+		break;
+	default:
+		break;
+	}
+
+	return supported;
 }
 
-/**
- * @brief Compute the digest for the provided data using the specified hash function.
- *
- * @param code The hash function code.
- * @param data The input data to be hashed.
- * @param data_len The length of the input data.
- * @param digest_out The buffer to store the computed digest.
- * @param digest_len Pointer to store the length of the computed digest.
- * @return int Error code indicating success or type of failure.
- */
-static int compute_hash(uint64_t code, const uint8_t *data, size_t data_len, uint8_t *digest_out, size_t *digest_len)
+static multihash_error_t multihash_map_varint_error(unsigned_varint_err_t varint_error)
 {
-    if (!data || !digest_out || !digest_len)
-    {
-        return MULTIHASH_ERR_NULL_POINTER;
-    }
+	multihash_error_t status;
 
-    switch (code)
-    {
-        case MULTICODEC_SHA2_256:
-        {
-            *digest_len = SHA256_HASH_SIZE;
-            SHA256_HASH hash;
-            Sha256Calculate(data, (uint32_t)data_len, &hash);
-            memcpy(digest_out, hash.bytes, SHA256_HASH_SIZE);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_SHA2_512:
-        {
-            *digest_len = SHA512_HASH_SIZE;
-            SHA512_HASH hash;
-            Sha512Context ctx;
-            Sha512Initialise(&ctx);
-            Sha512Update(&ctx, data, (uint32_t)data_len);
-            Sha512Finalise(&ctx, &hash);
-            memcpy(digest_out, hash.bytes, SHA512_HASH_SIZE);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_SHA3_224:
-        {
-            *digest_len = SHA3_224_HASH_SIZE;
-            sha3_224(data, data_len, digest_out);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_SHA3_256:
-        {
-            *digest_len = SHA3_256_HASH_SIZE;
-            sha3_256(data, data_len, digest_out);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_SHA3_384:
-        {
-            *digest_len = SHA3_384_HASH_SIZE;
-            sha3_384(data, data_len, digest_out);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_SHA3_512:
-        {
-            *digest_len = SHA3_512_HASH_SIZE;
-            sha3_512(data, data_len, digest_out);
-            return MULTIHASH_SUCCESS;
-        }
-        case MULTICODEC_IDENTITY:
-        {
-            *digest_len = data_len;
-            memcpy(digest_out, data, data_len);
-            return MULTIHASH_SUCCESS;
-        }
-        default:
-            return MULTIHASH_ERR_UNSUPPORTED_FUN;
-    }
+	status = MULTIHASH_ERR_INVALID_INPUT;
+	if (varint_error == UNSIGNED_VARINT_ERR_NULL_PTR)
+	{
+		status = MULTIHASH_ERR_NULL_POINTER;
+	}
+
+	return status;
 }
 
-/**
- * @brief Encode a multihash.
- *
- * @param code The hash function code to be encoded.
- * @param data The input data to be hashed.
- * @param data_len The length of the input data.
- * @param out The buffer to write the encoded multihash to.
- * @param out_len The size of the output buffer.
- * @return The number of bytes written to the output buffer, or an error code.
- */
+static multihash_error_t multihash_compute_digest(uint64_t code, const uint8_t *data, size_t data_len,
+						  uint8_t *digest_out, size_t *digest_len)
+{
+	multihash_error_t status;
+
+	status = MULTIHASH_SUCCESS;
+	if ((data == NULL) || (digest_out == NULL) || (digest_len == NULL))
+	{
+		status = MULTIHASH_ERR_NULL_POINTER;
+	}
+	else
+	{
+		*digest_len = (size_t)0U;
+		switch (code)
+		{
+		case MULTIHASH_CODE_SHA2_256: {
+			if (data_len > MULTIHASH_SHA2_INPUT_LIMIT)
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+			else
+			{
+				uint8_t hash[MULTIHASH_SHA2_256_HASH_SIZE];
+
+				Sha256Calculate(data, (uint32_t)data_len, &hash);
+				*digest_len = MULTIHASH_SHA2_256_HASH_SIZE;
+				(void)memcpy(digest_out, hash, *digest_len);
+			}
+			break;
+		}
+		case MULTIHASH_CODE_SHA2_512: {
+			if (data_len > MULTIHASH_SHA2_INPUT_LIMIT)
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+			else
+			{
+				struct
+				{
+					uint64_t alignment;
+					uint8_t bytes[MULTIHASH_SHA512_CONTEXT_BUFFER_SIZE];
+				} context;
+				uint8_t hash[MULTIHASH_SHA2_512_HASH_SIZE];
+
+				Sha512Initialise(context.bytes);
+				Sha512Update(context.bytes, data, (uint32_t)data_len);
+				Sha512Finalise(context.bytes, hash);
+				*digest_len = MULTIHASH_SHA2_512_HASH_SIZE;
+				(void)memcpy(digest_out, hash, *digest_len);
+			}
+			break;
+		}
+		case MULTIHASH_CODE_SHA3_224:
+			*digest_len = MULTIHASH_SHA3_224_HASH_SIZE;
+			sha3_224(data, data_len, digest_out);
+			break;
+		case MULTIHASH_CODE_SHA3_256:
+			*digest_len = MULTIHASH_SHA3_256_HASH_SIZE;
+			sha3_256(data, data_len, digest_out);
+			break;
+		case MULTIHASH_CODE_SHA3_384:
+			*digest_len = MULTIHASH_SHA3_384_HASH_SIZE;
+			sha3_384(data, data_len, digest_out);
+			break;
+		case MULTIHASH_CODE_SHA3_512:
+			*digest_len = MULTIHASH_SHA3_512_HASH_SIZE;
+			sha3_512(data, data_len, digest_out);
+			break;
+		default:
+			status = MULTIHASH_ERR_UNSUPPORTED_FUN;
+			break;
+		}
+	}
+
+	return status;
+}
+
 int multihash_encode(uint64_t code, const uint8_t *data, size_t data_len, uint8_t *out, size_t out_len)
 {
-    if (!data || !out)
-    {
-        return MULTIHASH_ERR_NULL_POINTER;
-    }
+	multihash_error_t status;
+	int result;
+	size_t digest_len;
+	size_t code_written;
+	size_t length_written;
+	size_t prefix_len;
+	size_t total_len;
+	const uint8_t *digest_source;
+	uint8_t digest_buffer[MULTIHASH_MAX_DIGEST_SIZE];
 
-    size_t expected_size = expected_digest_size(code, data_len);
-    if (expected_size == 0 && code != MULTICODEC_IDENTITY)
-    {
-        return MULTIHASH_ERR_UNSUPPORTED_FUN;
-    }
+	status = MULTIHASH_ERR_ALLOC_FAILURE;
+	result = (int)MULTIHASH_ERR_INVALID_INPUT;
+	digest_len = (size_t)0U;
+	code_written = (size_t)0U;
+	length_written = (size_t)0U;
+	total_len = (size_t)0U;
+	digest_source = NULL;
+	if ((data == NULL) || (out == NULL))
+	{
+		status = MULTIHASH_ERR_NULL_POINTER;
+	}
+	else if (!multihash_is_supported_code(code))
+	{
+		status = MULTIHASH_ERR_UNSUPPORTED_FUN;
+	}
+	else
+	{
+		status = MULTIHASH_SUCCESS;
+		if (code == MULTIHASH_CODE_IDENTITY)
+		{
+			digest_source = data;
+			digest_len = data_len;
+		}
+		else
+		{
+			status = multihash_compute_digest(code, data, data_len, digest_buffer, &digest_len);
+			if (status == MULTIHASH_SUCCESS)
+			{
+				digest_source = digest_buffer;
+			}
+		}
 
-    uint8_t dummy;
-    uint8_t *digest_buf = (expected_size > 0) ? malloc(expected_size) : &dummy;
-    if (expected_size > 0 && !digest_buf)
-    {
-        return MULTIHASH_ERR_ALLOC_FAILURE;
-    }
+		if (status == MULTIHASH_SUCCESS)
+		{
+			if ((uint64_t)digest_len > UNSIGNED_VARINT_MAX_VALUE)
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+		}
 
-    size_t digest_len = 0;
-    int hash_res = compute_hash(code, data, data_len, digest_buf, &digest_len);
-    if (hash_res != MULTIHASH_SUCCESS)
-    {
-        if (expected_size > 0)
-            free(digest_buf);
-        return hash_res;
-    }
+		if (status == MULTIHASH_SUCCESS)
+		{
+			unsigned_varint_err_t varint_error;
 
-    size_t written = 0;
-    unsigned_varint_err_t err = unsigned_varint_encode(code, out, out_len, &written);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        if (expected_size > 0)
-            free(digest_buf);
-        return err;
-    }
+			varint_error = unsigned_varint_encode(code, out, out_len, &code_written);
+			if (varint_error != UNSIGNED_VARINT_OK)
+			{
+				status = multihash_map_varint_error(varint_error);
+			}
+			else
+			{
+				varint_error = unsigned_varint_encode((uint64_t)digest_len, &out[code_written],
+								      out_len - code_written, &length_written);
+				if (varint_error != UNSIGNED_VARINT_OK)
+				{
+					status = multihash_map_varint_error(varint_error);
+				}
+				else if ((code_written > UNSIGNED_VARINT_MAX_ENCODED_SIZE) ||
+					 (length_written > UNSIGNED_VARINT_MAX_ENCODED_SIZE))
+				{
+					status = MULTIHASH_ERR_INVALID_INPUT;
+				}
+				else
+				{
+					/* status remains success */
+				}
+			}
+		}
 
-    size_t written2 = 0;
-    err = unsigned_varint_encode((uint64_t)digest_len, out + written, out_len - written, &written2);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        if (expected_size > 0)
-            free(digest_buf);
-        return err;
-    }
+		if (status == MULTIHASH_SUCCESS)
+		{
+			prefix_len = code_written + length_written;
+			if (prefix_len > out_len)
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+			else if (digest_len > (out_len - prefix_len))
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+			else
+			{
+				if (digest_len > (size_t)0U)
+				{
+					(void)memcpy(&out[prefix_len], digest_source, digest_len);
+				}
 
-    size_t total = written + written2;
-    if (total + digest_len > out_len)
-    {
-        if (expected_size > 0)
-            free(digest_buf);
-        return MULTIHASH_ERR_INVALID_INPUT;
-    }
+				total_len = prefix_len + digest_len;
+				if (total_len > (size_t)INT_MAX)
+				{
+					status = MULTIHASH_ERR_INVALID_INPUT;
+				}
+			}
+		}
+	}
 
-    memcpy(out + total, digest_buf, digest_len);
-    total += digest_len;
+	if (status == MULTIHASH_SUCCESS)
+	{
+		result = (int)total_len;
+	}
+	else
+	{
+		result = (int)status;
+	}
 
-    if (expected_size > 0)
-        free(digest_buf);
-    return (int)total;
+	return result;
 }
 
-/**
- * @brief Decode a multihash.
- *
- * @param in The input buffer containing the multihash.
- * @param in_len The length of the input buffer.
- * @param code Pointer to store the decoded function code.
- * @param digest The buffer to store the decoded digest.
- * @param digest_len Pointer to store the length of the decoded digest.
- * @return The number of bytes read from the input buffer, or an error code.
- */
 int multihash_decode(const uint8_t *in, size_t in_len, uint64_t *code, uint8_t *digest, size_t *digest_len)
 {
-    if (!in || !code || !digest || !digest_len)
-    {
-        return MULTIHASH_ERR_NULL_POINTER;
-    }
+	multihash_error_t status;
+	int result;
+	uint64_t decoded_code;
+	uint64_t decoded_digest_len;
+	size_t output_capacity;
+	size_t code_read;
+	size_t digest_len_read;
+	size_t payload_offset;
+	size_t payload_size;
+	size_t consumed;
 
-    uint64_t decoded_code = 0;
-    size_t read1 = 0;
-    unsigned_varint_err_t err = unsigned_varint_decode(in, in_len, &decoded_code, &read1);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        return err;
-    }
+	status = MULTIHASH_SUCCESS;
+	result = (int)MULTIHASH_ERR_INVALID_INPUT;
+	decoded_code = (uint64_t)0U;
+	decoded_digest_len = (uint64_t)0U;
+	code_read = (size_t)0U;
+	digest_len_read = (size_t)0U;
+	consumed = (size_t)0U;
+	if ((in == NULL) || (code == NULL) || (digest == NULL) || (digest_len == NULL))
+	{
+		status = MULTIHASH_ERR_NULL_POINTER;
+	}
+	else
+	{
+		output_capacity = *digest_len;
+		*code = (uint64_t)0U;
+		*digest_len = (size_t)0U;
 
-    uint64_t dlen = 0;
-    size_t read2 = 0;
-    err = unsigned_varint_decode(in + read1, in_len - read1, &dlen, &read2);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        return err;
-    }
+		{
+			unsigned_varint_err_t varint_error;
 
-    size_t offset = read1 + read2;
-    if (offset + dlen > in_len)
-    {
-        return MULTIHASH_ERR_INVALID_INPUT;
-    }
-    if (dlen > *digest_len)
-    {
-        return MULTIHASH_ERR_DIGEST_TOO_LARGE;
-    }
+			varint_error = unsigned_varint_decode(in, in_len, &decoded_code, &code_read);
+			if (varint_error != UNSIGNED_VARINT_OK)
+			{
+				status = multihash_map_varint_error(varint_error);
+			}
+		}
+		if (status != MULTIHASH_SUCCESS)
+		{
+			/* status already set by varint decoding */
+		}
+		else if (!multihash_is_supported_code(decoded_code))
+		{
+			status = MULTIHASH_ERR_UNSUPPORTED_FUN;
+		}
+		else if (code_read > in_len)
+		{
+			status = MULTIHASH_ERR_INVALID_INPUT;
+		}
+		else
+		{
+			{
+				unsigned_varint_err_t varint_error;
 
-    memcpy(digest, in + offset, dlen);
-    *digest_len = dlen;
+				varint_error = unsigned_varint_decode(&in[code_read], in_len - code_read,
+								      &decoded_digest_len, &digest_len_read);
+				if (varint_error != UNSIGNED_VARINT_OK)
+				{
+					status = multihash_map_varint_error(varint_error);
+				}
+			}
 
-    const char *codec_name = multicodec_name_from_code(decoded_code);
-    if (!codec_name)
-    {
-        return MULTIHASH_ERR_UNSUPPORTED_FUN;
-    }
-    *code = decoded_code;
+			if (status != MULTIHASH_SUCCESS)
+			{
+				/* status already set by varint decoding */
+			}
+			else if (digest_len_read > (in_len - code_read))
+			{
+				status = MULTIHASH_ERR_INVALID_INPUT;
+			}
+			else
+			{
+				payload_offset = code_read + digest_len_read;
+				if (decoded_digest_len > (uint64_t)(in_len - payload_offset))
+				{
+					status = MULTIHASH_ERR_INVALID_INPUT;
+				}
+				else if (decoded_digest_len > (uint64_t)output_capacity)
+				{
+					status = MULTIHASH_ERR_DIGEST_TOO_LARGE;
+				}
+				else
+				{
+					payload_size = (size_t)decoded_digest_len;
+					if (payload_size > (size_t)0U)
+					{
+						(void)memcpy(digest, &in[payload_offset], payload_size);
+					}
 
-    return (int)(offset + dlen);
+					consumed = payload_offset + payload_size;
+					if (consumed > (size_t)INT_MAX)
+					{
+						status = MULTIHASH_ERR_INVALID_INPUT;
+					}
+					else
+					{
+						*code = decoded_code;
+						*digest_len = payload_size;
+					}
+				}
+			}
+		}
+	}
+
+	if (status == MULTIHASH_SUCCESS)
+	{
+		result = (int)consumed;
+	}
+	else
+	{
+		result = (int)status;
+	}
+
+	return result;
 }
