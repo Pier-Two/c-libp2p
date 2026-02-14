@@ -44,7 +44,7 @@ if [ -n "${range}" ]; then
   else
     echo "Formatting check scope:"
     echo "${files}"
-    echo "${files}" | xargs clang-format --dry-run --Werror
+    echo "${files}" | xargs clang-format --style=file --dry-run --Werror
   fi
 fi
 

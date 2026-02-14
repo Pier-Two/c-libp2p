@@ -1,13 +1,27 @@
+BasedOnStyle: LLVM
+
+# Linux-style formatting profile (tabs/8-column indent, K&R control braces,
+# function opening braces on the next line).
+BreakBeforeBraces: Custom
 BraceWrapping:
+  AfterControlStatement: Never
   AfterFunction: true
-  AfterControlStatement: true
-  AfterStruct: true
-BreakBeforeBraces: Allman
-IndentWidth: 4
-TabWidth: 4
-UseTab: Never
-IndentCaseLabels: true
+  AfterClass: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterEnum: false
+  BeforeElse: false
+  BeforeCatch: false
+  BeforeWhile: false
+IndentWidth: 8
+TabWidth: 8
+UseTab: Always
+ContinuationIndentWidth: 8
+IndentCaseLabels: false
+ColumnLimit: 80
+SpaceBeforeParens: ControlStatements
+PointerAlignment: Right
+
+# Keep include order as-authored to avoid semantic churn in fragile header stacks.
 IncludeBlocks: Preserve
-SortIncludes: true
-ColumnLimit: 150
-IndentExternBlock: NoIndent
+SortIncludes: false
