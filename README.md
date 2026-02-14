@@ -87,6 +87,11 @@ scripts/dev/install-hooks.sh
 
 This configures `core.hooksPath` to `.githooks` and enables a `pre-push` hook that runs the same macOS/Linux fast-lane checks used by CI.
 
+On Linux, fast-lane checks include:
+- clang-format diff check for changed `src/`, `include/`, and `tests` C files.
+- a targeted Doxygen documentation gate for changed headers in `include/multiformats/unsigned_varint/` and `include/multiformats/multicodec/` (`WARN_IF_UNDOCUMENTED=YES`, `WARN_AS_ERROR=YES`).
+- `cppcheck` smoke static analysis for core scope.
+
 Manual local run:
 
 ```sh
