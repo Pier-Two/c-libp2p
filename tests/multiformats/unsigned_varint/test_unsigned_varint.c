@@ -18,7 +18,8 @@ static int g_failures = 0;
 static void report_result(const char *test_name, int passed,
 			  const char *details)
 {
-	if (passed) {
+	if (passed)
+	{
 		printf("TEST: %-50s | PASS\n", test_name);
 		return;
 	}
@@ -44,7 +45,8 @@ static void run_round_trip_vector(const varint_vector_t *vector)
 
 	snprintf(test_name, sizeof(test_name), "encode %s", vector->name);
 	err = unsigned_varint_encode(vector->value, out, sizeof(out), &written);
-	if (err != UNSIGNED_VARINT_OK) {
+	if (err != UNSIGNED_VARINT_OK)
+	{
 		report_result(test_name, 0, "unexpected encode error");
 		return;
 	}
@@ -54,7 +56,8 @@ static void run_round_trip_vector(const varint_vector_t *vector)
 	snprintf(test_name, sizeof(test_name), "encoding bytes %s",
 		 vector->name);
 	if ((written != vector->encoding_len) ||
-	    (memcmp(out, vector->encoding, vector->encoding_len) != 0)) {
+	    (memcmp(out, vector->encoding, vector->encoding_len) != 0))
+	{
 		report_result(test_name, 0, "encoded bytes mismatch");
 		return;
 	}
@@ -63,12 +66,14 @@ static void run_round_trip_vector(const varint_vector_t *vector)
 
 	snprintf(test_name, sizeof(test_name), "decode %s", vector->name);
 	err = unsigned_varint_decode(out, written, &decoded, &read);
-	if (err != UNSIGNED_VARINT_OK) {
+	if (err != UNSIGNED_VARINT_OK)
+	{
 		report_result(test_name, 0, "unexpected decode error");
 		return;
 	}
 
-	if ((decoded != vector->value) || (read != written)) {
+	if ((decoded != vector->value) || (read != written))
+	{
 		report_result(test_name, 0, "decoded value or length mismatch");
 		return;
 	}
@@ -108,7 +113,8 @@ static void test_round_trip_vectors(void)
 	};
 	size_t i;
 
-	for (i = 0; i < (sizeof(vectors) / sizeof(vectors[0])); ++i) {
+	for (i = 0; i < (sizeof(vectors) / sizeof(vectors[0])); ++i)
+	{
 		run_round_trip_vector(&vectors[i]);
 	}
 }
@@ -279,7 +285,8 @@ int main(void)
 	test_decode_with_trailing_bytes();
 	test_size_boundaries();
 
-	if (g_failures != 0) {
+	if (g_failures != 0)
+	{
 		printf("\nSome tests failed. Total failures: %d\n", g_failures);
 		return EXIT_FAILURE;
 	}

@@ -76,6 +76,7 @@ EXTRACT_ALL            = YES
 EXTRACT_STATIC         = YES
 OPTIMIZE_OUTPUT_FOR_C  = YES
 ENABLE_PREPROCESSING   = YES
+HAVE_DOT               = NO
 EOF
 
     echo "Doxygen doc check scope:"

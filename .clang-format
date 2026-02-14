@@ -4,15 +4,15 @@ BasedOnStyle: LLVM
 # function opening braces on the next line).
 BreakBeforeBraces: Custom
 BraceWrapping:
-  AfterControlStatement: Never
+  AfterControlStatement: Always
   AfterFunction: true
   AfterClass: false
   AfterStruct: false
   AfterUnion: false
   AfterEnum: false
-  BeforeElse: false
+  BeforeElse: true
   BeforeCatch: false
-  BeforeWhile: false
+  BeforeWhile: true
 IndentWidth: 8
 TabWidth: 8
 UseTab: Always

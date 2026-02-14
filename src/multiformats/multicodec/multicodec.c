@@ -11,13 +11,16 @@ static const multicodec_map_t *multicodec_find_by_name(const char *name)
 	const multicodec_map_t *match;
 
 	match = NULL;
-	if ((name != NULL) && (name[0] != '\0')) {
-		for (index = 0; index < multicodec_table_len; ++index) {
+	if ((name != NULL) && (name[0] != '\0'))
+	{
+		for (index = 0; index < multicodec_table_len; ++index)
+		{
 			const multicodec_map_t *entry;
 
 			entry = &multicodec_table[index];
 			if ((entry->name != NULL) &&
-			    (strcmp(name, entry->name) == 0)) {
+			    (strcmp(name, entry->name) == 0))
+			{
 				match = entry;
 				break;
 			}
@@ -33,11 +36,13 @@ static const multicodec_map_t *multicodec_find_by_code(uint64_t code)
 	const multicodec_map_t *match;
 
 	match = NULL;
-	for (index = 0; index < multicodec_table_len; ++index) {
+	for (index = 0; index < multicodec_table_len; ++index)
+	{
 		const multicodec_map_t *entry;
 
 		entry = &multicodec_table[index];
-		if (entry->code == code) {
+		if (entry->code == code)
+		{
 			match = entry;
 			break;
 		}
@@ -53,7 +58,8 @@ uint64_t multicodec_code_from_name(const char *name)
 
 	entry = multicodec_find_by_name(name);
 	code = UINT64_MAX;
-	if (entry != NULL) {
+	if (entry != NULL)
+	{
 		code = entry->code;
 	}
 
@@ -67,7 +73,8 @@ const char *multicodec_name_from_code(uint64_t code)
 
 	entry = multicodec_find_by_code(code);
 	name = NULL;
-	if (entry != NULL) {
+	if (entry != NULL)
+	{
 		name = entry->name;
 	}
 
