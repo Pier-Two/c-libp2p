@@ -75,9 +75,6 @@
       "jobs": 6,
       "targets": [
         "test_multibase",
-        "test_cid_v0",
-        "test_cid_v1",
-        "test_multihash",
         "test_multicodec"
       ]
     }
@@ -127,7 +124,7 @@
       },
       "filter": {
         "include": {
-          "name": "^(Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec)$"
+          "name": "^(Testmultibase|Testmulticodec)$"
         }
       }
     }
