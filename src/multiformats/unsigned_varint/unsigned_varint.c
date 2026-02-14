@@ -3,6 +3,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define UNSIGNED_VARINT_DATA_MASK ((uint8_t)0x7FU)
+#define UNSIGNED_VARINT_CONT_MASK ((uint8_t)0x80U)
+#define UNSIGNED_VARINT_ZERO_U64 ((uint64_t)0U)
+#define UNSIGNED_VARINT_ZERO_U8 ((uint8_t)0U)
+#define UNSIGNED_VARINT_ONE_U8 ((uint8_t)1U)
+#define UNSIGNED_VARINT_7BIT_THRESHOLD ((uint64_t)0x80U)
+
 static size_t unsigned_varint_size_internal(uint64_t value)
 {
 	uint64_t remaining_value;
@@ -13,7 +20,7 @@ static size_t unsigned_varint_size_internal(uint64_t value)
 	{
 		remaining_value = value;
 		encoded_size = (size_t)1U;
-		while (remaining_value >= UINT64_C(0x80))
+		while (remaining_value >= UNSIGNED_VARINT_7BIT_THRESHOLD)
 		{
 			remaining_value >>= 7U;
 			++encoded_size;
@@ -60,11 +67,11 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_
 				{
 					uint8_t byte;
 
-					byte = (uint8_t)(remaining_value & UINT64_C(0x7F));
+					byte = (uint8_t)(remaining_value & (uint64_t)UNSIGNED_VARINT_DATA_MASK);
 					remaining_value >>= 7U;
-					if (remaining_value != UINT64_C(0))
+					if (remaining_value != UNSIGNED_VARINT_ZERO_U64)
 					{
-						byte = (uint8_t)(byte | UINT8_C(0x80));
+						byte = (uint8_t)(byte | UNSIGNED_VARINT_CONT_MASK);
 					}
 
 					out[index] = byte;
@@ -100,19 +107,20 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 		}
 		else
 		{
-			decoded_value = UINT64_C(0);
+			decoded_value = UNSIGNED_VARINT_ZERO_U64;
 			shift = 0U;
 			for (index = 0; index < in_size; ++index)
 			{
 				uint8_t byte;
 				uint8_t terminate_loop;
 
-				terminate_loop = UINT8_C(0);
+				terminate_loop = UNSIGNED_VARINT_ZERO_U8;
 				byte = in[index];
 				if (index < UNSIGNED_VARINT_MAX_ENCODED_SIZE)
 				{
-					decoded_value |= ((uint64_t)(byte & UINT8_C(0x7F))) << shift;
-					if ((byte & UINT8_C(0x80)) == UINT8_C(0))
+					decoded_value |= (((uint64_t)byte) & ((uint64_t)UNSIGNED_VARINT_DATA_MASK))
+							 << shift;
+					if ((byte & UNSIGNED_VARINT_CONT_MASK) == UNSIGNED_VARINT_ZERO_U8)
 					{
 						size_t encoded_size;
 
@@ -131,7 +139,7 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 							*read = encoded_size;
 							status = UNSIGNED_VARINT_OK;
 						}
-						terminate_loop = UINT8_C(1);
+						terminate_loop = UNSIGNED_VARINT_ONE_U8;
 					}
 					else
 					{
@@ -151,15 +159,15 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 					{
 						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x80)) != UINT8_C(0))
+					else if ((byte & UNSIGNED_VARINT_CONT_MASK) != UNSIGNED_VARINT_ZERO_U8)
 					{
 						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x7F)) == UINT8_C(0))
+					else if ((byte & UNSIGNED_VARINT_DATA_MASK) == UNSIGNED_VARINT_ZERO_U8)
 					{
 						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					else if ((byte & UINT8_C(0x7F)) == UINT8_C(1))
+					else if ((byte & UNSIGNED_VARINT_DATA_MASK) == UNSIGNED_VARINT_ONE_U8)
 					{
 						status = UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
 					}
@@ -167,10 +175,10 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 					{
 						status = UNSIGNED_VARINT_ERR_TOO_LONG;
 					}
-					terminate_loop = UINT8_C(1);
+					terminate_loop = UNSIGNED_VARINT_ONE_U8;
 				}
 
-				if (terminate_loop != UINT8_C(0))
+				if (terminate_loop != UNSIGNED_VARINT_ZERO_U8)
 				{
 					break;
 				}

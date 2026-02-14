@@ -37,7 +37,7 @@ typedef enum
  *
  * Values above 2^63-1 are rejected with UNSIGNED_VARINT_ERR_VALUE_OVERFLOW.
  */
-#define UNSIGNED_VARINT_MAX_VALUE UINT64_C(0x7FFFFFFFFFFFFFFF)
+#define UNSIGNED_VARINT_MAX_VALUE ((uint64_t)0x7FFFFFFFFFFFFFFFULL)
 
 /**
  * @brief Encodes a 64-bit unsigned integer into a varint buffer.
