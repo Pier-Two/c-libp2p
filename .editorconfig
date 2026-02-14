@@ -57,3 +57,9 @@ cpp_space_around_assignment_operator=insert
 cpp_space_pointer_reference_alignment=left
 cpp_space_around_ternary_operator=insert
 cpp_wrap_preserve_blocks=one_liners
+
+[*.{c,h}]
+indent_style = tab
+indent_size = 8
+tab_width = 8
+max_line_length = 80

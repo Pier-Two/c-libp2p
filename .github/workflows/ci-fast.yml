@@ -47,6 +47,8 @@ jobs:
             libssl-dev \
             pkg-config \
             clang-format \
+            clang-tidy \
+            doxygen \
             cppcheck
 
       - name: Run Linux smoke checks

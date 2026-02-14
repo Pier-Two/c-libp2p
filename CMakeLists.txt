@@ -189,25 +189,26 @@ find_program(CLANG_FORMAT_EXE NAMES clang-format
         /usr/local/opt/llvm/bin
 )
 if(CLANG_FORMAT_EXE)
-    # Only include our own sources/headers (exclude submodules)
+    # Only include our own sources/headers/tests (exclude submodules)
     file(GLOB_RECURSE LIBP2P_FORMAT_FILES
         CONFIGURE_DEPENDS
         "${PROJECT_SOURCE_DIR}/src/*"
         "${PROJECT_SOURCE_DIR}/include/*"
+        "${PROJECT_SOURCE_DIR}/tests/*"
     )
     # Keep only .c/.h
     list(FILTER LIBP2P_FORMAT_FILES INCLUDE REGEX "\\.(c|h)$")
 
     if(LIBP2P_FORMAT_FILES)
         add_custom_target(clang_format
-            COMMAND ${CLANG_FORMAT_EXE} -i ${LIBP2P_FORMAT_FILES}
-            COMMENT "Running clang-format on libp2p sources (src/, include/)"
+            COMMAND ${CLANG_FORMAT_EXE} --style=file -i ${LIBP2P_FORMAT_FILES}
+            COMMENT "Running clang-format on libp2p sources (src/, include/, tests/)"
             VERBATIM
         )
 
         add_custom_target(clang_format_check
-            COMMAND ${CLANG_FORMAT_EXE} --dry-run --Werror ${LIBP2P_FORMAT_FILES}
-            COMMENT "Checking clang-format on libp2p sources (src/, include/)"
+            COMMAND ${CLANG_FORMAT_EXE} --style=file --dry-run --Werror ${LIBP2P_FORMAT_FILES}
+            COMMENT "Checking clang-format on libp2p sources (src/, include/, tests/)"
             VERBATIM
         )
     endif()
