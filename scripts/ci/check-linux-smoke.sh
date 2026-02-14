@@ -120,6 +120,7 @@ if [ -n "${range}" ]; then
       --check-level=exhaustive \
       --quiet \
       --suppress=missingIncludeSystem \
+      --suppress=unmatchedSuppression \
       --suppressions-list=scripts/ci/cppcheck-misra-suppressions.txt \
       --addon="${misra_addon}" \
       -I include \
@@ -130,7 +131,7 @@ if [ -n "${range}" ]; then
       include/multiformats/multicodec/multicodec_table.h \
       >"${misra_log}" 2>&1 || true
 
-    misra_hits="$(grep -E 'misra-c2012-(8\.11|15\.5|8\.7)' "${misra_log}" || true)"
+    misra_hits="$(grep -E 'misra violation .*\[misra-c2012-(8\.11|15\.5|8\.7)\]' "${misra_log}" || true)"
     rm -f "${misra_log}"
     if [ -n "${misra_hits}" ]; then
       echo "error: targeted MISRA findings detected (rules 8.7/8.11/15.5):" >&2
