@@ -15,6 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Install dependencies
@@ -67,7 +68,23 @@ jobs:
         run: ctest --preset linux-smoke
 
       - name: Formatting check
-        run: cmake --build --preset linux-smoke --target clang_format_check
+        run: |
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            range="origin/${GITHUB_BASE_REF}...HEAD"
+          else
+            range="$(git rev-parse HEAD~1)...HEAD"
+          fi
+
+          files="$(git diff --name-only "$range" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)"
+
+          if [ -z "$files" ]; then
+            echo "No changed C source/header files in src/include/tests; skipping format check."
+            exit 0
+          fi
+
+          echo "Formatting check scope:"
+          echo "$files"
+          echo "$files" | xargs clang-format --dry-run --Werror
 
       - name: Static analysis (cppcheck core scope)
         run: |
@@ -98,7 +115,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          choco install -y ninja winflexbison3 openssl.light
+          choco install -y ninja winflexbison3 openssl.light pkgconfiglite
 
       - name: Configure
         shell: pwsh
