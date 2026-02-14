@@ -1,217 +1,413 @@
+#include "multiformats/multibase/encoding/base64.h"
+
 #include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 
-#include "multiformats/multibase/multibase.h"
-
-/* The base64 alphabet (RFC 4648, Table 1) */
-static const char base64_alphabet[64] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/* Helper function to map a Base64 character to its 6-bit value.
- * Returns the corresponding value (0–63) or -1 if the character is invalid.
- */
-static inline int base64_char_to_val(char c)
+static int base64_char_value(uint8_t ch, uint8_t *value)
 {
-    if (c >= 'A' && c <= 'Z')
-    {
-        return c - 'A';
-    }
-    if (c >= 'a' && c <= 'z')
-    {
-        return c - 'a' + 26;
-    }
-    if (c >= '0' && c <= '9')
-    {
-        return c - '0' + 52;
-    }
-    if (c == '+')
-    {
-        return 62;
-    }
-    if (c == '/')
-    {
-        return 63;
-    }
-    return -1;
+	int valid;
+	uint8_t local;
+
+	valid = 1;
+	local = 0U;
+	if ((ch >= (uint8_t)'A') && (ch <= (uint8_t)'Z'))
+	{
+		local = (uint8_t)(ch - (uint8_t)'A');
+	}
+	else if ((ch >= (uint8_t)'a') && (ch <= (uint8_t)'z'))
+	{
+		local = (uint8_t)((ch - (uint8_t)'a') + 26U);
+	}
+	else if ((ch >= (uint8_t)'0') && (ch <= (uint8_t)'9'))
+	{
+		local = (uint8_t)((ch - (uint8_t)'0') + 52U);
+	}
+	else if (ch == (uint8_t)'+')
+	{
+		local = 62U;
+	}
+	else if (ch == (uint8_t)'/')
+	{
+		local = 63U;
+	}
+	else
+	{
+		valid = 0;
+	}
+
+	if (valid != 0)
+	{
+		*value = local;
+	}
+
+	return valid;
 }
 
-/**
- * @brief Encode data into Base64 format (unpadded).
- *
- * @param data The input data to be encoded.
- * @param data_len The length of the input data.
- * @param out The buffer to store the encoded Base64 string.
- * @param out_len The size of the output buffer.
- * @return The number of Base64 characters written (excluding the null
- * terminator), or an error code indicating a null pointer, integer overflow,
- * or insufficient buffer size.
- */
+static int base64_unpadded_encoded_len(size_t data_len, size_t *encoded_len)
+{
+	int status;
+	size_t groups;
+	size_t remainder;
+	size_t local_len;
+
+	status = (int)MULTIBASE_SUCCESS;
+	groups = 0U;
+	remainder = 0U;
+	local_len = 0U;
+	if (encoded_len == NULL)
+	{
+		status = (int)MULTIBASE_ERR_NULL_POINTER;
+	}
+	else
+	{
+		groups = data_len / 3U;
+		remainder = data_len % 3U;
+		if (groups > (SIZE_MAX / 4U))
+		{
+			status = (int)MULTIBASE_ERR_OVERFLOW;
+		}
+		else
+		{
+			local_len = groups * 4U;
+			if (remainder == 1U)
+			{
+				if (local_len > (SIZE_MAX - 2U))
+				{
+					status = (int)MULTIBASE_ERR_OVERFLOW;
+				}
+				else
+				{
+					local_len += 2U;
+				}
+			}
+			else if (remainder == 2U)
+			{
+				if (local_len > (SIZE_MAX - 3U))
+				{
+					status = (int)MULTIBASE_ERR_OVERFLOW;
+				}
+				else
+				{
+					local_len += 3U;
+				}
+			}
+			else
+			{
+				/* no tail bytes */
+			}
+		}
+	}
+
+	if (status == (int)MULTIBASE_SUCCESS)
+	{
+		*encoded_len = local_len;
+	}
+
+	return status;
+}
+
 int multibase_base64_encode(const uint8_t *data, size_t data_len, char *out, size_t out_len)
 {
-    if (data == NULL || out == NULL)
-    {
-        return MULTIBASE_ERR_NULL_POINTER;
-    }
+	int result;
+	size_t encoded_len;
+	size_t data_index;
+	size_t out_index;
+	size_t remainder;
+	static const char base64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-    size_t full_blocks = data_len / 3;
-    size_t rem = data_len % 3;
+	result = (int)MULTIBASE_ERR_NULL_POINTER;
+	encoded_len = 0U;
+	data_index = 0U;
+	out_index = 0U;
+	remainder = 0U;
+	if ((data == NULL) || (out == NULL))
+	{
+		result = (int)MULTIBASE_ERR_NULL_POINTER;
+	}
+	else
+	{
+		result = base64_unpadded_encoded_len(data_len, &encoded_len);
+		if (result != (int)MULTIBASE_SUCCESS)
+		{
+			/* result already set */
+		}
+		else if (out_len < (encoded_len + 1U))
+		{
+			result = (int)MULTIBASE_ERR_BUFFER_TOO_SMALL;
+		}
+		else if (encoded_len > (size_t)INT_MAX)
+		{
+			result = (int)MULTIBASE_ERR_INPUT_TOO_LARGE;
+		}
+		else
+		{
+			remainder = data_len % 3U;
+			while ((data_index + 3U) <= data_len)
+			{
+				uint32_t triple;
+				uint8_t b0;
+				uint8_t b1;
+				uint8_t b2;
 
-    if (full_blocks > SIZE_MAX / 4 || (full_blocks == SIZE_MAX / 4 && rem > 0))
-    {
-        return MULTIBASE_ERR_OVERFLOW;
-    }
+				b0 = data[data_index];
+				b1 = data[data_index + 1U];
+				b2 = data[data_index + 2U];
+				triple = ((uint32_t)b0 << 16U) | ((uint32_t)b1 << 8U) | (uint32_t)b2;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 18U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 12U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 6U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)(triple & 0x3FU)];
+				out_index++;
+				data_index += 3U;
+			}
 
-    size_t encoded_len = full_blocks * 4;
-    if (rem == 1)
-    {
-        encoded_len += 2;
-    }
-    else if (rem == 2)
-    {
-        encoded_len += 3;
-    }
+			if (remainder == 1U)
+			{
+				uint32_t triple;
+				uint8_t b0;
 
-    if (out_len < encoded_len + 1)
-    {
-        return MULTIBASE_ERR_BUFFER_TOO_SMALL;
-    }
+				b0 = data[data_index];
+				triple = (uint32_t)b0 << 16U;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 18U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 12U) & 0x3FU)];
+				out_index++;
+			}
+			else if (remainder == 2U)
+			{
+				uint32_t triple;
+				uint8_t b0;
+				uint8_t b1;
 
-    size_t i = 0;
-    size_t j = 0;
-    while (i + 3 <= data_len)
-    {
-        uint32_t triple = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8) | ((uint32_t)data[i + 2]);
-        out[j++] = base64_alphabet[(triple >> 18) & 0x3F];
-        out[j++] = base64_alphabet[(triple >> 12) & 0x3F];
-        out[j++] = base64_alphabet[(triple >> 6) & 0x3F];
-        out[j++] = base64_alphabet[triple & 0x3F];
-        i += 3;
-    }
-    if (rem == 1)
-    {
-        uint32_t triple = ((uint32_t)data[i]) << 16;
-        out[j++] = base64_alphabet[(triple >> 18) & 0x3F];
-        out[j++] = base64_alphabet[(triple >> 12) & 0x3F];
-    }
-    else if (rem == 2)
-    {
-        uint32_t triple = (((uint32_t)data[i]) << 16) | (((uint32_t)data[i + 1]) << 8);
-        out[j++] = base64_alphabet[(triple >> 18) & 0x3F];
-        out[j++] = base64_alphabet[(triple >> 12) & 0x3F];
-        out[j++] = base64_alphabet[(triple >> 6) & 0x3F];
-    }
-    out[j] = '\0';
-    return (int)encoded_len;
+				b0 = data[data_index];
+				b1 = data[data_index + 1U];
+				triple = ((uint32_t)b0 << 16U) | ((uint32_t)b1 << 8U);
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 18U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 12U) & 0x3FU)];
+				out_index++;
+				out[out_index] = base64_alphabet[(uint8_t)((triple >> 6U) & 0x3FU)];
+				out_index++;
+			}
+			else
+			{
+				/* no remainder */
+			}
+
+			out[out_index] = '\0';
+			result = (int)encoded_len;
+		}
+	}
+
+	return result;
 }
 
-/**
- * @brief Decode data from Base64 format (unpadded).
- *
- * @param in The input Base64 encoded string.
- * @param in_len The length of the input data.
- * @param out The buffer to store the decoded data.
- * @param out_len The size of the output buffer.
- * @return The number of bytes written to the output buffer, or an error code
- *         indicating a null pointer, invalid input length, integer overflow,
- *         invalid character, or insufficient buffer size.
- */
-int multibase_base64_decode(const char *in, size_t in_len, uint8_t *out, size_t out_len)
+int multibase_base64_decode(const char *in, size_t data_len, uint8_t *out, size_t out_len)
 {
-    if (in == NULL || out == NULL)
-    {
-        return MULTIBASE_ERR_NULL_POINTER;
-    }
-    if (in_len == 0)
-    {
-        return 0;
-    }
-    size_t full_blocks = in_len / 4;
-    size_t rem = in_len % 4;
+	int result;
+	size_t full_groups;
+	size_t remainder;
+	size_t decoded_len;
+	size_t group_index;
+	size_t in_index;
+	size_t out_index;
 
-    if (rem == 1)
-    {
-        return MULTIBASE_ERR_INVALID_INPUT_LEN;
-    }
+	result = (int)MULTIBASE_ERR_NULL_POINTER;
+	full_groups = 0U;
+	remainder = 0U;
+	decoded_len = 0U;
+	group_index = 0U;
+	in_index = 0U;
+	out_index = 0U;
+	if ((in == NULL) || (out == NULL))
+	{
+		result = (int)MULTIBASE_ERR_NULL_POINTER;
+	}
+	else
+	{
+		full_groups = data_len / 4U;
+		remainder = data_len % 4U;
+		if (remainder == 1U)
+		{
+			result = (int)MULTIBASE_ERR_INVALID_INPUT_LEN;
+		}
+		else if (full_groups > (SIZE_MAX / 3U))
+		{
+			result = (int)MULTIBASE_ERR_OVERFLOW;
+		}
+		else
+		{
+			decoded_len = full_groups * 3U;
+			if (remainder == 2U)
+			{
+				if (decoded_len > (SIZE_MAX - 1U))
+				{
+					result = (int)MULTIBASE_ERR_OVERFLOW;
+				}
+				else
+				{
+					decoded_len += 1U;
+				}
+			}
+			else if (remainder == 3U)
+			{
+				if (decoded_len > (SIZE_MAX - 2U))
+				{
+					result = (int)MULTIBASE_ERR_OVERFLOW;
+				}
+				else
+				{
+					decoded_len += 2U;
+				}
+			}
+			else
+			{
+				/* no remainder */
+			}
+		}
 
-    if (full_blocks > SIZE_MAX / 3)
-    {
-        return MULTIBASE_ERR_OVERFLOW;
-    }
+		if (result == (int)MULTIBASE_ERR_NULL_POINTER)
+		{
+			result = (int)MULTIBASE_SUCCESS;
+		}
 
-    size_t decoded_len = full_blocks * 3;
-    if (rem == 2)
-    {
-        if (decoded_len > SIZE_MAX - 1)
-        {
-            return MULTIBASE_ERR_OVERFLOW;
-        }
-        decoded_len += 1;
-    }
-    else if (rem == 3)
-    {
-        if (decoded_len > SIZE_MAX - 2)
-        {
-            return MULTIBASE_ERR_OVERFLOW;
-        }
-        decoded_len += 2;
-    }
-    if (out_len < decoded_len)
-    {
-        return MULTIBASE_ERR_BUFFER_TOO_SMALL;
-    }
+		if (result == (int)MULTIBASE_SUCCESS)
+		{
+			if (out_len < decoded_len)
+			{
+				result = (int)MULTIBASE_ERR_BUFFER_TOO_SMALL;
+			}
+			else if (decoded_len > (size_t)INT_MAX)
+			{
+				result = (int)MULTIBASE_ERR_INPUT_TOO_LARGE;
+			}
+			else
+			{
+				while ((group_index < full_groups) && (result == (int)MULTIBASE_SUCCESS))
+				{
+					uint8_t v0;
+					uint8_t v1;
+					uint8_t v2;
+					uint8_t v3;
+					int ok0;
+					int ok1;
+					int ok2;
+					int ok3;
+					uint32_t triple;
 
-    size_t i = 0;
-    size_t j = 0;
-    for (size_t b = 0; b < full_blocks; b++)
-    {
-        uint32_t triple = 0;
-        for (int k = 0; k < 4; k++)
-        {
-            char c = in[i++];
-            int v = base64_char_to_val(c);
-            if (v == -1)
-            {
-                return MULTIBASE_ERR_INVALID_CHARACTER;
-            }
-            triple = (triple << 6) | v;
-        }
-        out[j++] = (triple >> 16) & 0xFF;
-        out[j++] = (triple >> 8) & 0xFF;
-        out[j++] = triple & 0xFF;
-    }
+					v0 = 0U;
+					v1 = 0U;
+					v2 = 0U;
+					v3 = 0U;
+					ok0 = base64_char_value((uint8_t)in[in_index], &v0);
+					in_index++;
+					ok1 = base64_char_value((uint8_t)in[in_index], &v1);
+					in_index++;
+					ok2 = base64_char_value((uint8_t)in[in_index], &v2);
+					in_index++;
+					ok3 = base64_char_value((uint8_t)in[in_index], &v3);
+					in_index++;
+					if ((ok0 == 0) || (ok1 == 0) || (ok2 == 0) || (ok3 == 0))
+					{
+						result = (int)MULTIBASE_ERR_INVALID_CHARACTER;
+					}
+					else
+					{
+						triple = ((uint32_t)v0 << 18U) | ((uint32_t)v1 << 12U) |
+							 ((uint32_t)v2 << 6U) | (uint32_t)v3;
+						out[out_index] = (uint8_t)((triple >> 16U) & 0xFFU);
+						out_index++;
+						out[out_index] = (uint8_t)((triple >> 8U) & 0xFFU);
+						out_index++;
+						out[out_index] = (uint8_t)(triple & 0xFFU);
+						out_index++;
+					}
 
-    if (rem == 2)
-    {
-        uint32_t triple = 0;
-        for (int k = 0; k < 2; k++)
-        {
-            char c = in[i++];
-            int v = base64_char_to_val(c);
-            if (v == -1)
-            {
-                return MULTIBASE_ERR_INVALID_CHARACTER;
-            }
-            triple = (triple << 6) | v;
-        }
-        triple <<= 12;
-        out[j++] = (triple >> 16) & 0xFF;
-    }
-    else if (rem == 3)
-    {
-        uint32_t triple = 0;
-        for (int k = 0; k < 3; k++)
-        {
-            char c = in[i++];
-            int v = base64_char_to_val(c);
-            if (v == -1)
-            {
-                return MULTIBASE_ERR_INVALID_CHARACTER;
-            }
-            triple = (triple << 6) | v;
-        }
-        triple <<= 6;
-        out[j++] = (triple >> 16) & 0xFF;
-        out[j++] = (triple >> 8) & 0xFF;
-    }
-    return (int)decoded_len;
+					group_index++;
+				}
+
+				if ((result == (int)MULTIBASE_SUCCESS) && (remainder == 2U))
+				{
+					uint8_t v0;
+					uint8_t v1;
+					int ok0;
+					int ok1;
+					uint32_t triple;
+
+					v0 = 0U;
+					v1 = 0U;
+					ok0 = base64_char_value((uint8_t)in[in_index], &v0);
+					in_index++;
+					ok1 = base64_char_value((uint8_t)in[in_index], &v1);
+					in_index++;
+					if ((ok0 == 0) || (ok1 == 0))
+					{
+						result = (int)MULTIBASE_ERR_INVALID_CHARACTER;
+					}
+					else if ((v1 & 0x0FU) != 0U)
+					{
+						result = (int)MULTIBASE_ERR_INVALID_INPUT_LEN;
+					}
+					else
+					{
+						triple = ((uint32_t)v0 << 18U) | ((uint32_t)v1 << 12U);
+						out[out_index] = (uint8_t)((triple >> 16U) & 0xFFU);
+						out_index++;
+					}
+				}
+				else if ((result == (int)MULTIBASE_SUCCESS) && (remainder == 3U))
+				{
+					uint8_t v0;
+					uint8_t v1;
+					uint8_t v2;
+					int ok0;
+					int ok1;
+					int ok2;
+					uint32_t triple;
+
+					v0 = 0U;
+					v1 = 0U;
+					v2 = 0U;
+					ok0 = base64_char_value((uint8_t)in[in_index], &v0);
+					in_index++;
+					ok1 = base64_char_value((uint8_t)in[in_index], &v1);
+					in_index++;
+					ok2 = base64_char_value((uint8_t)in[in_index], &v2);
+					in_index++;
+					if ((ok0 == 0) || (ok1 == 0) || (ok2 == 0))
+					{
+						result = (int)MULTIBASE_ERR_INVALID_CHARACTER;
+					}
+					else if ((v2 & 0x03U) != 0U)
+					{
+						result = (int)MULTIBASE_ERR_INVALID_INPUT_LEN;
+					}
+					else
+					{
+						triple = ((uint32_t)v0 << 18U) | ((uint32_t)v1 << 12U) |
+							 ((uint32_t)v2 << 6U);
+						out[out_index] = (uint8_t)((triple >> 16U) & 0xFFU);
+						out_index++;
+						out[out_index] = (uint8_t)((triple >> 8U) & 0xFFU);
+						out_index++;
+					}
+				}
+				else
+				{
+					/* no remainder bytes */
+				}
+
+				if (result == (int)MULTIBASE_SUCCESS)
+				{
+					result = (int)decoded_len;
+				}
+			}
+		}
+	}
+
+	return result;
 }
