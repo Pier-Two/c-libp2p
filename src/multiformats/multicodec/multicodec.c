@@ -19,6 +19,11 @@ static const multicodec_map_t *multicodec_find_by_name(const char *name)
         const multicodec_map_t *entry;
 
         entry = &multicodec_table[index];
+        if (entry->name == NULL)
+        {
+            continue;
+        }
+
         if (strcmp(name, entry->name) == 0)
         {
             return entry;

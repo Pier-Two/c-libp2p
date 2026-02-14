@@ -51,6 +51,7 @@ typedef enum
  *         UNSIGNED_VARINT_ERR_NULL_PTR if @p out or @p written is NULL.
  *         UNSIGNED_VARINT_ERR_BUFFER_OVER if @p out_size is too small.
  *         UNSIGNED_VARINT_ERR_VALUE_OVERFLOW if @p value > 2^63-1.
+ *         When @p written is non-NULL, it is set to 0 on entry and remains 0 on error.
  */
 unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_t out_size, size_t *written);
 
@@ -68,6 +69,7 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_
  *         UNSIGNED_VARINT_ERR_TOO_LONG if >9 bytes are required or a continuation bit remains.
  *         UNSIGNED_VARINT_ERR_NOT_MINIMAL if the varint is not minimally encoded.
  *         UNSIGNED_VARINT_ERR_VALUE_OVERFLOW if the decoded value > 2^63-1.
+ *         When @p value and @p read are non-NULL, they are reset to 0 before decoding and remain 0 on error.
  */
 unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, uint64_t *value, size_t *read);
 

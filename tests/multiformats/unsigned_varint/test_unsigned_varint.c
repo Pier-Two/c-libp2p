@@ -117,9 +117,10 @@ static void test_encode_errors(void)
     err = unsigned_varint_encode(UINT64_C(0x8000000000000000), out, sizeof(out), &written);
     report_result("encode overflow value", err == UNSIGNED_VARINT_ERR_VALUE_OVERFLOW, "expected VALUE_OVERFLOW");
 
-    written = 0;
+    written = SIZE_MAX;
     err = unsigned_varint_encode(UINT64_C(300), out, 1, &written);
-    report_result("encode buffer over", err == UNSIGNED_VARINT_ERR_BUFFER_OVER, "expected BUFFER_OVER");
+    report_result("encode buffer over", (err == UNSIGNED_VARINT_ERR_BUFFER_OVER) && (written == 0),
+                  "expected BUFFER_OVER with written reset");
 
     written = 0;
     err = unsigned_varint_encode(UINT64_C(1), NULL, sizeof(out), &written);
@@ -166,6 +167,12 @@ static void test_decode_errors(void)
     run_decode_error_case("decode overlong 10 bytes", ten_byte_overlong, sizeof(ten_byte_overlong), UNSIGNED_VARINT_ERR_TOO_LONG);
     run_decode_error_case("decode 2^63 overflow", value_2_63, sizeof(value_2_63), UNSIGNED_VARINT_ERR_VALUE_OVERFLOW);
 
+    decoded = UINT64_MAX;
+    read = SIZE_MAX;
+    err = unsigned_varint_decode(truncated_1, sizeof(truncated_1), &decoded, &read);
+    report_result("decode error resets outputs", (err == UNSIGNED_VARINT_ERR_TOO_LONG) && (decoded == 0) && (read == 0),
+                  "expected TOO_LONG with cleared outputs");
+
     decoded = 0;
     read = 0;
     err = unsigned_varint_decode(NULL, 1, &decoded, &read);
@@ -177,8 +184,11 @@ static void test_decode_errors(void)
     err = unsigned_varint_decode(non_minimal_zero, 2, &decoded, NULL);
     report_result("decode NULL read", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
 
+    decoded = UINT64_MAX;
+    read = SIZE_MAX;
     err = unsigned_varint_decode(non_minimal_zero, 0, &decoded, &read);
-    report_result("decode empty input", err == UNSIGNED_VARINT_ERR_EMPTY_INPUT, "expected EMPTY_INPUT");
+    report_result("decode empty input", (err == UNSIGNED_VARINT_ERR_EMPTY_INPUT) && (decoded == 0) && (read == 0),
+                  "expected EMPTY_INPUT with cleared outputs");
 }
 
 static void test_decode_with_trailing_bytes(void)

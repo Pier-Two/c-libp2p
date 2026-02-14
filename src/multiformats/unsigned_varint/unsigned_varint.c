@@ -5,17 +5,19 @@
 
 static size_t unsigned_varint_size_internal(uint64_t value)
 {
+    uint64_t remaining_value;
     size_t encoded_size;
 
     if (value > UNSIGNED_VARINT_MAX_VALUE)
     {
-        return 0;
+        return (size_t)0U;
     }
 
-    encoded_size = 1;
-    while (value >= UINT64_C(0x80))
+    remaining_value = value;
+    encoded_size = (size_t)1U;
+    while (remaining_value >= UINT64_C(0x80))
     {
-        value >>= 7;
+        remaining_value >>= 7U;
         ++encoded_size;
     }
 
@@ -24,6 +26,7 @@ static size_t unsigned_varint_size_internal(uint64_t value)
 
 unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_t out_size, size_t *written)
 {
+    uint64_t remaining_value;
     size_t required_size;
     size_t index;
 
@@ -32,7 +35,7 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_
         return UNSIGNED_VARINT_ERR_NULL_PTR;
     }
 
-    *written = 0;
+    *written = (size_t)0U;
 
     if (value > UNSIGNED_VARINT_MAX_VALUE)
     {
@@ -40,7 +43,7 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_
     }
 
     required_size = unsigned_varint_size_internal(value);
-    if (required_size == 0)
+    if (required_size == (size_t)0U)
     {
         return UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
     }
@@ -50,13 +53,14 @@ unsigned_varint_err_t unsigned_varint_encode(uint64_t value, uint8_t *out, size_
         return UNSIGNED_VARINT_ERR_BUFFER_OVER;
     }
 
+    remaining_value = value;
     for (index = 0; index < required_size; ++index)
     {
         uint8_t byte;
 
-        byte = (uint8_t)(value & UINT64_C(0x7F));
-        value >>= 7;
-        if (value != 0)
+        byte = (uint8_t)(remaining_value & UINT64_C(0x7F));
+        remaining_value >>= 7U;
+        if (remaining_value != UINT64_C(0))
         {
             byte = (uint8_t)(byte | UINT8_C(0x80));
         }
@@ -79,13 +83,16 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
         return UNSIGNED_VARINT_ERR_NULL_PTR;
     }
 
-    if (in_size == 0)
+    *value = UINT64_C(0);
+    *read = (size_t)0U;
+
+    if (in_size == (size_t)0U)
     {
         return UNSIGNED_VARINT_ERR_EMPTY_INPUT;
     }
 
     decoded_value = 0;
-    shift = 0;
+    shift = 0U;
 
     for (index = 0; index < in_size; ++index)
     {
@@ -96,11 +103,11 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
         if (index < UNSIGNED_VARINT_MAX_ENCODED_SIZE)
         {
             decoded_value |= ((uint64_t)(byte & UINT8_C(0x7F))) << shift;
-            if ((byte & UINT8_C(0x80)) == 0)
+            if ((byte & UINT8_C(0x80)) == UINT8_C(0))
             {
                 size_t encoded_size;
 
-                encoded_size = index + 1;
+                encoded_size = index + (size_t)1U;
                 if (decoded_value > UNSIGNED_VARINT_MAX_VALUE)
                 {
                     return UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
@@ -116,7 +123,7 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
                 return UNSIGNED_VARINT_OK;
             }
 
-            shift += 7;
+            shift += 7U;
             continue;
         }
 
@@ -130,17 +137,17 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
          * reject overlong/minimal-invalid 10-byte forms, and reject any
          * continuation beyond this point.
          */
-        if ((byte & UINT8_C(0x80)) != 0)
+        if ((byte & UINT8_C(0x80)) != UINT8_C(0))
         {
             return UNSIGNED_VARINT_ERR_TOO_LONG;
         }
 
-        if ((byte & UINT8_C(0x7F)) == 0)
+        if ((byte & UINT8_C(0x7F)) == UINT8_C(0))
         {
             return UNSIGNED_VARINT_ERR_TOO_LONG;
         }
 
-        if ((byte & UINT8_C(0x7F)) == 1)
+        if ((byte & UINT8_C(0x7F)) == UINT8_C(1))
         {
             return UNSIGNED_VARINT_ERR_VALUE_OVERFLOW;
         }
