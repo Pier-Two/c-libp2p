@@ -24,18 +24,8 @@ jobs:
             brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done
 
-      - name: Configure
-        run: |
-          cmake --preset macos-smoke \
-            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
-            -DBISON_EXECUTABLE="$(brew --prefix bison)/bin/bison" \
-            -DFLEX_EXECUTABLE="$(brew --prefix flex)/bin/flex"
-
-      - name: Build core unit tests
-        run: cmake --build --preset macos-smoke
-
-      - name: Run core unit tests
-        run: ctest --preset macos-smoke
+      - name: Run macOS smoke checks
+        run: bash scripts/ci/check-macos-smoke.sh
 
   linux-smoke:
     name: linux-smoke
@@ -59,52 +49,8 @@ jobs:
             clang-format \
             cppcheck
 
-      - name: Configure
-        run: cmake --preset linux-smoke
-
-      - name: Build core unit tests
-        run: cmake --build --preset linux-smoke
-
-      - name: Run core unit tests
-        run: ctest --preset linux-smoke
-
-      - name: Formatting check
-        run: |
-          if [ -n "${GITHUB_BASE_REF:-}" ]; then
-            git fetch --no-tags origin "${GITHUB_BASE_REF}" || true
-            range="origin/${GITHUB_BASE_REF}...HEAD"
-          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-            range="$(git rev-parse HEAD~1)...HEAD"
-          else
-            echo "No previous commit available for diff range; skipping format check."
-            exit 0
-          fi
-
-          files="$(git diff --name-only "$range" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)"
-
-          if [ -z "$files" ]; then
-            echo "No changed C source/header files in src/include/tests; skipping format check."
-            exit 0
-          fi
-
-          echo "Formatting check scope:"
-          echo "$files"
-          echo "$files" | xargs clang-format --dry-run --Werror
-
-      - name: Static analysis (cppcheck core scope)
-        run: |
-          cppcheck \
-            --error-exitcode=1 \
-            --std=c99 \
-            --enable=warning,portability \
-            --quiet \
-            --suppress=missingIncludeSystem \
-            src/multiformats \
-            include/multiformats \
-            tests/multiformats \
-            src/peer_id \
-            include/peer_id \
-            tests/peer_id
+      - name: Run Linux smoke checks
+        run: bash scripts/ci/check-linux-smoke.sh
 
   windows-smoke:
     name: windows-smoke

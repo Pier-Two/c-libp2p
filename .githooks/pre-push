@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${LIBP2P_SKIP_FAST_HOOK:-0}" = "1" ]; then
+  echo "Skipping fast-lane hook because LIBP2P_SKIP_FAST_HOOK=1"
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+"${repo_root}/scripts/dev/run-fast-lane-local.sh" --platform auto

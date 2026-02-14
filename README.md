@@ -77,6 +77,33 @@ gh run watch <run-id>
 gh run view <run-id> --log
 ```
 
+## Local pre-push fast-lane hook (macOS/Linux)
+
+Install the repository-managed git hooks:
+
+```sh
+scripts/dev/install-hooks.sh
+```
+
+This configures `core.hooksPath` to `.githooks` and enables a `pre-push` hook that runs the same macOS/Linux fast-lane checks used by CI.
+
+Manual local run:
+
+```sh
+# Auto-detect host platform (macOS or Linux)
+scripts/dev/run-fast-lane-local.sh
+
+# Force a specific platform script
+scripts/dev/run-fast-lane-local.sh --platform macos
+scripts/dev/run-fast-lane-local.sh --platform linux
+```
+
+To bypass the hook for one push:
+
+```sh
+LIBP2P_SKIP_FAST_HOOK=1 git push
+```
+
 ## Project Structure
 
 - `src/` – library source code
