@@ -11,6 +11,13 @@ extern "C"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+
+#if defined(_WIN32) && !defined(_SSIZE_T_DEFINED)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
 
 #include "multiformats/multibase/multibase.h" /* for multibase_t */
 #include "multiformats/multicodec/multicodec_codes.h"

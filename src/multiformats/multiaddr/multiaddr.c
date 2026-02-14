@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "multiformats/multiaddr/multiaddr.h"
 #include "multiformats/multibase/encoding/base58_btc.h"
