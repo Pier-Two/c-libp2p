@@ -13,6 +13,7 @@
 
 #ifdef _WIN32
 #include <Ws2tcpip.h> /* for inet_pton on Windows */
+#define strtok_r(str, delim, saveptr) strtok_s((str), (delim), (saveptr))
 #else
 #include <arpa/inet.h> /* for inet_pton, inet_ntop */
 #endif
