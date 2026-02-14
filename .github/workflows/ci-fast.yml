@@ -44,6 +44,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Install dependencies
@@ -70,9 +71,13 @@ jobs:
       - name: Formatting check
         run: |
           if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            git fetch --no-tags origin "${GITHUB_BASE_REF}" || true
             range="origin/${GITHUB_BASE_REF}...HEAD"
-          else
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
             range="$(git rev-parse HEAD~1)...HEAD"
+          else
+            echo "No previous commit available for diff range; skipping format check."
+            exit 0
           fi
 
           files="$(git diff --name-only "$range" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)"
