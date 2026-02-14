@@ -60,8 +60,11 @@ static once_flag ltc_mp_once = ONCE_FLAG_INIT;
 
 /* Windows InitOnce */
 static INIT_ONCE ltc_mp_once = INIT_ONCE_STATIC_INIT;
-static BOOL CALLBACK init_ltc_mp_windows(PINIT_ONCE, PVOID, PVOID *)
+static BOOL CALLBACK init_ltc_mp_windows(PINIT_ONCE once, PVOID param, PVOID *context)
 {
+    (void)once;
+    (void)param;
+    (void)context;
     init_ltc_mp_shared();
     return TRUE;
 }

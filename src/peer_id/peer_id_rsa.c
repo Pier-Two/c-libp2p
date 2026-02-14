@@ -74,8 +74,11 @@ static INIT_ONCE ltc_mp_once = INIT_ONCE_STATIC_INIT;
  *
  * @return TRUE on successful initialization.
  */
-static BOOL CALLBACK init_ltc_mp_windows(PINIT_ONCE, PVOID, PVOID *)
+static BOOL CALLBACK init_ltc_mp_windows(PINIT_ONCE once, PVOID param, PVOID *context)
 {
+    (void)once;
+    (void)param;
+    (void)context;
     init_ltc_mp_shared();
     return TRUE;
 }
