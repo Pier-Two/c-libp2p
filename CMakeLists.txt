@@ -11,6 +11,13 @@ project(libp2p
     LANGUAGES C
 )
 
+# Windows shared builds rely on import libraries for inter-target linking.
+# Most project targets do not annotate exports with __declspec(dllexport), so
+# ask CMake to auto-export global symbols and emit the required import .lib.
+if(WIN32 AND BUILD_SHARED_LIBS)
+  set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
 if(NOT DEFINED OPENSSL_ROOT_DIR AND DEFINED ENV{OPENSSL_ROOT_DIR})
   set(OPENSSL_ROOT_DIR "$ENV{OPENSSL_ROOT_DIR}" CACHE PATH "Path to custom OpenSSL installation" FORCE)
 endif()
@@ -46,7 +53,11 @@ set_tests_properties(Testprotocol_multiselect_io PROPERTIES TIMEOUT 20)
 
 # Always compile with debug symbols and no optimizations to improve LLDB experience
 # (This applies to all targets below; adjust if you want per-target control.)
-add_compile_options(-O0 -g)
+if(MSVC)
+  add_compile_options(/Zi /Od)
+else()
+  add_compile_options(-O0 -g)
+endif()
 
 if(APPLE)
   string(TOLOWER "${CMAKE_HOST_SYSTEM_PROCESSOR}" _host_arch)
@@ -117,6 +128,21 @@ option(ENABLE_CPPCHECK   "Run cppcheck static analysis"  OFF)
 option(ENABLE_IWYU       "Run include‑what‑you‑use"      OFF)
 option(ENABLE_COVERAGE   "Enable code-coverage flags"    ON)
 option(ENABLE_STRESS_TESTS "Build and run high‑load stress tests" OFF)
+option(ENABLE_STRICT_WARNINGS "Treat warnings as errors for project targets" OFF)
+
+if(ENABLE_STRICT_WARNINGS)
+    if(MSVC)
+        set(LIBP2P_STRICT_WARNING_FLAGS /W4 /WX /wd4244 /wd4267 /wd4295)
+    else()
+        set(LIBP2P_STRICT_WARNING_FLAGS -Wall -Wextra -Wpedantic -Werror)
+        # Several legacy headers in this tree currently omit a trailing newline.
+        # Keep strict warnings enabled without turning this stylistic issue into
+        # an immediate blocker for all smoke builds.
+        list(APPEND LIBP2P_STRICT_WARNING_FLAGS
+            $<$<OR:$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-Wno-newline-eof>
+        )
+    endif()
+endif()
 
 if(ENABLE_SANITIZERS)
     set(_sanitizers ${SANITIZERS})
@@ -204,6 +230,15 @@ add_library(libp2p_log
     src/util/log.c
 )
 target_include_directories(libp2p_log PUBLIC ${PROJECT_SOURCE_DIR}/include)
+
+if(ENABLE_STRICT_WARNINGS)
+    # These targets are created before third-party submodules are added.
+    if(TARGET test_protocol_multiselect_io)
+        target_compile_options(test_protocol_multiselect_io PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    endif()
+    target_compile_options(libp2p_metrics PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    target_compile_options(libp2p_log PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+endif()
 
 if(ENABLE_CPPCHECK)
     find_program(CPPCHECK_EXE NAMES cppcheck)
@@ -479,6 +514,9 @@ _add_subdirectory_no_tests(external/libeddsa)
 function(add_module MODULE_NAME MODULE_SOURCE TEST_SOURCE BENCH_SOURCE PRIVATE_DIR)
     # Create the library (shared if BUILD_SHARED_LIBS=ON).
     add_library(${MODULE_NAME} ${MODULE_SOURCE})
+    if(ENABLE_STRICT_WARNINGS)
+        target_compile_options(${MODULE_NAME} PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    endif()
     target_include_directories(${MODULE_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include)
     if(NOT "${PRIVATE_DIR}" STREQUAL "")
         target_include_directories(${MODULE_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/${PRIVATE_DIR})

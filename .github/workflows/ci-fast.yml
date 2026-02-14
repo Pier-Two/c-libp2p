@@ -1,0 +1,144 @@
+name: ci-fast
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-smoke:
+    name: macos-smoke
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          for pkg in ninja bison flex openssl@3; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+      - name: Configure
+        run: |
+          cmake --preset macos-smoke \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DBISON_EXECUTABLE="$(brew --prefix bison)/bin/bison" \
+            -DFLEX_EXECUTABLE="$(brew --prefix flex)/bin/flex"
+
+      - name: Build core unit tests
+        run: cmake --build --preset macos-smoke
+
+      - name: Run core unit tests
+        run: ctest --preset macos-smoke
+
+  linux-smoke:
+    name: linux-smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            bison \
+            flex \
+            libssl-dev \
+            pkg-config \
+            clang-format \
+            cppcheck
+
+      - name: Configure
+        run: cmake --preset linux-smoke
+
+      - name: Build core unit tests
+        run: cmake --build --preset linux-smoke
+
+      - name: Run core unit tests
+        run: ctest --preset linux-smoke
+
+      - name: Formatting check
+        run: |
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            range="origin/${GITHUB_BASE_REF}...HEAD"
+          else
+            range="$(git rev-parse HEAD~1)...HEAD"
+          fi
+
+          files="$(git diff --name-only "$range" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)"
+
+          if [ -z "$files" ]; then
+            echo "No changed C source/header files in src/include/tests; skipping format check."
+            exit 0
+          fi
+
+          echo "Formatting check scope:"
+          echo "$files"
+          echo "$files" | xargs clang-format --dry-run --Werror
+
+      - name: Static analysis (cppcheck core scope)
+        run: |
+          cppcheck \
+            --error-exitcode=1 \
+            --std=c99 \
+            --enable=warning,portability \
+            --quiet \
+            --suppress=missingIncludeSystem \
+            src/multiformats \
+            include/multiformats \
+            tests/multiformats \
+            src/peer_id \
+            include/peer_id \
+            tests/peer_id
+
+  windows-smoke:
+    name: windows-smoke
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies
+        run: |
+          choco install -y ninja winflexbison3 openssl.light pkgconfiglite
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $bison = (Get-Command win_bison.exe -ErrorAction Stop).Source
+          $flex = (Get-Command win_flex.exe -ErrorAction Stop).Source
+
+          if (Test-Path 'C:\Program Files\OpenSSL-Win64') {
+            $opensslRoot = 'C:\Program Files\OpenSSL-Win64'
+          } elseif (Test-Path 'C:\Program Files\OpenSSL') {
+            $opensslRoot = 'C:\Program Files\OpenSSL'
+          } else {
+            throw 'OpenSSL installation directory not found.'
+          }
+
+          cmake --preset windows-smoke `
+            -DBISON_EXECUTABLE="$bison" `
+            -DFLEX_EXECUTABLE="$flex" `
+            -DOPENSSL_ROOT_DIR="$opensslRoot" `
+            -DBCRYPT_AVAILABLE=OFF
+
+      - name: Build core unit tests
+        run: cmake --build --preset windows-smoke
+
+      - name: Run core unit tests
+        run: ctest --preset windows-smoke

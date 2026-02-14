@@ -1,0 +1,133 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "smoke-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BUILD_SHARED_LIBS": "ON",
+        "ENABLE_COVERAGE": "OFF",
+        "ENABLE_STRESS_TESTS": "OFF",
+        "ENABLE_SANITIZERS": "OFF",
+        "ENABLE_CLANG_TIDY": "OFF",
+        "ENABLE_CPPCHECK": "OFF",
+        "ENABLE_IWYU": "OFF",
+        "ENABLE_STRICT_WARNINGS": "ON"
+      }
+    },
+    {
+      "name": "macos-smoke",
+      "displayName": "macOS smoke",
+      "inherits": "smoke-base"
+    },
+    {
+      "name": "linux-smoke",
+      "displayName": "Linux smoke",
+      "inherits": "smoke-base"
+    },
+    {
+      "name": "windows-smoke",
+      "displayName": "Windows smoke",
+      "inherits": "smoke-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_SHARED_LIBS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos-smoke",
+      "configurePreset": "macos-smoke",
+      "jobs": 6,
+      "targets": [
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec"
+      ]
+    },
+    {
+      "name": "linux-smoke",
+      "configurePreset": "linux-smoke",
+      "jobs": 6,
+      "targets": [
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec"
+      ]
+    },
+    {
+      "name": "windows-smoke",
+      "configurePreset": "windows-smoke",
+      "jobs": 6,
+      "targets": [
+        "test_multibase",
+        "test_multicodec"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "macos-smoke",
+      "configurePreset": "macos-smoke",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec)$"
+        }
+      }
+    },
+    {
+      "name": "linux-smoke",
+      "configurePreset": "linux-smoke",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec)$"
+        }
+      }
+    },
+    {
+      "name": "windows-smoke",
+      "configurePreset": "windows-smoke",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testmultibase|Testmulticodec)$"
+        }
+      }
+    }
+  ]
+}
