@@ -1068,6 +1068,10 @@ if(MSVC)
   file(READ "${PROJECT_SOURCE_DIR}/external/sha3/sha3.c" SHA3_C_CONTENT)
   string(REPLACE "[const static " "[" SHA3_C_CONTENT "${SHA3_C_CONTENT}")
   string(REPLACE "[static " "[" SHA3_C_CONTENT "${SHA3_C_CONTENT}")
+  # sha3.c uses __builtin_expect directly; provide a no-op fallback for MSVC.
+  set(SHA3_MSVC_PREAMBLE
+      "#ifndef __builtin_expect\n#define __builtin_expect(x, y) (x)\n#endif\n")
+  set(SHA3_C_CONTENT "${SHA3_MSVC_PREAMBLE}${SHA3_C_CONTENT}")
   file(WRITE "${SHA3_COMPAT_DIR}/sha3.c" "${SHA3_C_CONTENT}")
 
   set_property(TARGET sha3 PROPERTY SOURCES "${SHA3_COMPAT_DIR}/sha3.c")
