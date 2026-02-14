@@ -489,12 +489,6 @@ add_custom_target(gossipsub_proto
 # Add libeddsa submodule.
 _add_subdirectory_no_tests(external/libeddsa)
 
-if(ENABLE_STRICT_WARNINGS)
-    # Apply strict warnings only after vendored submodules are added so the
-    # policy is enforced for this project without breaking third-party code.
-    add_compile_options(${LIBP2P_STRICT_WARNING_FLAGS})
-endif()
-
 # ---------------------------------------------
 # Helper function for adding a module.
 # ---------------------------------------------
@@ -509,6 +503,9 @@ endif()
 function(add_module MODULE_NAME MODULE_SOURCE TEST_SOURCE BENCH_SOURCE PRIVATE_DIR)
     # Create the library (shared if BUILD_SHARED_LIBS=ON).
     add_library(${MODULE_NAME} ${MODULE_SOURCE})
+    if(ENABLE_STRICT_WARNINGS)
+        target_compile_options(${MODULE_NAME} PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    endif()
     target_include_directories(${MODULE_NAME} PUBLIC ${PROJECT_SOURCE_DIR}/include)
     if(NOT "${PRIVATE_DIR}" STREQUAL "")
         target_include_directories(${MODULE_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/${PRIVATE_DIR})

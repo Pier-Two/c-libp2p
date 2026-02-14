@@ -117,7 +117,8 @@ jobs:
           cmake --preset windows-smoke `
             -DBISON_EXECUTABLE="$bison" `
             -DFLEX_EXECUTABLE="$flex" `
-            -DOPENSSL_ROOT_DIR="$opensslRoot"
+            -DOPENSSL_ROOT_DIR="$opensslRoot" `
+            -DBCRYPT_AVAILABLE=OFF
 
       - name: Build core unit tests
         run: cmake --build --preset windows-smoke
