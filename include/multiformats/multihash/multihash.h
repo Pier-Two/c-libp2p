@@ -16,13 +16,13 @@ extern "C" {
 /**
  * @brief Supported multihash code values.
  */
-#define MULTIHASH_CODE_IDENTITY UINT64_C(0x00)
-#define MULTIHASH_CODE_SHA2_256 UINT64_C(0x12)
-#define MULTIHASH_CODE_SHA2_512 UINT64_C(0x13)
-#define MULTIHASH_CODE_SHA3_512 UINT64_C(0x14)
-#define MULTIHASH_CODE_SHA3_384 UINT64_C(0x15)
-#define MULTIHASH_CODE_SHA3_256 UINT64_C(0x16)
-#define MULTIHASH_CODE_SHA3_224 UINT64_C(0x17)
+#define MULTIHASH_CODE_IDENTITY ((uint64_t)0x00U)
+#define MULTIHASH_CODE_SHA2_256 ((uint64_t)0x12U)
+#define MULTIHASH_CODE_SHA2_512 ((uint64_t)0x13U)
+#define MULTIHASH_CODE_SHA3_512 ((uint64_t)0x14U)
+#define MULTIHASH_CODE_SHA3_384 ((uint64_t)0x15U)
+#define MULTIHASH_CODE_SHA3_256 ((uint64_t)0x16U)
+#define MULTIHASH_CODE_SHA3_224 ((uint64_t)0x17U)
 
 /**
  * @brief Error-code type for multihash operations.
