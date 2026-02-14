@@ -25,6 +25,21 @@ typedef enum
 } unsigned_varint_err_t;
 
 /**
+ * @brief Maximum number of bytes for the supported unsigned varint encoding.
+ *
+ * This implementation intentionally caps values at 63 bits and therefore
+ * accepts at most 9 bytes for canonical encodings.
+ */
+#define UNSIGNED_VARINT_MAX_ENCODED_SIZE ((size_t)9U)
+
+/**
+ * @brief Maximum supported value for this unsigned varint implementation.
+ *
+ * Values above 2^63-1 are rejected with UNSIGNED_VARINT_ERR_VALUE_OVERFLOW.
+ */
+#define UNSIGNED_VARINT_MAX_VALUE UINT64_C(0x7FFFFFFFFFFFFFFF)
+
+/**
  * @brief Encodes a 64-bit unsigned integer into a varint buffer.
  *
  * @param value    The 64-bit unsigned value to encode (must be ≤ 2^63-1).

@@ -3,48 +3,71 @@
 #include <string.h>
 
 #include "multiformats/multicodec/multicodec.h"
-#include "multiformats/multicodec/multicodec_codes.h"
 #include "multiformats/multicodec/multicodec_table.h"
 
-/**
- * @brief Look up the numeric code for a given codec name.
- *
- * @param name The name of the codec to look up. Must not be NULL.
- * @return The numeric code for the codec, or UINT64_MAX if the codec is not found.
- */
-uint64_t multicodec_code_from_name(const char *name)
+static const multicodec_map_t *multicodec_find_by_name(const char *name)
 {
-    if (!name)
+    size_t index;
+
+    if ((name == NULL) || (name[0] == '\0'))
     {
-        return UINT64_MAX;
+        return NULL;
     }
 
-    for (size_t i = 0; i < multicodec_table_len; ++i)
+    for (index = 0; index < multicodec_table_len; ++index)
     {
-        if (strcmp(name, multicodec_table[i].name) == 0)
-        {
-            return multicodec_table[i].code;
-        }
-    }
+        const multicodec_map_t *entry;
 
-    return UINT64_MAX;
-}
-
-/**
- * @brief Look up the name of a given numeric code.
- *
- * @param code The numeric code to look up.
- * @return The name of the codec, or NULL if the code is not found.
- */
-const char *multicodec_name_from_code(uint64_t code)
-{
-    for (size_t i = 0; i < multicodec_table_len; ++i)
-    {
-        if (code == multicodec_table[i].code)
+        entry = &multicodec_table[index];
+        if (strcmp(name, entry->name) == 0)
         {
-            return multicodec_table[i].name;
+            return entry;
         }
     }
 
     return NULL;
+}
+
+static const multicodec_map_t *multicodec_find_by_code(uint64_t code)
+{
+    size_t index;
+
+    for (index = 0; index < multicodec_table_len; ++index)
+    {
+        const multicodec_map_t *entry;
+
+        entry = &multicodec_table[index];
+        if (entry->code == code)
+        {
+            return entry;
+        }
+    }
+
+    return NULL;
+}
+
+uint64_t multicodec_code_from_name(const char *name)
+{
+    const multicodec_map_t *entry;
+
+    entry = multicodec_find_by_name(name);
+    if (entry == NULL)
+    {
+        return UINT64_MAX;
+    }
+
+    return entry->code;
+}
+
+const char *multicodec_name_from_code(uint64_t code)
+{
+    const multicodec_map_t *entry;
+
+    entry = multicodec_find_by_code(code);
+    if (entry == NULL)
+    {
+        return NULL;
+    }
+
+    return entry->name;
 }

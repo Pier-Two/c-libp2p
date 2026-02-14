@@ -1,362 +1,226 @@
 #include "multiformats/unsigned_varint/unsigned_varint.h"
+
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static void print_standard(const char *test_name, const char *details, int passed)
+typedef struct
+{
+    const char *name;
+    uint64_t value;
+    uint8_t encoding[UNSIGNED_VARINT_MAX_ENCODED_SIZE];
+    size_t encoding_len;
+} varint_vector_t;
+
+static int g_failures = 0;
+
+static void report_result(const char *test_name, int passed, const char *details)
 {
     if (passed)
     {
         printf("TEST: %-50s | PASS\n", test_name);
+        return;
     }
-    else
-    {
-        printf("TEST: %-50s | FAIL: %s\n", test_name, details);
-    }
+
+    ++g_failures;
+    printf("TEST: %-50s | FAIL: %s\n", test_name, details);
 }
 
-static int test_encode_decode(uint64_t value, const char *expected_hex)
+static void run_round_trip_vector(const varint_vector_t *vector)
 {
-    char test_name[128];
-#ifdef _MSC_VER
-    sprintf_s(test_name, sizeof(test_name), "Encode/Decode value=%llu", (unsigned long long)value);
-#else
-    sprintf(test_name, "Encode/Decode value=%llu", (unsigned long long)value);
-#endif
+    uint8_t out[16];
+    size_t written;
+    uint64_t decoded;
+    size_t read;
+    unsigned_varint_err_t err;
+    size_t expected_size;
+    char test_name[160];
 
-    uint8_t buffer[16];
-    memset(buffer, 0, sizeof(buffer));
+    written = 0;
+    decoded = 0;
+    read = 0;
+    memset(out, 0, sizeof(out));
 
-    size_t written = 0;
-    unsigned_varint_err_t err = unsigned_varint_encode(value, buffer, sizeof(buffer), &written);
+    snprintf(test_name, sizeof(test_name), "encode %s", vector->name);
+    err = unsigned_varint_encode(vector->value, out, sizeof(out), &written);
     if (err != UNSIGNED_VARINT_OK)
     {
-        char details[256];
-        memset(details, 0, sizeof(details));
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Encoding error for value=%llu, err=%d", (unsigned long long)value, (int)err);
-#else
-        sprintf(details, "Encoding error for value=%llu, err=%d", (unsigned long long)value, (int)err);
-#endif
-        print_standard(test_name, details, 0);
-        return 0;
+        report_result(test_name, 0, "unexpected encode error");
+        return;
     }
 
-    char encoded_hex[64];
-    memset(encoded_hex, 0, sizeof(encoded_hex));
-    for (size_t i = 0; i < written; i++)
+    report_result(test_name, 1, "");
+
+    snprintf(test_name, sizeof(test_name), "encoding bytes %s", vector->name);
+    if ((written != vector->encoding_len) || (memcmp(out, vector->encoding, vector->encoding_len) != 0))
     {
-#ifdef _MSC_VER
-        sprintf_s(encoded_hex + (i * 2), sizeof(encoded_hex) - (i * 2), "%02x", buffer[i]);
-#else
-        sprintf(encoded_hex + (i * 2), "%02x", buffer[i]);
-#endif
+        report_result(test_name, 0, "encoded bytes mismatch");
+        return;
     }
 
-    int ok = 1;
-    char details[256];
-    memset(details, 0, sizeof(details));
+    report_result(test_name, 1, "");
 
-    if (expected_hex != NULL && strcmp(encoded_hex, expected_hex) != 0)
-    {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Encoded hex mismatch: got %s, expected %s", encoded_hex, expected_hex);
-#else
-        sprintf(details, "Encoded hex mismatch: got %s, expected %s", encoded_hex, expected_hex);
-#endif
-        ok = 0;
-    }
-
-    uint64_t decoded_val = 0;
-    size_t read = 0;
-    err = unsigned_varint_decode(buffer, written, &decoded_val, &read);
+    snprintf(test_name, sizeof(test_name), "decode %s", vector->name);
+    err = unsigned_varint_decode(out, written, &decoded, &read);
     if (err != UNSIGNED_VARINT_OK)
     {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Decoding error for value=%llu, err=%d", (unsigned long long)value, (int)err);
-#else
-        sprintf(details, "Decoding error for value=%llu, err=%d", (unsigned long long)value, (int)err);
-#endif
-        ok = 0;
-    }
-    else if (decoded_val != value || read != written)
-    {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Decoded value/byte count mismatch: got %llu (%zu bytes), expected %llu (%zu bytes)",
-                  (unsigned long long)decoded_val, read, (unsigned long long)value, written);
-#else
-        sprintf(details, "Decoded value/byte count mismatch: got %llu (%zu bytes), expected %llu (%zu bytes)", (unsigned long long)decoded_val, read,
-                (unsigned long long)value, written);
-#endif
-        ok = 0;
+        report_result(test_name, 0, "unexpected decode error");
+        return;
     }
 
-    print_standard(test_name, details, ok);
-    return ok;
+    if ((decoded != vector->value) || (read != written))
+    {
+        report_result(test_name, 0, "decoded value or length mismatch");
+        return;
+    }
+
+    report_result(test_name, 1, "");
+
+    snprintf(test_name, sizeof(test_name), "size %s", vector->name);
+    expected_size = unsigned_varint_size(vector->value);
+    report_result(test_name, expected_size == vector->encoding_len, "unsigned_varint_size mismatch");
 }
 
-static int test_decode_failure(const uint8_t *data, size_t data_len, unsigned_varint_err_t expected_err, const char *test_name)
+static void test_round_trip_vectors(void)
 {
-    uint64_t decoded_val = 0;
-    size_t read = 0;
-    unsigned_varint_err_t err = unsigned_varint_decode(data, data_len, &decoded_val, &read);
+    static const varint_vector_t vectors[] = {
+        {"value 0", UINT64_C(0), {0x00}, 1},
+        {"value 1", UINT64_C(1), {0x01}, 1},
+        {"value 127", UINT64_C(127), {0x7F}, 1},
+        {"value 128", UINT64_C(128), {0x80, 0x01}, 2},
+        {"value 255", UINT64_C(255), {0xFF, 0x01}, 2},
+        {"value 300", UINT64_C(300), {0xAC, 0x02}, 2},
+        {"value 16383", UINT64_C(16383), {0xFF, 0x7F}, 2},
+        {"value 16384", UINT64_C(16384), {0x80, 0x80, 0x01}, 3},
+        {"value 2097151", UINT64_C(2097151), {0xFF, 0xFF, 0x7F}, 3},
+        {"value 2097152", UINT64_C(2097152), {0x80, 0x80, 0x80, 0x01}, 4},
+        {"value 2^48", UINT64_C(281474976710656), {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40}, 7},
+        {"value max", UINT64_C(0x7FFFFFFFFFFFFFFF), {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, 9},
+    };
+    size_t i;
 
-    int passed = (err == expected_err);
-    char details[256];
-    memset(details, 0, sizeof(details));
-    if (!passed)
+    for (i = 0; i < (sizeof(vectors) / sizeof(vectors[0])); ++i)
     {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Expected error %d but got %d", (int)expected_err, (int)err);
-#else
-        sprintf(details, "Expected error %d but got %d", (int)expected_err, (int)err);
-#endif
+        run_round_trip_vector(&vectors[i]);
     }
-
-    print_standard(test_name, details, passed);
-    return passed;
 }
 
-static int test_encode_failure(uint64_t value, unsigned_varint_err_t expected_err, const char *test_name)
+static void test_encode_errors(void)
 {
-    uint8_t buffer[16];
-    memset(buffer, 0, sizeof(buffer));
-    size_t written = 0;
-    unsigned_varint_err_t err = unsigned_varint_encode(value, buffer, sizeof(buffer), &written);
+    uint8_t out[16];
+    size_t written;
+    unsigned_varint_err_t err;
 
-    int passed = (err == expected_err);
-    char details[256];
-    memset(details, 0, sizeof(details));
-    if (!passed)
-    {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Expected error %d for value %llu, but got %d", (int)expected_err, (unsigned long long)value, (int)err);
-#else
-        sprintf(details, "Expected error %d for value %llu, but got %d", (int)expected_err, (unsigned long long)value, (int)err);
-#endif
-    }
+    written = 0;
+    err = unsigned_varint_encode(UINT64_C(0x8000000000000000), out, sizeof(out), &written);
+    report_result("encode overflow value", err == UNSIGNED_VARINT_ERR_VALUE_OVERFLOW, "expected VALUE_OVERFLOW");
 
-    print_standard(test_name, details, passed);
-    return passed;
+    written = 0;
+    err = unsigned_varint_encode(UINT64_C(300), out, 1, &written);
+    report_result("encode buffer over", err == UNSIGNED_VARINT_ERR_BUFFER_OVER, "expected BUFFER_OVER");
+
+    written = 0;
+    err = unsigned_varint_encode(UINT64_C(1), NULL, sizeof(out), &written);
+    report_result("encode NULL out", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
+
+    err = unsigned_varint_encode(UINT64_C(1), out, sizeof(out), NULL);
+    report_result("encode NULL written", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
 }
 
-static int test_unsigned_varint_size(uint64_t value, size_t expected_size)
+static void run_decode_error_case(const char *name, const uint8_t *input, size_t input_len, unsigned_varint_err_t expected)
 {
-    char test_name[128];
-#ifdef _MSC_VER
-    sprintf_s(test_name, sizeof(test_name), "unsigned_varint_size for value=%llu", (unsigned long long)value);
-#else
-    sprintf(test_name, "unsigned_varint_size for value=%llu", (unsigned long long)value);
-#endif
+    uint64_t value;
+    size_t read;
+    unsigned_varint_err_t err;
 
-    size_t size = unsigned_varint_size(value);
-    int passed = (size == expected_size);
-
-    char details[256];
-    memset(details, 0, sizeof(details));
-    if (!passed)
-    {
-#ifdef _MSC_VER
-        sprintf_s(details, sizeof(details), "Expected size %zu but got %zu", expected_size, size);
-#else
-        sprintf(details, "Expected size %zu but got %zu", expected_size, size);
-#endif
-    }
-
-    print_standard(test_name, details, passed);
-    return passed;
+    value = 0;
+    read = 0;
+    err = unsigned_varint_decode(input, input_len, &value, &read);
+    report_result(name, err == expected, "unexpected decode error code");
 }
 
-static int test_null_parameters(void)
+static void test_decode_errors(void)
 {
-    int ok = 1;
+    static const uint8_t non_minimal_zero[] = {0x80, 0x00};
+    static const uint8_t non_minimal_one[] = {0x81, 0x00};
+    static const uint8_t non_minimal_127[] = {0xFF, 0x00};
+    static const uint8_t truncated_1[] = {0x80};
+    static const uint8_t truncated_2[] = {0x80, 0x80};
+    static const uint8_t ten_byte_overlong[] = {
+        0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00,
+    };
+    static const uint8_t value_2_63[] = {
+        0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01,
+    };
+    uint64_t decoded;
+    size_t read;
+    unsigned_varint_err_t err;
 
-    {
-        const char *test_name = "Encode with NULL 'out'";
-        size_t written = 0;
-        unsigned_varint_err_t err = unsigned_varint_encode(100ULL, NULL, 10, &written);
+    run_decode_error_case("decode non-minimal zero", non_minimal_zero, sizeof(non_minimal_zero), UNSIGNED_VARINT_ERR_NOT_MINIMAL);
+    run_decode_error_case("decode non-minimal one", non_minimal_one, sizeof(non_minimal_one), UNSIGNED_VARINT_ERR_NOT_MINIMAL);
+    run_decode_error_case("decode non-minimal 127", non_minimal_127, sizeof(non_minimal_127), UNSIGNED_VARINT_ERR_NOT_MINIMAL);
+    run_decode_error_case("decode truncated 1", truncated_1, sizeof(truncated_1), UNSIGNED_VARINT_ERR_TOO_LONG);
+    run_decode_error_case("decode truncated 2", truncated_2, sizeof(truncated_2), UNSIGNED_VARINT_ERR_TOO_LONG);
+    run_decode_error_case("decode overlong 10 bytes", ten_byte_overlong, sizeof(ten_byte_overlong), UNSIGNED_VARINT_ERR_TOO_LONG);
+    run_decode_error_case("decode 2^63 overflow", value_2_63, sizeof(value_2_63), UNSIGNED_VARINT_ERR_VALUE_OVERFLOW);
 
-        char details[256];
-        memset(details, 0, sizeof(details));
-        int passed = (err == UNSIGNED_VARINT_ERR_NULL_PTR);
-        if (!passed)
-        {
-#ifdef _MSC_VER
-            sprintf_s(details, sizeof(details), "Expected NULL_PTR, got %d", (int)err);
-#else
-            sprintf(details, "Expected NULL_PTR, got %d", (int)err);
-#endif
-        }
-        print_standard(test_name, details, passed);
-        if (!passed)
-            ok = 0;
-    }
+    decoded = 0;
+    read = 0;
+    err = unsigned_varint_decode(NULL, 1, &decoded, &read);
+    report_result("decode NULL input", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
 
-    {
-        const char *test_name = "Encode with NULL 'written'";
-        uint8_t buffer[4];
-        unsigned_varint_err_t err = unsigned_varint_encode(100ULL, buffer, sizeof(buffer), NULL);
+    err = unsigned_varint_decode(non_minimal_zero, 2, NULL, &read);
+    report_result("decode NULL value", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
 
-        char details[256];
-        memset(details, 0, sizeof(details));
-        int passed = (err == UNSIGNED_VARINT_ERR_NULL_PTR);
-        if (!passed)
-        {
-#ifdef _MSC_VER
-            sprintf_s(details, sizeof(details), "Expected NULL_PTR, got %d", (int)err);
-#else
-            sprintf(details, "Expected NULL_PTR, got %d", (int)err);
-#endif
-        }
-        print_standard(test_name, details, passed);
-        if (!passed)
-            ok = 0;
-    }
+    err = unsigned_varint_decode(non_minimal_zero, 2, &decoded, NULL);
+    report_result("decode NULL read", err == UNSIGNED_VARINT_ERR_NULL_PTR, "expected NULL_PTR");
 
-    {
-        const char *test_name = "Decode with NULL 'in'";
-        uint64_t val = 0;
-        size_t read = 0;
-        unsigned_varint_err_t err = unsigned_varint_decode(NULL, 5, &val, &read);
+    err = unsigned_varint_decode(non_minimal_zero, 0, &decoded, &read);
+    report_result("decode empty input", err == UNSIGNED_VARINT_ERR_EMPTY_INPUT, "expected EMPTY_INPUT");
+}
 
-        char details[256];
-        memset(details, 0, sizeof(details));
-        int passed = (err == UNSIGNED_VARINT_ERR_NULL_PTR);
-        if (!passed)
-        {
-#ifdef _MSC_VER
-            sprintf_s(details, sizeof(details), "Expected NULL_PTR, got %d", (int)err);
-#else
-            sprintf(details, "Expected NULL_PTR, got %d", (int)err);
-#endif
-        }
-        print_standard(test_name, details, passed);
-        if (!passed)
-            ok = 0;
-    }
+static void test_decode_with_trailing_bytes(void)
+{
+    static const uint8_t input[] = {0x01, 0x80, 0x80, 0x80};
+    uint64_t decoded;
+    size_t read;
+    unsigned_varint_err_t err;
 
-    {
-        const char *test_name = "Decode with NULL 'value'";
-        uint8_t data[] = {0x01};
-        size_t read = 0;
-        unsigned_varint_err_t err = unsigned_varint_decode(data, 1, NULL, &read);
+    decoded = 0;
+    read = 0;
+    err = unsigned_varint_decode(input, sizeof(input), &decoded, &read);
+    report_result("decode with trailing bytes", (err == UNSIGNED_VARINT_OK) && (decoded == UINT64_C(1)) && (read == 1),
+                  "expected decode to stop at first varint");
+}
 
-        char details[256];
-        memset(details, 0, sizeof(details));
-        int passed = (err == UNSIGNED_VARINT_ERR_NULL_PTR);
-        if (!passed)
-        {
-#ifdef _MSC_VER
-            sprintf_s(details, sizeof(details), "Expected NULL_PTR, got %d", (int)err);
-#else
-            sprintf(details, "Expected NULL_PTR, got %d", (int)err);
-#endif
-        }
-        print_standard(test_name, details, passed);
-        if (!passed)
-            ok = 0;
-    }
-
-    {
-        const char *test_name = "Decode with NULL 'read'";
-        uint8_t data[] = {0x01};
-        uint64_t val = 0;
-        unsigned_varint_err_t err = unsigned_varint_decode(data, 1, &val, NULL);
-
-        char details[256];
-        memset(details, 0, sizeof(details));
-        int passed = (err == UNSIGNED_VARINT_ERR_NULL_PTR);
-        if (!passed)
-        {
-#ifdef _MSC_VER
-            sprintf_s(details, sizeof(details), "Expected NULL_PTR, got %d", (int)err);
-#else
-            sprintf(details, "Expected NULL_PTR, got %d", (int)err);
-#endif
-        }
-        print_standard(test_name, details, passed);
-        if (!passed)
-            ok = 0;
-    }
-
-    return ok;
+static void test_size_boundaries(void)
+{
+    report_result("size(0) == 1", unsigned_varint_size(UINT64_C(0)) == 1, "unexpected size for 0");
+    report_result("size(127) == 1", unsigned_varint_size(UINT64_C(127)) == 1, "unexpected size for 127");
+    report_result("size(128) == 2", unsigned_varint_size(UINT64_C(128)) == 2, "unexpected size for 128");
+    report_result("size(16383) == 2", unsigned_varint_size(UINT64_C(16383)) == 2, "unexpected size for 16383");
+    report_result("size(16384) == 3", unsigned_varint_size(UINT64_C(16384)) == 3, "unexpected size for 16384");
+    report_result("size(max) == 9", unsigned_varint_size(UNSIGNED_VARINT_MAX_VALUE) == 9, "unexpected size for max");
+    report_result("size(2^63) == 0", unsigned_varint_size(UINT64_C(0x8000000000000000)) == 0, "expected overflow size to be 0");
+    report_result("size(UINT64_MAX) == 0", unsigned_varint_size(UINT64_MAX) == 0, "expected overflow size to be 0");
 }
 
 int main(void)
 {
-    int failures = 0;
+    test_round_trip_vectors();
+    test_encode_errors();
+    test_decode_errors();
+    test_decode_with_trailing_bytes();
+    test_size_boundaries();
 
-    failures += test_encode_decode(1ULL, "01") ? 0 : 1;
-    failures += test_encode_decode(127ULL, "7f") ? 0 : 1;
-    failures += test_encode_decode(128ULL, "8001") ? 0 : 1;
-    failures += test_encode_decode(255ULL, "ff01") ? 0 : 1;
-    failures += test_encode_decode(300ULL, "ac02") ? 0 : 1;
-    failures += test_encode_decode(16384ULL, "808001") ? 0 : 1;
-    failures += test_encode_decode(0x7FFFFFFFFFFFFFFFULL, NULL) ? 0 : 1;
-    failures += test_encode_decode(0ULL, "00") ? 0 : 1;
-    failures += test_encode_decode(268435455ULL, "ffffff7f") ? 0 : 1;
-    failures += test_encode_decode(268435456ULL, "8080808001") ? 0 : 1;
-    failures += test_encode_decode(34359738368ULL, "808080808001") ? 0 : 1;
-    failures += test_encode_decode(1099511627776ULL, "808080808020") ? 0 : 1;
-    failures += test_encode_decode(281474976710656ULL, "80808080808040") ? 0 : 1;
-
+    if (g_failures != 0)
     {
-        uint8_t non_minimal_for_1[] = {0x81, 0x00};
-        failures +=
-            test_decode_failure(non_minimal_for_1, sizeof(non_minimal_for_1), UNSIGNED_VARINT_ERR_NOT_MINIMAL, "Non-minimal encoding for 1") ? 0 : 1;
-    }
-
-    {
-        uint8_t ten_bytes[] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00};
-        failures += test_decode_failure(ten_bytes, sizeof(ten_bytes), UNSIGNED_VARINT_ERR_TOO_LONG, "10-byte sequence") ? 0 : 1;
-    }
-
-    {
-        uint8_t truncated[] = {0x80};
-        failures += test_decode_failure(truncated, sizeof(truncated), UNSIGNED_VARINT_ERR_TOO_LONG, "Truncated single 0x80") ? 0 : 1;
-    }
-    {
-        uint8_t truncated_larger[] = {0xFF};
-        failures += test_decode_failure(truncated_larger, sizeof(truncated_larger), UNSIGNED_VARINT_ERR_TOO_LONG, "Truncated single 0xFF") ? 0 : 1;
-    }
-
-    failures += test_encode_failure(0xFFFFFFFFFFFFFFFFULL, UNSIGNED_VARINT_ERR_VALUE_OVERFLOW, "Encoding >2^63-1") ? 0 : 1;
-    failures += test_encode_failure(0x8000000000000000ULL, UNSIGNED_VARINT_ERR_VALUE_OVERFLOW, "Encoding 2^63") ? 0 : 1;
-
-    {
-        const uint8_t empty[1] = {};
-        failures += test_decode_failure(empty, 0, UNSIGNED_VARINT_ERR_EMPTY_INPUT, "Empty input decode") ? 0 : 1;
-    }
-
-    {
-        uint8_t varint_2_63[10] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01};
-        failures += test_decode_failure(varint_2_63, sizeof(varint_2_63), UNSIGNED_VARINT_ERR_VALUE_OVERFLOW, "Decode 2^63") ? 0 : 1;
-    }
-
-    failures += test_unsigned_varint_size(0ULL, 1) ? 0 : 1;
-    failures += test_unsigned_varint_size(1ULL, 1) ? 0 : 1;
-    failures += test_unsigned_varint_size(127ULL, 1) ? 0 : 1;
-    failures += test_unsigned_varint_size(128ULL, 2) ? 0 : 1;
-    failures += test_unsigned_varint_size(255ULL, 2) ? 0 : 1;
-    failures += test_unsigned_varint_size(300ULL, 2) ? 0 : 1;
-    failures += test_unsigned_varint_size(16383ULL, 2) ? 0 : 1;
-    failures += test_unsigned_varint_size(16384ULL, 3) ? 0 : 1;
-    failures += test_unsigned_varint_size(0x7FFFFFFFFFFFFFFFULL, 9) ? 0 : 1;
-
-    if (!test_null_parameters())
-    {
-        ++failures;
-    }
-
-    if (failures)
-    {
-        printf("\nSome tests failed. Total failures: %d\n", failures);
+        printf("\nSome tests failed. Total failures: %d\n", g_failures);
         return EXIT_FAILURE;
     }
-    else
-    {
-        printf("\nAll tests passed!\n");
-        return EXIT_SUCCESS;
-    }
+
+    printf("\nAll unsigned_varint tests passed!\n");
+    return EXIT_SUCCESS;
 }
