@@ -1406,7 +1406,7 @@ target_include_directories(protocol_gossipsub PRIVATE
 )
 target_link_libraries(protocol_gossipsub
     PUBLIC libp2p_unified
-    PRIVATE noiseprotocol noiseprotobufs
+    PRIVATE protocol_noise noiseprotobufs
 )
 set_tests_properties(Testprotocol_gossipsub PROPERTIES TIMEOUT 30)
 

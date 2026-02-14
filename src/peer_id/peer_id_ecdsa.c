@@ -26,7 +26,7 @@ static void secure_zero(void *ptr, size_t len)
 #endif
 
 /* Detect C11 threads support */
-#if defined(__has_include)
+#if !defined(_WIN32) && defined(__has_include)
 #if __has_include(<threads.h>)
 #include <threads.h>
 #define HAVE_C11_THREADS 1
