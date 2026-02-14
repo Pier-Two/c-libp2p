@@ -1,0 +1,179 @@
+name: ci-full
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "15 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-full:
+    name: macos-full
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          for pkg in ninja bison flex openssl@3; do
+            brew list "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+      - name: Configure
+        run: |
+          cmake --preset macos-full \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" \
+            -DBISON_EXECUTABLE="$(brew --prefix bison)/bin/bison" \
+            -DFLEX_EXECUTABLE="$(brew --prefix flex)/bin/flex"
+
+      - name: Build extended suite
+        run: cmake --build --preset macos-full
+
+      - name: Run extended suite
+        run: ctest --preset macos-full
+
+  linux-gcc-full:
+    name: linux-gcc-full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            bison \
+            flex \
+            libssl-dev \
+            pkg-config \
+            clang-format \
+            cppcheck
+
+      - name: Configure
+        run: cmake --preset linux-gcc-full
+
+      - name: Build extended suite
+        run: cmake --build --preset linux-gcc-full
+
+      - name: Run extended suite
+        run: ctest --preset linux-gcc-full
+
+  linux-clang-full:
+    name: linux-clang-full
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            bison \
+            flex \
+            libssl-dev \
+            pkg-config \
+            clang
+
+      - name: Configure
+        run: cmake --preset linux-clang-full
+
+      - name: Build extended suite
+        run: cmake --build --preset linux-clang-full
+
+      - name: Run extended suite
+        run: ctest --preset linux-clang-full
+
+  linux-sanitizers:
+    name: linux-sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            bison \
+            flex \
+            libssl-dev \
+            pkg-config
+
+      - name: Configure
+        run: cmake --preset linux-asan-ubsan
+
+      - name: Build sanitizer suite
+        run: cmake --build --preset linux-asan-ubsan
+
+      - name: Run sanitizer suite
+        run: ctest --preset linux-asan-ubsan
+
+  windows-full:
+    name: windows-full
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies
+        run: |
+          choco install -y ninja winflexbison3 openssl.light pkgconfiglite
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $bison = (Get-Command win_bison.exe -ErrorAction Stop).Source
+          $flex = (Get-Command win_flex.exe -ErrorAction Stop).Source
+
+          if (Test-Path 'C:\Program Files\OpenSSL-Win64') {
+            $opensslRoot = 'C:\Program Files\OpenSSL-Win64'
+          } elseif (Test-Path 'C:\Program Files\OpenSSL') {
+            $opensslRoot = 'C:\Program Files\OpenSSL'
+          } else {
+            throw 'OpenSSL installation directory not found.'
+          }
+
+          cmake --preset windows-full `
+            -DBISON_EXECUTABLE="$bison" `
+            -DFLEX_EXECUTABLE="$flex" `
+            -DOPENSSL_ROOT_DIR="$opensslRoot" `
+            -DBCRYPT_AVAILABLE=OFF
+
+      - name: Build extended suite
+        run: cmake --build --preset windows-full
+
+      - name: Run extended suite
+        run: ctest --preset windows-full

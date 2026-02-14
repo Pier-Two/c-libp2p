@@ -43,6 +43,51 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "BUILD_SHARED_LIBS": "OFF"
       }
+    },
+    {
+      "name": "full-base",
+      "hidden": true,
+      "inherits": "smoke-base",
+      "cacheVariables": {
+        "ENABLE_STRICT_WARNINGS": "OFF"
+      }
+    },
+    {
+      "name": "macos-full",
+      "displayName": "macOS full",
+      "inherits": "full-base"
+    },
+    {
+      "name": "linux-gcc-full",
+      "displayName": "Linux GCC full",
+      "inherits": "full-base"
+    },
+    {
+      "name": "linux-clang-full",
+      "displayName": "Linux Clang full",
+      "inherits": "full-base",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "displayName": "Linux ASan+UBSan",
+      "inherits": "full-base",
+      "cacheVariables": {
+        "ENABLE_SANITIZERS": "ON",
+        "SANITIZERS": "address;undefined"
+      }
+    },
+    {
+      "name": "windows-full",
+      "displayName": "Windows full",
+      "inherits": "full-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_SHARED_LIBS": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -77,6 +122,164 @@
       "targets": [
         "test_multibase",
         "test_multicodec"
+      ]
+    },
+    {
+      "name": "macos-full",
+      "configurePreset": "macos-full",
+      "jobs": 6,
+      "targets": [
+        "test_unsigned_varint",
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec",
+        "test_multiaddr",
+        "test_peer_id",
+        "test_protocol_tcp",
+        "test_protocol_multiselect",
+        "test_protocol_noise",
+        "test_protocol_identify",
+        "test_protocol_identify_roundtrip",
+        "test_protocol_ping",
+        "test_gossipsub_proto",
+        "test_gossipsub_cache",
+        "test_gossipsub_validation",
+        "test_protocol_quic",
+        "test_quic_can_handle",
+        "test_quic_listener_lifecycle",
+        "test_quic_tls_certificate",
+        "test_quic_stream_loopback",
+        "test_mplex_basic",
+        "test_mplex_backpressure",
+        "test_mplex_edge_cases",
+        "test_mplex_event_driven_streams",
+        "test_mplex_message_types",
+        "test_mplex_protocol_edge_cases",
+        "test_protocol_yamux",
+        "test_yamux_substream_stream",
+        "test_transport_upgrader"
+      ]
+    },
+    {
+      "name": "linux-gcc-full",
+      "configurePreset": "linux-gcc-full",
+      "jobs": 6,
+      "targets": [
+        "test_unsigned_varint",
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec",
+        "test_multiaddr",
+        "test_peer_id",
+        "test_protocol_tcp",
+        "test_protocol_multiselect",
+        "test_protocol_noise",
+        "test_protocol_identify",
+        "test_protocol_identify_roundtrip",
+        "test_protocol_ping",
+        "test_gossipsub_proto",
+        "test_gossipsub_cache",
+        "test_gossipsub_validation",
+        "test_protocol_quic",
+        "test_quic_can_handle",
+        "test_quic_listener_lifecycle",
+        "test_quic_tls_certificate",
+        "test_quic_stream_loopback",
+        "test_mplex_basic",
+        "test_mplex_backpressure",
+        "test_mplex_edge_cases",
+        "test_mplex_event_driven_streams",
+        "test_mplex_message_types",
+        "test_mplex_protocol_edge_cases",
+        "test_protocol_yamux",
+        "test_yamux_substream_stream",
+        "test_transport_upgrader"
+      ]
+    },
+    {
+      "name": "linux-clang-full",
+      "configurePreset": "linux-clang-full",
+      "jobs": 6,
+      "targets": [
+        "test_unsigned_varint",
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec",
+        "test_multiaddr",
+        "test_peer_id",
+        "test_protocol_tcp",
+        "test_protocol_multiselect",
+        "test_protocol_noise",
+        "test_protocol_identify",
+        "test_protocol_identify_roundtrip",
+        "test_protocol_ping",
+        "test_gossipsub_proto",
+        "test_gossipsub_cache",
+        "test_gossipsub_validation",
+        "test_protocol_quic",
+        "test_quic_can_handle",
+        "test_quic_listener_lifecycle",
+        "test_quic_tls_certificate",
+        "test_quic_stream_loopback",
+        "test_mplex_basic",
+        "test_mplex_backpressure",
+        "test_mplex_edge_cases",
+        "test_mplex_event_driven_streams",
+        "test_mplex_message_types",
+        "test_mplex_protocol_edge_cases",
+        "test_protocol_yamux",
+        "test_yamux_substream_stream",
+        "test_transport_upgrader"
+      ]
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "configurePreset": "linux-asan-ubsan",
+      "jobs": 6,
+      "targets": [
+        "test_unsigned_varint",
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec",
+        "test_multiaddr",
+        "test_peer_id",
+        "test_protocol_multiselect",
+        "test_protocol_noise",
+        "test_protocol_identify",
+        "test_protocol_identify_roundtrip",
+        "test_protocol_ping",
+        "test_gossipsub_proto",
+        "test_gossipsub_cache",
+        "test_gossipsub_validation",
+        "test_mplex_basic",
+        "test_mplex_backpressure",
+        "test_mplex_edge_cases",
+        "test_protocol_yamux",
+        "test_yamux_substream_stream",
+        "test_transport_upgrader"
+      ]
+    },
+    {
+      "name": "windows-full",
+      "configurePreset": "windows-full",
+      "jobs": 6,
+      "targets": [
+        "test_unsigned_varint",
+        "test_multibase",
+        "test_cid_v0",
+        "test_cid_v1",
+        "test_multihash",
+        "test_multicodec",
+        "test_multiaddr",
+        "test_peer_id"
       ]
     }
   ],
@@ -126,6 +329,86 @@
       "filter": {
         "include": {
           "name": "^(Testmultibase|Testmulticodec)$"
+        }
+      }
+    },
+    {
+      "name": "macos-full",
+      "configurePreset": "macos-full",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testunsigned_varint|Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec|Testmultiaddr|Testpeer_id|Testprotocol_tcp|Testprotocol_multiselect|Testprotocol_noise|Testprotocol_identify|Testprotocol_identify_roundtrip|Testprotocol_ping|Testgossipsub_proto|Testgossipsub_cache|Testgossipsub_validation|Testprotocol_quic|Testquic_can_handle|Testquic_listener_lifecycle|Testquic_tls_certificate|Testquic_stream_loopback|TestMplexBasic|TestMplexBackpressure|TestMplexEdgeCases|TestMplexEventDrivenStreams|TestMplexMessageTypes|TestMplexProtocolEdgeCases|Testprotocol_yamux|TestYamuxSubstreamStream|Testtransport_upgrader)$"
+        }
+      }
+    },
+    {
+      "name": "linux-gcc-full",
+      "configurePreset": "linux-gcc-full",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testunsigned_varint|Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec|Testmultiaddr|Testpeer_id|Testprotocol_tcp|Testprotocol_multiselect|Testprotocol_noise|Testprotocol_identify|Testprotocol_identify_roundtrip|Testprotocol_ping|Testgossipsub_proto|Testgossipsub_cache|Testgossipsub_validation|Testprotocol_quic|Testquic_can_handle|Testquic_listener_lifecycle|Testquic_tls_certificate|Testquic_stream_loopback|TestMplexBasic|TestMplexBackpressure|TestMplexEdgeCases|TestMplexEventDrivenStreams|TestMplexMessageTypes|TestMplexProtocolEdgeCases|Testprotocol_yamux|TestYamuxSubstreamStream|Testtransport_upgrader)$"
+        }
+      }
+    },
+    {
+      "name": "linux-clang-full",
+      "configurePreset": "linux-clang-full",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testunsigned_varint|Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec|Testmultiaddr|Testpeer_id|Testprotocol_tcp|Testprotocol_multiselect|Testprotocol_noise|Testprotocol_identify|Testprotocol_identify_roundtrip|Testprotocol_ping|Testgossipsub_proto|Testgossipsub_cache|Testgossipsub_validation|Testprotocol_quic|Testquic_can_handle|Testquic_listener_lifecycle|Testquic_tls_certificate|Testquic_stream_loopback|TestMplexBasic|TestMplexBackpressure|TestMplexEdgeCases|TestMplexEventDrivenStreams|TestMplexMessageTypes|TestMplexProtocolEdgeCases|Testprotocol_yamux|TestYamuxSubstreamStream|Testtransport_upgrader)$"
+        }
+      }
+    },
+    {
+      "name": "linux-asan-ubsan",
+      "configurePreset": "linux-asan-ubsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testunsigned_varint|Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec|Testmultiaddr|Testpeer_id|Testprotocol_multiselect|Testprotocol_noise|Testprotocol_identify|Testprotocol_identify_roundtrip|Testprotocol_ping|Testgossipsub_proto|Testgossipsub_cache|Testgossipsub_validation|TestMplexBasic|TestMplexBackpressure|TestMplexEdgeCases|Testprotocol_yamux|TestYamuxSubstreamStream|Testtransport_upgrader)$"
+        }
+      }
+    },
+    {
+      "name": "windows-full",
+      "configurePreset": "windows-full",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "noTestsAction": "error"
+      },
+      "filter": {
+        "include": {
+          "name": "^(Testunsigned_varint|Testmultibase|Testcid_v0|Testcid_v1|Testmultihash|Testmulticodec|Testmultiaddr|Testpeer_id)$"
         }
       }
     }
