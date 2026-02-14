@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha256.h"
-#include "../../../external/wjcryptlib/lib/WjCryptLib_Sha512.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
 #include "sha3_compat.h"
 
@@ -17,6 +15,12 @@
 #define MULTIHASH_SHA3_384_HASH_SIZE ((size_t)48U)
 #define MULTIHASH_SHA3_512_HASH_SIZE ((size_t)64U)
 #define MULTIHASH_SHA2_INPUT_LIMIT ((size_t)UINT32_MAX)
+#define MULTIHASH_SHA512_CONTEXT_BUFFER_SIZE ((size_t)256U)
+
+extern void Sha256Calculate(void const *buffer, uint32_t buffer_size, void *digest);
+extern void Sha512Initialise(void *context);
+extern void Sha512Update(void *context, void const *buffer, uint32_t buffer_size);
+extern void Sha512Finalise(void *context, void *digest);
 
 static int multihash_is_supported_code(uint64_t code)
 {
@@ -76,11 +80,11 @@ static multihash_error_t multihash_compute_digest(uint64_t code, const uint8_t *
 			}
 			else
 			{
-				SHA256_HASH hash;
+				uint8_t hash[MULTIHASH_SHA2_256_HASH_SIZE];
 
 				Sha256Calculate(data, (uint32_t)data_len, &hash);
 				*digest_len = MULTIHASH_SHA2_256_HASH_SIZE;
-				(void)memcpy(digest_out, hash.bytes, *digest_len);
+				(void)memcpy(digest_out, hash, *digest_len);
 			}
 			break;
 		}
@@ -91,14 +95,18 @@ static multihash_error_t multihash_compute_digest(uint64_t code, const uint8_t *
 			}
 			else
 			{
-				SHA512_HASH hash;
-				Sha512Context context;
+				struct
+				{
+					uint64_t alignment;
+					uint8_t bytes[MULTIHASH_SHA512_CONTEXT_BUFFER_SIZE];
+				} context;
+				uint8_t hash[MULTIHASH_SHA2_512_HASH_SIZE];
 
-				Sha512Initialise(&context);
-				Sha512Update(&context, data, (uint32_t)data_len);
-				Sha512Finalise(&context, &hash);
+				Sha512Initialise(context.bytes);
+				Sha512Update(context.bytes, data, (uint32_t)data_len);
+				Sha512Finalise(context.bytes, hash);
 				*digest_len = MULTIHASH_SHA2_512_HASH_SIZE;
-				(void)memcpy(digest_out, hash.bytes, *digest_len);
+				(void)memcpy(digest_out, hash, *digest_len);
 			}
 			break;
 		}
