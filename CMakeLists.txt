@@ -117,6 +117,21 @@ option(ENABLE_CPPCHECK   "Run cppcheck static analysis"  OFF)
 option(ENABLE_IWYU       "Run include‑what‑you‑use"      OFF)
 option(ENABLE_COVERAGE   "Enable code-coverage flags"    ON)
 option(ENABLE_STRESS_TESTS "Build and run high‑load stress tests" OFF)
+option(ENABLE_STRICT_WARNINGS "Treat warnings as errors for project targets" OFF)
+
+if(ENABLE_STRICT_WARNINGS)
+    if(MSVC)
+        set(LIBP2P_STRICT_WARNING_FLAGS /W4 /WX)
+    else()
+        set(LIBP2P_STRICT_WARNING_FLAGS -Wall -Wextra -Wpedantic -Werror)
+        # Several legacy headers in this tree currently omit a trailing newline.
+        # Keep strict warnings enabled without turning this stylistic issue into
+        # an immediate blocker for all smoke builds.
+        list(APPEND LIBP2P_STRICT_WARNING_FLAGS
+            $<$<OR:$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-Wno-newline-eof>
+        )
+    endif()
+endif()
 
 if(ENABLE_SANITIZERS)
     set(_sanitizers ${SANITIZERS})
@@ -204,6 +219,15 @@ add_library(libp2p_log
     src/util/log.c
 )
 target_include_directories(libp2p_log PUBLIC ${PROJECT_SOURCE_DIR}/include)
+
+if(ENABLE_STRICT_WARNINGS)
+    # These targets are created before third-party submodules are added.
+    if(TARGET test_protocol_multiselect_io)
+        target_compile_options(test_protocol_multiselect_io PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    endif()
+    target_compile_options(libp2p_metrics PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+    target_compile_options(libp2p_log PRIVATE ${LIBP2P_STRICT_WARNING_FLAGS})
+endif()
 
 if(ENABLE_CPPCHECK)
     find_program(CPPCHECK_EXE NAMES cppcheck)
@@ -464,6 +488,12 @@ add_custom_target(gossipsub_proto
 
 # Add libeddsa submodule.
 _add_subdirectory_no_tests(external/libeddsa)
+
+if(ENABLE_STRICT_WARNINGS)
+    # Apply strict warnings only after vendored submodules are added so the
+    # policy is enforced for this project without breaking third-party code.
+    add_compile_options(${LIBP2P_STRICT_WARNING_FLAGS})
+endif()
 
 # ---------------------------------------------
 # Helper function for adding a module.
