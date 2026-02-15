@@ -60,8 +60,8 @@ static void run_round_trip_case(const char *name, const uint8_t *digest)
 	size_t mh_len;
 	uint8_t binary[CIDV1_MAX_BINARY_SIZE];
 	ptrdiff_t result;
-	char encoded[CIDV1_MAX_BINARY_SIZE * 2U];
-	char encoded_upper[CIDV1_MAX_BINARY_SIZE * 2U];
+	char encoded[CIDV1_MAX_STRING_LENGTH + 1U];
+	char encoded_upper[CIDV1_MAX_STRING_LENGTH + 1U];
 
 	cid_v1_free(&cid);
 	cid_v1_free(&decoded_from_bytes);
@@ -141,7 +141,7 @@ static void test_known_vectors(void)
 	const char *expected_human_base58;
 	cid_v1_t cid;
 	char human[256];
-	char encoded[CIDV1_MAX_BINARY_SIZE * 2U];
+	char encoded[CIDV1_MAX_STRING_LENGTH + 1U];
 	ptrdiff_t result;
 
 	known_base32 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
@@ -185,6 +185,8 @@ static void test_error_paths(void)
 	uint8_t mh[40];
 	size_t mh_len;
 	uint8_t binary[CIDV1_MAX_BINARY_SIZE];
+	char oversized_input[CIDV1_MAX_STRING_LENGTH + 2U];
+	char unterminated_input[CIDV1_MAX_STRING_LENGTH + 1U];
 	char text[8];
 	ptrdiff_t result;
 	size_t index;
@@ -264,6 +266,26 @@ static void test_error_paths(void)
 	result = cid_v1_from_string(&cid, "z@@@");
 	report_result("from_string invalid payload", (result < 0) && (cid_is_reset(&cid) != 0),
 		      "expected failure and reset");
+
+	for (index = 0U; index < (CIDV1_MAX_STRING_LENGTH + 1U); ++index)
+	{
+		oversized_input[index] = '1';
+	}
+	oversized_input[0] = 'z';
+	oversized_input[CIDV1_MAX_STRING_LENGTH + 1U] = '\0';
+	result = cid_v1_from_string(&cid, oversized_input);
+	report_result("from_string oversized input", (result == CIDV1_ERROR_INVALID_ARG) && (cid_is_reset(&cid) != 0),
+		      "expected invalid-arg and reset");
+
+	for (index = 0U; index < (CIDV1_MAX_STRING_LENGTH + 1U); ++index)
+	{
+		unterminated_input[index] = '1';
+	}
+	unterminated_input[0] = 'z';
+	result = cid_v1_from_string(&cid, unterminated_input);
+	report_result("from_string unterminated input",
+		      (result == CIDV1_ERROR_INVALID_ARG) && (cid_is_reset(&cid) != 0),
+		      "expected invalid-arg and reset");
 
 	result = cid_v1_to_human(NULL, MULTIBASE_BASE58_BTC, text, sizeof(text));
 	report_result("to_human NULL cid", result == CIDV1_ERROR_NULL_POINTER, "expected null-pointer error");

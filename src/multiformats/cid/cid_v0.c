@@ -1,7 +1,5 @@
 #include "multiformats/cid/cid_v0.h"
 
-#include <string.h>
-
 #include "multiformats/multibase/encoding/base58_btc.h"
 
 static void cid_v0_reset(cid_v0_t *cid)
@@ -25,6 +23,36 @@ static void cid_v0_copy_hash(uint8_t *out, const uint8_t *in)
 	{
 		out[index] = in[index];
 	}
+}
+
+static int cid_v0_read_string_length(const char *str, size_t max_len, size_t *out_len)
+{
+	int status;
+	size_t index;
+
+	status = (int)CIDV0_SUCCESS;
+	index = (size_t)0U;
+	if ((str == NULL) || (out_len == NULL))
+	{
+		status = (int)CIDV0_ERROR_NULL_POINTER;
+	}
+	else
+	{
+		while ((index < max_len) && (str[index] != '\0'))
+		{
+			++index;
+		}
+		if (index == max_len)
+		{
+			status = (int)CIDV0_ERROR_DECODE_FAILURE;
+		}
+		else
+		{
+			*out_len = index;
+		}
+	}
+
+	return status;
 }
 
 int cid_v0_init(cid_v0_t *cid, const uint8_t *digest, size_t digest_len)
@@ -159,12 +187,14 @@ int cid_v0_from_string(cid_v0_t *cid, const char *str)
 {
 	int result;
 	size_t str_len;
+	int status;
 	uint8_t binary[CIDV0_BINARY_SIZE];
 	int decoded;
 	int consumed;
 
 	result = (int)CIDV0_STRING_LENGTH;
 	str_len = 0U;
+	status = (int)CIDV0_SUCCESS;
 	if ((cid == NULL) || (str == NULL))
 	{
 		result = (int)CIDV0_ERROR_NULL_POINTER;
@@ -172,8 +202,12 @@ int cid_v0_from_string(cid_v0_t *cid, const char *str)
 	else
 	{
 		cid_v0_reset(cid);
-		str_len = strlen(str);
-		if ((str_len != CIDV0_STRING_LENGTH) || (str[0] != 'Q') || (str[1] != 'm'))
+		status = cid_v0_read_string_length(str, CIDV0_STRING_LENGTH + 1U, &str_len);
+		if (status != (int)CIDV0_SUCCESS)
+		{
+			result = status;
+		}
+		else if ((str_len != CIDV0_STRING_LENGTH) || (str[0] != 'Q') || (str[1] != 'm'))
 		{
 			result = (int)CIDV0_ERROR_DECODE_FAILURE;
 		}

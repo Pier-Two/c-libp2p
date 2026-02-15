@@ -119,6 +119,7 @@ static void test_error_paths(void)
 	cid_v0_t cid;
 	uint8_t digest[CIDV0_HASH_SIZE];
 	uint8_t binary[CIDV0_BINARY_SIZE];
+	char unterminated_input[CIDV0_STRING_LENGTH + 1U];
 	char output[CIDV0_STRING_LENGTH + 1U];
 	int result;
 	size_t index;
@@ -170,6 +171,17 @@ static void test_error_paths(void)
 
 	result = cid_v0_from_string(&cid, "Xm01234567890123456789012345678901234567890123");
 	report_result("from_string bad prefix", (result == CIDV0_ERROR_DECODE_FAILURE) && (hash_is_zero(cid.hash) != 0),
+		      "expected decode failure and reset");
+
+	for (index = 0U; index < (CIDV0_STRING_LENGTH + 1U); ++index)
+	{
+		unterminated_input[index] = '1';
+	}
+	unterminated_input[0] = 'Q';
+	unterminated_input[1] = 'm';
+	result = cid_v0_from_string(&cid, unterminated_input);
+	report_result("from_string unterminated input",
+		      (result == CIDV0_ERROR_DECODE_FAILURE) && (hash_is_zero(cid.hash) != 0),
 		      "expected decode failure and reset");
 }
 
