@@ -50,6 +50,36 @@ static void cid_v1_reset_internal(cid_v1_t *cid)
 	}
 }
 
+static int cid_v1_read_string_length(const char *str, size_t max_len, size_t *len_out)
+{
+	int status;
+	size_t index;
+
+	status = (int)CIDV1_SUCCESS;
+	index = (size_t)0U;
+	if ((str == NULL) || (len_out == NULL))
+	{
+		status = (int)CIDV1_ERROR_NULL_POINTER;
+	}
+	else
+	{
+		while ((index < max_len) && (str[index] != '\0'))
+		{
+			++index;
+		}
+		if (index == max_len)
+		{
+			status = (int)CIDV1_ERROR_INVALID_ARG;
+		}
+		else
+		{
+			*len_out = index;
+		}
+	}
+
+	return status;
+}
+
 static int cid_v1_add_overflow(size_t a, size_t b, size_t *out)
 {
 	int overflow;
@@ -815,8 +845,12 @@ ptrdiff_t cid_v1_from_string(cid_v1_t *cid, const char *str)
 	else
 	{
 		cid_v1_reset_internal(cid);
-		str_len = strlen(str);
-		if (str_len == 0U)
+		status = cid_v1_read_string_length(str, CIDV1_MAX_STRING_LENGTH + 1U, &str_len);
+		if (status != (int)CIDV1_SUCCESS)
+		{
+			/* invalid argument state already set by bounded length check */
+		}
+		else if (str_len == 0U)
 		{
 			status = (int)CIDV1_ERROR_INVALID_ARG;
 		}
@@ -843,7 +877,14 @@ ptrdiff_t cid_v1_from_string(cid_v1_t *cid, const char *str)
 
 		if (status == (int)CIDV1_SUCCESS)
 		{
-			result = (ptrdiff_t)str_len;
+			if (str_len > (size_t)PTRDIFF_MAX)
+			{
+				result = (ptrdiff_t)CIDV1_ERROR_INVALID_ARG;
+			}
+			else
+			{
+				result = (ptrdiff_t)str_len;
+			}
 		}
 		else
 		{
