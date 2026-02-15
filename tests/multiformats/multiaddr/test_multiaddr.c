@@ -1,790 +1,517 @@
 #include "multiformats/multiaddr/multiaddr.h"
-#include "multiformats/multibase/multibase.h"
-#include "multiformats/multicodec/multicodec_codes.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-struct multiaddr_s
-{
-    size_t size;
-    uint8_t *bytes;
-};
+#define TEST_CODE_IP4 ((uint64_t)0x04U)
+#define TEST_CODE_TCP ((uint64_t)0x06U)
+#define TEST_CODE_WS ((uint64_t)0x01DDU)
 
-static void print_standard(const char *test_name, const char *details, int passed)
+static void print_result(const char *name, int passed, const char *detail)
 {
-    if (passed)
-    {
-        printf("TEST: %-50s | PASS\n", test_name);
-    }
-    else
-    {
-        printf("TEST: %-50s | FAIL: %s\n", test_name, details);
-    }
+	if (passed != 0)
+	{
+		printf("TEST: %-60s | PASS\n", name);
+	}
+	else
+	{
+		printf("TEST: %-60s | FAIL: %s\n", name, detail);
+	}
 }
 
-static int test_new_from_str(void)
+static int expect_true(int condition, const char *name, const char *detail)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_new_from_str valid", "Returned NULL for valid multiaddr", 0);
-        failures++;
-    }
-    else if (err != MULTIADDR_SUCCESS)
-    {
-        char details[256];
-        sprintf(details, "Error code %d returned for valid multiaddr", err);
-        print_standard("multiaddr_new_from_str valid", details, 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(ma, &err);
-        if (!s)
-        {
-            print_standard("multiaddr_to_str after new_from_str", "Returned NULL", 0);
-            failures++;
-        }
-        else if (strcmp(s, "/ip4/127.0.0.1/tcp/80") != 0)
-        {
-            char details[256];
-            sprintf(details, "Got \"%s\", expected \"/ip4/127.0.0.1/tcp/80\"", s);
-            print_standard("multiaddr_to_str valid", details, 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_new_from_str valid", "", 1);
-        }
-        free(s);
-        multiaddr_free(ma);
-    }
+	print_result(name, condition, detail);
+	return (condition != 0) ? 0 : 1;
+}
 
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/p2p/"
-                                "QmYyQSo1c1Ym7orWxLYvCrM2EmxFTANf8wXmmE7DWjhx5N",
-                                &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_new_from_str valid p2p", "Returned NULL for valid p2p multiaddr",
-                       0);
-        failures++;
-    }
-    else if (err != MULTIADDR_SUCCESS)
-    {
-        char details[256];
-        sprintf(details, "Error code %d returned for valid p2p multiaddr", err);
-        print_standard("multiaddr_new_from_str valid p2p", details, 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(ma, &err);
-        if (!s)
-        {
-            print_standard("multiaddr_to_str p2p", "Returned NULL", 0);
-            failures++;
-        }
-        else
-        {
-            const char *expected = "/ip4/127.0.0.1/tcp/80/p2p/"
-                                   "QmYyQSo1c1Ym7orWxLYvCrM2EmxFTANf8wXmmE7DWjhx5N";
-            if (strcmp(s, expected) != 0)
-            {
-                char details[256];
-                sprintf(details, "Got \"%s\", expected \"%s\"", s, expected);
-                print_standard("multiaddr_to_str valid p2p", details, 0);
-                failures++;
-            }
-            else
-            {
-                print_standard("multiaddr_new_from_str valid p2p", "", 1);
-            }
-            free(s);
-        }
-        multiaddr_free(ma);
-    }
+static int expect_roundtrip(const char *input, const char *expected, const char *name)
+{
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *addr = multiaddr_new_from_str(input, &err);
 
-    ma = multiaddr_new_from_str(NULL, &err);
-    if (ma != NULL || err != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_new_from_str NULL input",
-                       "Did not return NULL or correct error for NULL input", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_new_from_str NULL input", "", 1);
-    }
+	failures += expect_true((addr != NULL) && (err == MULTIADDR_SUCCESS), name, "multiaddr_new_from_str failed");
 
-    ma = multiaddr_new_from_str("ip4/127.0.0.1", &err);
-    if (ma != NULL || err != MULTIADDR_ERR_INVALID_STRING)
-    {
-        print_standard("multiaddr_new_from_str missing leading '/'",
-                       "Did not return error for missing leading '/'", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_new_from_str missing leading '/'", "", 1);
-    }
+	if (addr != NULL)
+	{
+		char *text = multiaddr_to_str(addr, &err);
+		failures += expect_true((text != NULL) && (err == MULTIADDR_SUCCESS), "multiaddr_to_str after parse",
+					"multiaddr_to_str failed");
+		if (text != NULL)
+		{
+			failures += expect_true(strcmp(text, expected) == 0, "multiaddr roundtrip text",
+						"roundtrip text mismatch");
+			free(text);
+		}
+		multiaddr_free(addr);
+	}
 
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp", &err);
-    if (ma != NULL || err != MULTIADDR_ERR_INVALID_STRING)
-    {
-        print_standard("multiaddr_new_from_str incomplete",
-                       "Did not return error for incomplete multiaddr", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_new_from_str incomplete", "", 1);
-    }
+	return failures;
+}
 
-    return failures;
+static int test_new_from_str_valid(void)
+{
+	int failures = 0;
+
+	failures += expect_roundtrip("/ip4/127.0.0.1/tcp/80", "/ip4/127.0.0.1/tcp/80", "parse ip4/tcp");
+	failures += expect_roundtrip("/ip6/::1/udp/4001/quic-v1", "/ip6/::1/udp/4001/quic-v1", "parse ip6/udp/quic-v1");
+	failures += expect_roundtrip("/dns4/example.com/tcp/443", "/dns4/example.com/tcp/443", "parse dns4/tcp");
+	failures += expect_roundtrip("/ip4/127.0.0.1/tcp/80/p2p/QmYyQSo1c1Ym7orWxLYvCrM2EmxFTANf8wXmmE7DWjhx5N",
+				     "/ip4/127.0.0.1/tcp/80/p2p/QmYyQSo1c1Ym7orWxLYvCrM2EmxFTANf8wXmmE7DWjhx5N",
+				     "parse p2p peer id");
+	failures += expect_roundtrip("/ip6/fe80::1/ip6zone/en0/udp/4001/quic-v1",
+				     "/ip6/fe80::1/ip6zone/en0/udp/4001/quic-v1", "parse ip6zone address");
+
+	return failures;
+}
+
+static int test_new_from_str_invalid(void)
+{
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *addr = NULL;
+
+	addr = multiaddr_new_from_str(NULL, &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_NULL_POINTER), "new_from_str NULL input",
+				"expected NULL_POINTER error");
+
+	addr = multiaddr_new_from_str("ip4/127.0.0.1/tcp/80", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING),
+				"new_from_str missing leading slash", "expected INVALID_STRING error");
+
+	addr = multiaddr_new_from_str("/ip4", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING),
+				"new_from_str missing protocol address", "expected INVALID_STRING error");
+
+	addr = multiaddr_new_from_str("/ip4/127.0.0.1/", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING), "new_from_str trailing slash",
+				"expected INVALID_STRING error");
+
+	addr = multiaddr_new_from_str("/ip4/999.0.0.1/tcp/80", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING), "new_from_str invalid ipv4",
+				"expected INVALID_STRING error");
+
+	addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/70000", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING), "new_from_str invalid port",
+				"expected INVALID_STRING error");
+
+	addr = multiaddr_new_from_str("/unknownproto/value", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_UNKNOWN_PROTOCOL),
+				"new_from_str unknown protocol", "expected UNKNOWN_PROTOCOL error");
+
+	addr = multiaddr_new_from_str("/p2p/not_base58###", &err);
+	failures += expect_true((addr == NULL) && (err == MULTIADDR_ERR_INVALID_STRING), "new_from_str invalid p2p id",
+				"expected INVALID_STRING error");
+
+	return failures;
 }
 
 static int test_new_from_bytes(void)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma1 = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma1)
-    {
-        print_standard("multiaddr_new_from_bytes setup", "Failed to create multiaddr from string",
-                       0);
-        return 1;
-    }
-    multiaddr_t *ma2 = multiaddr_new_from_bytes(ma1->bytes, ma1->size, &err);
-    if (!ma2 || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_new_from_bytes valid", "Failed to create multiaddr from bytes",
-                       0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(ma2, &err);
-        if (!s || strcmp(s, "/ip4/127.0.0.1/tcp/80") != 0)
-        {
-            print_standard("multiaddr_new_from_bytes valid", "String conversion mismatch", 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_new_from_bytes valid", "", 1);
-        }
-        free(s);
-    }
-    multiaddr_free(ma1);
-    multiaddr_free(ma2);
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *from_str = NULL;
+	multiaddr_t *from_bytes = NULL;
+	uint8_t bytes[256];
+	int wrote = 0;
 
-    ma2 = multiaddr_new_from_bytes(NULL, 10, &err);
-    if (ma2 != NULL || err != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_new_from_bytes NULL input",
-                       "Did not return error for NULL bytes pointer", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_new_from_bytes NULL input", "", 1);
-    }
+	from_str = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
+	failures += expect_true((from_str != NULL) && (err == MULTIADDR_SUCCESS), "new_from_bytes setup source",
+				"failed to create source multiaddr");
 
-    return failures;
+	if (from_str != NULL)
+	{
+		wrote = multiaddr_get_bytes(from_str, bytes, sizeof(bytes));
+		failures +=
+			expect_true(wrote > 0, "new_from_bytes setup get bytes", "failed to serialize source bytes");
+
+		if (wrote > 0)
+		{
+			from_bytes = multiaddr_new_from_bytes(bytes, (size_t)wrote, &err);
+			failures += expect_true((from_bytes != NULL) && (err == MULTIADDR_SUCCESS),
+						"new_from_bytes valid", "failed to parse serialized bytes");
+
+			if (from_bytes != NULL)
+			{
+				char *text = multiaddr_to_str(from_bytes, &err);
+				failures += expect_true((text != NULL) && (strcmp(text, "/ip4/127.0.0.1/tcp/80") == 0),
+							"new_from_bytes roundtrip text", "roundtrip text mismatch");
+				free(text);
+				multiaddr_free(from_bytes);
+			}
+		}
+		multiaddr_free(from_str);
+	}
+
+	from_bytes = multiaddr_new_from_bytes(NULL, 8U, &err);
+	failures += expect_true((from_bytes == NULL) && (err == MULTIADDR_ERR_NULL_POINTER),
+				"new_from_bytes NULL bytes", "expected NULL_POINTER error");
+
+	{
+		const uint8_t invalid_truncated[] = {0x04U};
+		from_bytes = multiaddr_new_from_bytes(invalid_truncated, sizeof(invalid_truncated), &err);
+		failures += expect_true((from_bytes == NULL) && (err == MULTIADDR_ERR_INVALID_DATA),
+					"new_from_bytes truncated ip4", "expected INVALID_DATA error");
+	}
+
+	{
+		const uint8_t invalid_unknown[] = {0x50U};
+		from_bytes = multiaddr_new_from_bytes(invalid_unknown, sizeof(invalid_unknown), &err);
+		failures += expect_true((from_bytes == NULL) && (err == MULTIADDR_ERR_INVALID_DATA),
+					"new_from_bytes unknown protocol", "expected INVALID_DATA error");
+	}
+
+	return failures;
 }
 
-static int test_copy(void)
+static int test_copy_and_get_bytes(void)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma1 = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma1)
-    {
-        print_standard("multiaddr_copy setup", "Failed to create multiaddr", 0);
-        return 1;
-    }
-    multiaddr_t *ma_copy = multiaddr_copy(ma1, &err);
-    if (!ma_copy || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_copy valid", "Failed to copy multiaddr", 0);
-        failures++;
-    }
-    else
-    {
-        char *s1 = multiaddr_to_str(ma1, &err);
-        char *s2 = multiaddr_to_str(ma_copy, &err);
-        if (!s1 || !s2 || strcmp(s1, s2) != 0)
-        {
-            print_standard("multiaddr_copy valid",
-                           "Copied multiaddr string does not match original", 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_copy valid", "", 1);
-        }
-        free(s1);
-        free(s2);
-    }
-    multiaddr_free(ma1);
-    multiaddr_free(ma_copy);
-    ma_copy = multiaddr_copy(NULL, &err);
-    if (ma_copy != NULL || err != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_copy NULL input", "Did not return error for NULL input", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_copy NULL input", "", 1);
-    }
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
 
-    return failures;
+	failures += expect_true((addr != NULL) && (err == MULTIADDR_SUCCESS), "copy/get_bytes setup",
+				"failed to create multiaddr");
+
+	if (addr != NULL)
+	{
+		multiaddr_t *copy = multiaddr_copy(addr, &err);
+		failures += expect_true((copy != NULL) && (err == MULTIADDR_SUCCESS), "multiaddr_copy valid",
+					"copy failed");
+
+		if (copy != NULL)
+		{
+			char *s1 = multiaddr_to_str(addr, &err);
+			char *s2 = multiaddr_to_str(copy, &err);
+			failures += expect_true((s1 != NULL) && (s2 != NULL) && (strcmp(s1, s2) == 0),
+						"multiaddr_copy equivalent", "copy text mismatch");
+			free(s1);
+			free(s2);
+			multiaddr_free(copy);
+		}
+
+		{
+			uint8_t tiny[2];
+			int rc = multiaddr_get_bytes(addr, tiny, sizeof(tiny));
+			failures += expect_true(rc == MULTIADDR_ERR_BUFFER_TOO_SMALL,
+						"multiaddr_get_bytes small buffer", "expected BUFFER_TOO_SMALL");
+		}
+
+		{
+			uint8_t out[128];
+			int rc = multiaddr_get_bytes(addr, out, sizeof(out));
+			failures += expect_true(rc > 0, "multiaddr_get_bytes valid", "expected positive byte count");
+		}
+
+		{
+			uint8_t out[128];
+			int rc = multiaddr_get_bytes(NULL, out, sizeof(out));
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "multiaddr_get_bytes NULL addr",
+						"expected NULL_POINTER error");
+
+			rc = multiaddr_get_bytes(addr, NULL, sizeof(out));
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "multiaddr_get_bytes NULL buffer",
+						"expected NULL_POINTER error");
+		}
+
+		multiaddr_free(addr);
+	}
+
+	{
+		multiaddr_t *copy = multiaddr_copy(NULL, &err);
+		failures += expect_true((copy == NULL) && (err == MULTIADDR_ERR_NULL_POINTER),
+					"multiaddr_copy NULL input", "expected NULL_POINTER error");
+	}
+
+	return failures;
 }
 
-static int test_get_bytes(void)
+static int test_accessors(void)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_get_bytes setup", "Failed to create multiaddr", 0);
-        return 1;
-    }
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/ws", &err);
 
-    uint8_t buf[10];
-    size_t buf_len = 2;
-    int ret = multiaddr_get_bytes(ma, buf, buf_len);
-    if (ret != MULTIADDR_ERR_BUFFER_TOO_SMALL)
-    {
-        print_standard("multiaddr_get_bytes small buffer", "Did not return BUFFER_TOO_SMALL error",
-                       0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_bytes small buffer", "", 1);
-    }
+	failures += expect_true((addr != NULL) && (err == MULTIADDR_SUCCESS), "accessors setup",
+				"failed to create multiaddr");
 
-    buf_len = ma->size;
-    memset(buf, 0, sizeof(buf));
-    ret = multiaddr_get_bytes(ma, buf, buf_len);
-    if (ret != (int)ma->size)
-    {
-        print_standard("multiaddr_get_bytes valid buffer", "Returned incorrect byte count", 0);
-        failures++;
-    }
-    else if (memcmp(buf, ma->bytes, ma->size) != 0)
-    {
-        print_standard("multiaddr_get_bytes valid buffer", "Buffer contents do not match", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_bytes valid buffer", "", 1);
-    }
-    multiaddr_free(ma);
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    ret = multiaddr_get_bytes(NULL, buf, buf_len);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_bytes NULL multiaddr",
-                       "Did not return error for NULL multiaddr", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_bytes NULL multiaddr", "", 1);
-    }
-    ret = multiaddr_get_bytes(ma, NULL, buf_len);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_bytes NULL buffer", "Did not return error for NULL buffer",
-                       0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_bytes NULL buffer", "", 1);
-    }
-    multiaddr_free(ma);
+	if (addr != NULL)
+	{
+		size_t n = multiaddr_nprotocols(addr);
+		failures += expect_true(n == 3U, "multiaddr_nprotocols", "expected 3 protocols");
 
-    return failures;
+		{
+			uint64_t code = 0U;
+			int rc = multiaddr_get_protocol_code(addr, 0U, &code);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (code == TEST_CODE_IP4),
+						"protocol code index 0", "expected ip4 code");
+
+			rc = multiaddr_get_protocol_code(addr, 1U, &code);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (code == TEST_CODE_TCP),
+						"protocol code index 1", "expected tcp code");
+
+			rc = multiaddr_get_protocol_code(addr, 2U, &code);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (code == TEST_CODE_WS),
+						"protocol code index 2", "expected ws code");
+
+			rc = multiaddr_get_protocol_code(addr, 3U, &code);
+			failures += expect_true(rc == MULTIADDR_ERR_INVALID_DATA, "protocol code invalid index",
+						"expected INVALID_DATA");
+		}
+
+		{
+			uint8_t out[16];
+			size_t out_len = 2U;
+			int rc = multiaddr_get_address_bytes(addr, 0U, out, &out_len);
+			failures += expect_true((rc == MULTIADDR_ERR_BUFFER_TOO_SMALL) && (out_len == 4U),
+						"address bytes short buffer index 0", "expected required length 4");
+
+			out_len = 4U;
+			rc = multiaddr_get_address_bytes(addr, 0U, out, &out_len);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (out_len == 4U) && (out[0] == 127U) &&
+							(out[1] == 0U) && (out[2] == 0U) && (out[3] == 1U),
+						"address bytes index 0", "unexpected ip4 bytes");
+
+			out_len = 1U;
+			rc = multiaddr_get_address_bytes(addr, 1U, out, &out_len);
+			failures += expect_true((rc == MULTIADDR_ERR_BUFFER_TOO_SMALL) && (out_len == 2U),
+						"address bytes short buffer index 1", "expected required length 2");
+
+			out_len = 2U;
+			rc = multiaddr_get_address_bytes(addr, 1U, out, &out_len);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (out_len == 2U) && (out[0] == 0U) &&
+							(out[1] == 80U),
+						"address bytes index 1", "unexpected tcp port bytes");
+
+			out_len = sizeof(out);
+			rc = multiaddr_get_address_bytes(addr, 2U, out, &out_len);
+			failures += expect_true((rc == MULTIADDR_SUCCESS) && (out_len == 0U),
+						"address bytes index 2 zero-length",
+						"expected zero-length address for /ws");
+
+			out_len = sizeof(out);
+			rc = multiaddr_get_address_bytes(addr, 3U, out, &out_len);
+			failures += expect_true(rc == MULTIADDR_ERR_INVALID_DATA, "address bytes invalid index",
+						"expected INVALID_DATA");
+		}
+
+		{
+			uint64_t code = 0U;
+			uint8_t out[4];
+			size_t out_len = sizeof(out);
+			int rc = multiaddr_get_protocol_code(NULL, 0U, &code);
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "get_protocol_code NULL addr",
+						"expected NULL_POINTER error");
+
+			rc = multiaddr_get_protocol_code(addr, 0U, NULL);
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "get_protocol_code NULL output",
+						"expected NULL_POINTER error");
+
+			rc = multiaddr_get_address_bytes(NULL, 0U, out, &out_len);
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "get_address_bytes NULL addr",
+						"expected NULL_POINTER error");
+
+			rc = multiaddr_get_address_bytes(addr, 0U, NULL, &out_len);
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "get_address_bytes NULL buffer",
+						"expected NULL_POINTER error");
+
+			rc = multiaddr_get_address_bytes(addr, 0U, out, NULL);
+			failures += expect_true(rc == MULTIADDR_ERR_NULL_POINTER, "get_address_bytes NULL length",
+						"expected NULL_POINTER error");
+		}
+
+		multiaddr_free(addr);
+	}
+
+	return failures;
 }
 
-static int test_nprotocols(void)
+static int test_encapsulate_and_decapsulate(void)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_nprotocols ip4/tcp", "Failed to create multiaddr", 0);
-        return 1;
-    }
-    size_t n = multiaddr_nprotocols(ma);
-    if (n != 2)
-    {
-        char details[128];
-        sprintf(details, "Expected 2 protocols, got %zu", n);
-        print_standard("multiaddr_nprotocols ip4/tcp", details, 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_nprotocols ip4/tcp", "", 1);
-    }
-    multiaddr_free(ma);
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *base = multiaddr_new_from_str("/ip4/127.0.0.1", &err);
+	multiaddr_t *sub = multiaddr_new_from_str("/tcp/80", &err);
 
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/ws", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_nprotocols ip4/tcp/ws", "Failed to create multiaddr", 0);
-        return failures + 1;
-    }
-    n = multiaddr_nprotocols(ma);
-    if (n != 3)
-    {
-        char details[128];
-        sprintf(details, "Expected 3 protocols, got %zu", n);
-        print_standard("multiaddr_nprotocols ip4/tcp/ws", details, 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_nprotocols ip4/tcp/ws", "", 1);
-    }
-    multiaddr_free(ma);
-    n = multiaddr_nprotocols(NULL);
-    if (n != 0)
-    {
-        print_standard("multiaddr_nprotocols NULL", "Expected 0 protocols for NULL input", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_nprotocols NULL", "", 1);
-    }
+	failures +=
+		expect_true((base != NULL) && (sub != NULL), "encapsulate setup", "failed to create input multiaddrs");
 
-    return failures;
+	if ((base != NULL) && (sub != NULL))
+	{
+		multiaddr_t *enc = multiaddr_encapsulate(base, sub, &err);
+		failures += expect_true((enc != NULL) && (err == MULTIADDR_SUCCESS), "multiaddr_encapsulate valid",
+					"encapsulation failed");
+
+		if (enc != NULL)
+		{
+			char *text = multiaddr_to_str(enc, &err);
+			failures += expect_true((text != NULL) && (strcmp(text, "/ip4/127.0.0.1/tcp/80") == 0),
+						"multiaddr_encapsulate text", "unexpected encapsulated text");
+			free(text);
+			multiaddr_free(enc);
+		}
+	}
+
+	{
+		multiaddr_t *enc = multiaddr_encapsulate(NULL, sub, &err);
+		failures += expect_true((enc == NULL) && (err == MULTIADDR_ERR_NULL_POINTER),
+					"multiaddr_encapsulate NULL", "expected NULL_POINTER error");
+	}
+
+	if (base != NULL)
+	{
+		multiaddr_free(base);
+	}
+	if (sub != NULL)
+	{
+		multiaddr_free(sub);
+	}
+
+	{
+		multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/ws/tcp/443/ws", &err);
+		multiaddr_t *suffix = multiaddr_new_from_str("/ws", &err);
+		failures += expect_true((addr != NULL) && (suffix != NULL), "decapsulate setup",
+					"failed to create decapsulation inputs");
+
+		if ((addr != NULL) && (suffix != NULL))
+		{
+			multiaddr_t *dec = multiaddr_decapsulate(addr, suffix, &err);
+			failures += expect_true((dec != NULL) && (err == MULTIADDR_SUCCESS),
+						"multiaddr_decapsulate last occurrence", "decapsulation failed");
+			if (dec != NULL)
+			{
+				char *text = multiaddr_to_str(dec, &err);
+				failures += expect_true(
+					(text != NULL) && (strcmp(text, "/ip4/127.0.0.1/tcp/80/ws/tcp/443") == 0),
+					"multiaddr_decapsulate removes last match", "unexpected decapsulation result");
+				free(text);
+				multiaddr_free(dec);
+			}
+
+			multiaddr_free(suffix);
+			suffix = multiaddr_new_from_str("/tcp/443/ws", &err);
+			if (suffix != NULL)
+			{
+				multiaddr_t *dec2 = multiaddr_decapsulate(addr, suffix, &err);
+				failures +=
+					expect_true((dec2 != NULL) && (err == MULTIADDR_SUCCESS),
+						    "multiaddr_decapsulate compound suffix", "decapsulation failed");
+				if (dec2 != NULL)
+				{
+					char *text2 = multiaddr_to_str(dec2, &err);
+					failures += expect_true(
+						(text2 != NULL) && (strcmp(text2, "/ip4/127.0.0.1/tcp/80/ws") == 0),
+						"multiaddr_decapsulate compound suffix text",
+						"unexpected compound decapsulation result");
+					free(text2);
+					multiaddr_free(dec2);
+				}
+				multiaddr_free(suffix);
+			}
+			multiaddr_free(addr);
+		}
+	}
+
+	{
+		multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
+		multiaddr_t *suffix = multiaddr_new_from_str("/udp/80", &err);
+		if ((addr != NULL) && (suffix != NULL))
+		{
+			multiaddr_t *dec = multiaddr_decapsulate(addr, suffix, &err);
+			failures += expect_true((dec == NULL) && (err == MULTIADDR_ERR_NO_MATCH),
+						"multiaddr_decapsulate no match", "expected NO_MATCH error");
+		}
+		multiaddr_free(addr);
+		multiaddr_free(suffix);
+	}
+
+	{
+		multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
+		multiaddr_t *dec = multiaddr_decapsulate(NULL, addr, &err);
+		failures += expect_true((dec == NULL) && (err == MULTIADDR_ERR_NULL_POINTER),
+					"multiaddr_decapsulate NULL input", "expected NULL_POINTER error");
+		multiaddr_free(addr);
+	}
+
+	return failures;
 }
 
-static int test_get_protocol_code(void)
+static int test_empty_result_and_zero_length_bytes(void)
 {
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_get_protocol_code setup", "Failed to create multiaddr", 0);
-        return 1;
-    }
-    uint64_t code;
-    int ret = multiaddr_get_protocol_code(ma, 0, &code);
-    if (ret != 0 || code != MULTICODEC_IP4)
-    {
-        char details[128];
-        sprintf(details, "Index 0: got 0x%llx, expected 0x%llx", (unsigned long long)code,
-                (unsigned long long)MULTICODEC_IP4);
-        print_standard("multiaddr_get_protocol_code index 0", details, 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_protocol_code index 0", "", 1);
-    }
+	int failures = 0;
+	int err = 0;
+	multiaddr_t *addr = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
+	multiaddr_t *sub = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
 
-    ret = multiaddr_get_protocol_code(ma, 1, &code);
-    if (ret != 0 || code != MULTICODEC_TCP)
-    {
-        char details[128];
-        sprintf(details, "Index 1: got 0x%llx, expected 0x%llx", (unsigned long long)code,
-                (unsigned long long)MULTICODEC_TCP);
-        print_standard("multiaddr_get_protocol_code index 1", details, 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_protocol_code index 1", "", 1);
-    }
+	if ((addr != NULL) && (sub != NULL))
+	{
+		multiaddr_t *dec = multiaddr_decapsulate(addr, sub, &err);
+		failures += expect_true((dec != NULL) && (err == MULTIADDR_SUCCESS),
+					"full decapsulation returns empty multiaddr", "decapsulation failed");
 
-    ret = multiaddr_get_protocol_code(ma, 2, &code);
-    if (ret != MULTIADDR_ERR_INVALID_DATA)
-    {
-        print_standard("multiaddr_get_protocol_code invalid index",
-                       "Did not return error for invalid index", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_protocol_code invalid index", "", 1);
-    }
-    ret = multiaddr_get_protocol_code(NULL, 0, &code);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_protocol_code NULL multiaddr",
-                       "Did not return error for NULL multiaddr", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_protocol_code NULL multiaddr", "", 1);
-    }
-    ret = multiaddr_get_protocol_code(ma, 0, NULL);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_protocol_code NULL output",
-                       "Did not return error for NULL proto_out", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_protocol_code NULL output", "", 1);
-    }
+		if (dec != NULL)
+		{
+			char *text = multiaddr_to_str(dec, &err);
+			failures += expect_true((text != NULL) && (strcmp(text, "") == 0), "empty multiaddr to_str",
+						"expected empty string");
+			free(text);
 
-    multiaddr_free(ma);
-    return failures;
-}
+			{
+				uint8_t out[1] = {0U};
+				int rc = multiaddr_get_bytes(dec, out, sizeof(out));
+				failures += expect_true(rc == 0, "empty multiaddr get_bytes",
+							"expected 0-byte serialization");
+			}
 
-static int test_get_address_bytes(void)
-{
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    if (!ma)
-    {
-        print_standard("multiaddr_get_address_bytes setup", "Failed to create multiaddr", 0);
-        return 1;
-    }
-    uint8_t buf[32];
-    size_t buf_len;  // Removed the redundant initialization.
+			{
+				multiaddr_t *copy = multiaddr_copy(dec, &err);
+				failures += expect_true((copy != NULL) && (err == MULTIADDR_SUCCESS),
+							"copy empty multiaddr", "copy failed for empty multiaddr");
+				if (copy != NULL)
+				{
+					char *copy_text = multiaddr_to_str(copy, &err);
+					failures += expect_true((copy_text != NULL) && (strcmp(copy_text, "") == 0),
+								"copy empty multiaddr text",
+								"expected empty text from copied empty multiaddr");
+					free(copy_text);
+					multiaddr_free(copy);
+				}
+			}
 
-    buf_len = 2;
-    int ret = multiaddr_get_address_bytes(ma, 0, buf, &buf_len);
-    if (ret != MULTIADDR_ERR_BUFFER_TOO_SMALL || buf_len != 4)
-    {
-        print_standard("multiaddr_get_address_bytes small buffer",
-                       "Did not return BUFFER_TOO_SMALL for index 0", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_address_bytes small buffer", "", 1);
-    }
+			multiaddr_free(dec);
+		}
+	}
+	else
+	{
+		failures += expect_true(0, "empty decapsulation setup", "failed to create setup multiaddrs");
+	}
 
-    buf_len = 4;
-    ret = multiaddr_get_address_bytes(ma, 0, buf, &buf_len);
-    if (ret != 0)
-    {
-        print_standard("multiaddr_get_address_bytes index 0",
-                       "Failed to get address bytes for index 0", 0);
-        failures++;
-    }
-    else
-    {
-        const uint8_t expected[4] = {127, 0, 0, 1};
-        if (memcmp(buf, expected, 4) != 0)
-        {
-            print_standard("multiaddr_get_address_bytes index 0",
-                           "Address bytes do not match expected", 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_get_address_bytes index 0", "", 1);
-        }
-    }
+	multiaddr_free(addr);
+	multiaddr_free(sub);
 
-    buf_len = 1;
-    ret = multiaddr_get_address_bytes(ma, 1, buf, &buf_len);
-    if (ret != MULTIADDR_ERR_BUFFER_TOO_SMALL || buf_len != 2)
-    {
-        print_standard("multiaddr_get_address_bytes small buffer index 1",
-                       "Did not return BUFFER_TOO_SMALL for index 1", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_address_bytes small buffer index 1", "", 1);
-    }
-
-    buf_len = 2;
-    ret = multiaddr_get_address_bytes(ma, 1, buf, &buf_len);
-    if (ret != 0)
-    {
-        print_standard("multiaddr_get_address_bytes index 1",
-                       "Failed to get address bytes for index 1", 0);
-        failures++;
-    }
-    else
-    {
-        const uint8_t expected[2] = {0, 80};
-        if (memcmp(buf, expected, 2) != 0)
-        {
-            print_standard("multiaddr_get_address_bytes index 1",
-                           "TCP port bytes do not match expected", 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_get_address_bytes index 1", "", 1);
-        }
-    }
-
-    ret = multiaddr_get_address_bytes(NULL, 0, buf, &buf_len);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_address_bytes NULL multiaddr",
-                       "Did not return error for NULL multiaddr", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_address_bytes NULL multiaddr", "", 1);
-    }
-    ret = multiaddr_get_address_bytes(ma, 0, NULL, &buf_len);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_address_bytes NULL buffer",
-                       "Did not return error for NULL buffer", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_address_bytes NULL buffer", "", 1);
-    }
-    ret = multiaddr_get_address_bytes(ma, 0, buf, NULL);
-    if (ret != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_get_address_bytes NULL buf_len",
-                       "Did not return error for NULL buf_len", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_get_address_bytes NULL buf_len", "", 1);
-    }
-
-    multiaddr_free(ma);
-    return failures;
-}
-
-static int test_encapsulate(void)
-{
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma1 = multiaddr_new_from_str("/ip4/127.0.0.1", &err);
-    if (!ma1)
-    {
-        print_standard("multiaddr_encapsulate setup", "Failed to create base multiaddr", 0);
-        return 1;
-    }
-    multiaddr_t *ma2 = multiaddr_new_from_str("/tcp/80", &err);
-    if (!ma2)
-    {
-        print_standard("multiaddr_encapsulate setup", "Failed to create encapsulated multiaddr", 0);
-        multiaddr_free(ma1);
-        return 1;
-    }
-    multiaddr_t *enc = multiaddr_encapsulate(ma1, ma2, &err);
-    if (!enc || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_encapsulate valid", "Encapsulation failed", 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(enc, &err);
-        const char *expected = "/ip4/127.0.0.1/tcp/80";
-        if (!s || strcmp(s, expected) != 0)
-        {
-            char details[256];
-            sprintf(details, "Got \"%s\", expected \"%s\"", s ? s : "(null)", expected);
-            print_standard("multiaddr_encapsulate valid", details, 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_encapsulate valid", "", 1);
-        }
-        free(s);
-        multiaddr_free(enc);
-    }
-    multiaddr_free(ma1);
-    multiaddr_free(ma2);
-
-    enc = multiaddr_encapsulate(NULL, ma1, &err);
-    if (enc != NULL || err != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_encapsulate NULL input", "Did not return error for NULL input",
-                       0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_encapsulate NULL input", "", 1);
-    }
-
-    return failures;
-}
-
-static int test_decapsulate(void)
-{
-    int failures = 0;
-    int err = 0;
-    multiaddr_t *ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/ws", &err);
-    multiaddr_t *sub = multiaddr_new_from_str("/ws", &err);
-    if (!ma || !sub)
-    {
-        print_standard("multiaddr_decapsulate setup",
-                       "Failed to create multiaddrs for decapsulation", 0);
-        if (ma)
-            multiaddr_free(ma);
-        if (sub)
-            multiaddr_free(sub);
-        return 1;
-    }
-    multiaddr_t *dec = multiaddr_decapsulate(ma, sub, &err);
-    if (!dec || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_decapsulate valid /ws", "Decapsulation failed", 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(dec, &err);
-        const char *expected = "/ip4/127.0.0.1/tcp/80";
-        if (!s || strcmp(s, expected) != 0)
-        {
-            char details[256];
-            sprintf(details, "Got \"%s\", expected \"%s\"", s ? s : "(null)", expected);
-            print_standard("multiaddr_decapsulate valid /ws", details, 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_decapsulate valid /ws", "", 1);
-        }
-        free(s);
-        multiaddr_free(dec);
-    }
-    multiaddr_free(sub);
-    multiaddr_free(ma);
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80/ws", &err);
-    sub = multiaddr_new_from_str("/tcp/80", &err);
-    dec = multiaddr_decapsulate(ma, sub, &err);
-    if (!dec || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_decapsulate valid /tcp/80", "Decapsulation failed", 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(dec, &err);
-        const char *expected = "/ip4/127.0.0.1";
-        if (!s || strcmp(s, expected) != 0)
-        {
-            char details[256];
-            sprintf(details, "Got \"%s\", expected \"%s\"", s ? s : "(null)", expected);
-            print_standard("multiaddr_decapsulate valid /tcp/80", details, 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_decapsulate valid /tcp/80", "", 1);
-        }
-        free(s);
-        multiaddr_free(dec);
-    }
-    multiaddr_free(sub);
-    multiaddr_free(ma);
-
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    sub = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    dec = multiaddr_decapsulate(ma, sub, &err);
-    if (!dec || err != MULTIADDR_SUCCESS)
-    {
-        print_standard("multiaddr_decapsulate full decapsulation", "Decapsulation failed", 0);
-        failures++;
-    }
-    else
-    {
-        char *s = multiaddr_to_str(dec, &err);
-        if (!s || strcmp(s, "") != 0)
-        {
-            char details[256];
-            sprintf(details, "Got \"%s\", expected empty string", s ? s : "(null)");
-            print_standard("multiaddr_decapsulate full decapsulation", details, 0);
-            failures++;
-        }
-        else
-        {
-            print_standard("multiaddr_decapsulate full decapsulation", "", 1);
-        }
-        free(s);
-        multiaddr_free(dec);
-    }
-    multiaddr_free(sub);
-    multiaddr_free(ma);
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    sub = multiaddr_new_from_str("/udp/80", &err);
-    dec = multiaddr_decapsulate(ma, sub, &err);
-    if (dec != NULL || err != MULTIADDR_ERR_NO_MATCH)
-    {
-        print_standard("multiaddr_decapsulate non-matching",
-                       "Did not return error for non-matching sub", 0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_decapsulate non-matching", "", 1);
-    }
-    multiaddr_free(sub);
-    multiaddr_free(ma);
-    ma = multiaddr_new_from_str("/ip4/127.0.0.1/tcp/80", &err);
-    dec = multiaddr_decapsulate(NULL, ma, &err);
-    if (dec != NULL || err != MULTIADDR_ERR_NULL_POINTER)
-    {
-        print_standard("multiaddr_decapsulate NULL input", "Did not return error for NULL input",
-                       0);
-        failures++;
-    }
-    else
-    {
-        print_standard("multiaddr_decapsulate NULL input", "", 1);
-    }
-    multiaddr_free(ma);
-
-    return failures;
+	return failures;
 }
 
 int main(void)
 {
-    int failures = 0;
+	int failures = 0;
 
-    failures += test_new_from_str();
-    failures += test_new_from_bytes();
-    failures += test_copy();
-    failures += test_get_bytes();
-    failures += test_nprotocols();
-    failures += test_get_protocol_code();
-    failures += test_get_address_bytes();
-    failures += test_encapsulate();
-    failures += test_decapsulate();
+	failures += test_new_from_str_valid();
+	failures += test_new_from_str_invalid();
+	failures += test_new_from_bytes();
+	failures += test_copy_and_get_bytes();
+	failures += test_accessors();
+	failures += test_encapsulate_and_decapsulate();
+	failures += test_empty_result_and_zero_length_bytes();
 
-    if (failures)
-    {
-        printf("\nSome tests failed. Total failures: %d\n", failures);
-        return EXIT_FAILURE;
-    }
-    else
-    {
-        printf("\nAll tests passed!\n");
-        return EXIT_SUCCESS;
-    }
+	if (failures == 0)
+	{
+		printf("\nAll tests passed!\n");
+		return EXIT_SUCCESS;
+	}
+
+	printf("\nSome tests failed. Total failures: %d\n", failures);
+	return EXIT_FAILURE;
 }
