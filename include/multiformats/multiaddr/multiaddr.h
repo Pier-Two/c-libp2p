@@ -23,7 +23,7 @@ typedef int multiaddr_error_t;
  * @brief Multiaddr opaque struct.
  *
  * Internally, a multiaddr is often stored in its binary format:
- *   <proto code (varint)><addr bytes>... repeated ...
+ *   [proto code (varint)][addr bytes] ... repeated
  */
 typedef struct multiaddr_s multiaddr_t;
 
