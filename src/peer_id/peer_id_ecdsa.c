@@ -17,11 +17,11 @@
  */
 static void secure_zero(void *ptr, size_t len)
 {
-    volatile unsigned char *p = (volatile unsigned char *)ptr;
-    while (len--)
-    {
-        *p++ = 0;
-    }
+	volatile unsigned char *p = (volatile unsigned char *)ptr;
+	while (len--)
+	{
+		*p++ = 0;
+	}
 }
 #endif
 
@@ -40,13 +40,13 @@ static void secure_zero(void *ptr, size_t len)
 static void init_ltc_mp_shared(void)
 {
 #if defined(LTM_DESC)
-    ltc_mp = ltm_desc;
+	ltc_mp = ltm_desc;
 #elif defined(TFM_DESC)
-    ltc_mp = tfm_desc;
+	ltc_mp = tfm_desc;
 #elif defined(GMP_DESC)
-    ltc_mp = gmp_desc;
+	ltc_mp = gmp_desc;
 #else
-    ltc_mp.name = NULL;
+	ltc_mp.name = NULL;
 #endif
 }
 
@@ -62,11 +62,11 @@ static once_flag ltc_mp_once = ONCE_FLAG_INIT;
 static INIT_ONCE ltc_mp_once = INIT_ONCE_STATIC_INIT;
 static BOOL CALLBACK init_ltc_mp_windows(PINIT_ONCE once, PVOID param, PVOID *context)
 {
-    (void)once;
-    (void)param;
-    (void)context;
-    init_ltc_mp_shared();
-    return TRUE;
+	(void)once;
+	(void)param;
+	(void)context;
+	init_ltc_mp_shared();
+	return TRUE;
 }
 #define CALL_LTC_MP_INIT() InitOnceExecuteOnce(&ltc_mp_once, init_ltc_mp_windows, NULL, NULL)
 
@@ -90,69 +90,69 @@ static pthread_once_t ltc_mp_once = PTHREAD_ONCE_INIT;
  * @param pubkey_len Pointer to store the length of the generated public key buffer.
  * @return peer_id_error_t Error code indicating success or type of failure.
  */
-peer_id_error_t peer_id_create_from_private_key_ecdsa(const uint8_t *key_data, size_t key_data_len, uint8_t **pubkey_buf, size_t *pubkey_len)
+peer_id_error_t peer_id_create_from_private_key_ecdsa(const uint8_t *key_data, size_t key_data_len,
+						      uint8_t **pubkey_buf, size_t *pubkey_len)
 {
-    if (!key_data || !pubkey_buf || !pubkey_len)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
+	if (!key_data || !pubkey_buf || !pubkey_len)
+	{
+		return PEER_ID_E_NULL_PTR;
+	}
 
-    CALL_LTC_MP_INIT();
-    if (ltc_mp.name == NULL)
-    {
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
+	CALL_LTC_MP_INIT();
+	if (ltc_mp.name == NULL)
+	{
+		return PEER_ID_E_CRYPTO_FAILED;
+	}
 
 #ifdef LTC_MECC
-    ecc_key ecdsa_key;
-    int err = ecc_import_openssl(key_data, (unsigned long)key_data_len, &ecdsa_key);
-    if (err != CRYPT_OK)
-    {
-        return PEER_ID_E_INVALID_PROTOBUF;
-    }
+	ecc_key ecdsa_key;
+	int err = ecc_import_openssl(key_data, (unsigned long)key_data_len, &ecdsa_key);
+	if (err != CRYPT_OK)
+	{
+		return PEER_ID_E_INVALID_PROTOBUF;
+	}
 
-    secure_zero((void *)key_data, key_data_len);
+	unsigned long der_len = 1, old_len = 0;
+	uint8_t *der_buf = malloc((size_t)der_len);
+	if (!der_buf)
+	{
+		ecc_free(&ecdsa_key);
+		return PEER_ID_E_ALLOC_FAILED;
+	}
 
-    unsigned long der_len = 1, old_len = 0;
-    uint8_t *der_buf = malloc((size_t)der_len);
-    if (!der_buf)
-    {
-        ecc_free(&ecdsa_key);
-        return PEER_ID_E_ALLOC_FAILED;
-    }
+	err = ecc_export_openssl(der_buf, &der_len, PK_PUBLIC | PK_CURVEOID, &ecdsa_key);
+	while (err == CRYPT_BUFFER_OVERFLOW)
+	{
+		old_len = der_len;
+		uint8_t *tmp = realloc(der_buf, (size_t)der_len);
+		if (!tmp)
+		{
+			secure_zero(der_buf, (size_t)old_len);
+			free(der_buf);
+			ecc_free(&ecdsa_key);
+			return PEER_ID_E_ALLOC_FAILED;
+		}
+		der_buf = tmp;
+		err = ecc_export_openssl(der_buf, &der_len, PK_PUBLIC | PK_CURVEOID, &ecdsa_key);
+	}
 
-    err = ecc_export_openssl(der_buf, &der_len, PK_PUBLIC | PK_CURVEOID, &ecdsa_key);
-    while (err == CRYPT_BUFFER_OVERFLOW)
-    {
-        old_len = der_len;
-        uint8_t *tmp = realloc(der_buf, (size_t)der_len);
-        if (!tmp)
-        {
-            secure_zero(der_buf, (size_t)old_len);
-            free(der_buf);
-            ecc_free(&ecdsa_key);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-        der_buf = tmp;
-        err = ecc_export_openssl(der_buf, &der_len, PK_PUBLIC | PK_CURVEOID, &ecdsa_key);
-    }
+	if (err != CRYPT_OK)
+	{
+		secure_zero(der_buf, (size_t)der_len);
+		free(der_buf);
+		ecc_free(&ecdsa_key);
+		return PEER_ID_E_CRYPTO_FAILED;
+	}
 
-    if (err != CRYPT_OK)
-    {
-        secure_zero(der_buf, (size_t)der_len);
-        free(der_buf);
-        ecc_free(&ecdsa_key);
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
+	peer_id_error_t ret = peer_id_build_public_key_protobuf(PEER_ID_ECDSA_KEY_TYPE, der_buf, (size_t)der_len,
+								pubkey_buf, pubkey_len);
 
-    peer_id_error_t ret = peer_id_build_public_key_protobuf(PEER_ID_ECDSA_KEY_TYPE, der_buf, (size_t)der_len, pubkey_buf, pubkey_len);
+	secure_zero(der_buf, (size_t)der_len);
+	free(der_buf);
+	ecc_free(&ecdsa_key);
 
-    secure_zero(der_buf, (size_t)der_len);
-    free(der_buf);
-    ecc_free(&ecdsa_key);
-
-    return ret;
+	return ret;
 #else
-    return PEER_ID_E_CRYPTO_FAILED;
+	return PEER_ID_E_CRYPTO_FAILED;
 #endif
 }

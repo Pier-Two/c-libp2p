@@ -1,5 +1,6 @@
-#include <ctype.h>
 #include <limits.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,7 +13,6 @@
 #include "multiformats/multibase/encoding/base64_url.h"
 #include "multiformats/multibase/encoding/base64_url_pad.h"
 #include "multiformats/multibase/multibase.h"
-#include "multiformats/multicodec/multicodec.h"
 #include "multiformats/multicodec/multicodec_codes.h"
 #include "multiformats/multihash/multihash.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
@@ -23,578 +23,806 @@
 #include "peer_id/peer_id_rsa.h"
 #include "peer_id/peer_id_secp256k1.h"
 
-/* Constants */
-#define PEER_ID_IDENTITY_HASH_MAX_SIZE 42
-#define PEER_ID_MAX_PUBKEY_LEN (64 * 1024)
+#define PEER_ID_IDENTITY_HASH_MAX_SIZE ((size_t)42U)
+#define PEER_ID_MAX_PUBLIC_KEY_PROTO_SIZE ((size_t)(64U * 1024U))
+#define PEER_ID_SHA2_256_DIGEST_SIZE ((size_t)32U)
+#define PEER_ID_MULTIBASE_INVALID ((multibase_t) - 1)
 
-/**
- * @brief Extract the length of the multihash digest from a buffer.
- *
- * This function decodes the multihash buffer to determine the length of the digest.
- *
- * @param mh_buf The buffer containing the multihash data.
- * @param mh_size The size of the multihash buffer.
- * @param digest_len Pointer to store the extracted digest length.
- * @return 0 on success, -1 on failure (e.g., invalid buffer or decoding error).
- */
-static int extract_multihash_digest_length(const uint8_t *mh_buf, size_t mh_size, size_t *digest_len)
+static int peer_id_to_string_error(peer_id_error_t error)
 {
-    if (!mh_buf || !digest_len)
-    {
-        return -1;
-    }
-
-    if (mh_size < 2)
-    {
-        return -1;
-    }
-
-    uint64_t hash_func_code;
-    size_t hash_code_size;
-    unsigned_varint_err_t err = unsigned_varint_decode(mh_buf, mh_size, &hash_func_code, &hash_code_size);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        return -1;
-    }
-
-    uint64_t len;
-    size_t len_size;
-    err = unsigned_varint_decode(mh_buf + hash_code_size, mh_size - hash_code_size, &len, &len_size);
-    if (err != UNSIGNED_VARINT_OK)
-    {
-        return -1;
-    }
-
-    if (hash_code_size + len_size + len > mh_size)
-    {
-        return -1;
-    }
-
-    *digest_len = (size_t)len;
-    return 0;
+	return -((int)error);
 }
 
-/**
- * @brief Check if a string starts with a given prefix.
- *
- * This function checks whether the provided string begins with the specified prefix.
- *
- * @param str The string to be checked.
- * @param prefix The prefix to check against the string.
- * @return 1 if the string starts with the prefix, 0 otherwise.
- */
-static int starts_with(const char *str, const char *prefix)
+static void peer_id_reset_output(peer_id_t *pid)
 {
-    if (!str || !prefix)
-    {
-        return 0;
-    }
-
-    size_t prefix_len = strlen(prefix);
-    size_t str_len = strlen(str);
-
-    if (str_len < prefix_len)
-    {
-        return 0;
-    }
-
-    return strncmp(str, prefix, prefix_len) == 0;
+	if (pid != NULL)
+	{
+		pid->bytes = NULL;
+		pid->size = (size_t)0U;
+	}
 }
 
-/**
- * @brief Determine the multibase type from a given prefix character.
- *
- * This function maps a prefix character to its corresponding multibase type.
- * If the prefix character does not match any known multibase type, it returns -1.
- *
- * @param prefix The character representing the multibase prefix.
- * @return The corresponding multibase type, or -1 if the prefix is unrecognized.
- */
-static multibase_t multibase_from_prefix(char prefix)
+static int peer_id_size_add(size_t left, size_t right, size_t *sum)
 {
-    switch (prefix)
-    {
-        case BASE32_CHARACTER:
-            return MULTIBASE_BASE32;
-        case BASE32_UPPER_CHARACTER:
-            return MULTIBASE_BASE32_UPPER;
-        case BASE58_BTC_CHARACTER:
-            return MULTIBASE_BASE58_BTC;
-        case BASE64_CHARACTER:
-            return MULTIBASE_BASE64;
-        case BASE64_URL_CHARACTER:
-            return MULTIBASE_BASE64_URL;
-        case BASE64_URL_PAD_CHARACTER:
-            return MULTIBASE_BASE64_URL_PAD;
-        case BASE16_CHARACTER:
-            return MULTIBASE_BASE16;
-        case BASE16_UPPER_CHARACTER:
-            return MULTIBASE_BASE16_UPPER;
-        default:
-            return (multibase_t)-1;
-    }
+	int status;
+
+	status = 0;
+	if ((sum != NULL) && (left <= (SIZE_MAX - right)))
+	{
+		*sum = left + right;
+		status = 1;
+	}
+
+	return status;
 }
 
-/**
- * @brief Create a peer ID from a public key.
- *
- * This function generates a peer ID based on the provided public key buffer.
- * It validates the input parameters and initializes the peer ID structure.
- *
- * @param pubkey_buf The buffer containing the public key.
- * @param pubkey_len The length of the public key buffer.
- * @param pid Pointer to the peer ID structure to be initialized.
- * @return peer_id_error_t Error code indicating success or type of failure.
- */
+static int peer_id_is_supported_multihash_code(uint64_t hash_code)
+{
+	int supported;
+
+	supported = 1;
+	switch (hash_code)
+	{
+	case MULTIHASH_CODE_IDENTITY:
+	case MULTIHASH_CODE_SHA2_256:
+	case MULTIHASH_CODE_SHA2_512:
+	case MULTIHASH_CODE_SHA3_224:
+	case MULTIHASH_CODE_SHA3_256:
+	case MULTIHASH_CODE_SHA3_384:
+	case MULTIHASH_CODE_SHA3_512:
+		break;
+	default:
+		supported = 0;
+		break;
+	}
+
+	return supported;
+}
+
+static peer_id_error_t peer_id_map_multihash_error(int multihash_status)
+{
+	peer_id_error_t status;
+
+	switch (multihash_status)
+	{
+	case MULTIHASH_ERR_NULL_POINTER:
+		status = PEER_ID_E_NULL_PTR;
+		break;
+	case MULTIHASH_ERR_INVALID_INPUT:
+		status = PEER_ID_E_INVALID_PROTOBUF;
+		break;
+	case MULTIHASH_ERR_UNSUPPORTED_FUN:
+		status = PEER_ID_E_UNSUPPORTED_KEY;
+		break;
+	case MULTIHASH_ERR_DIGEST_TOO_LARGE:
+		status = PEER_ID_E_INVALID_RANGE;
+		break;
+	case MULTIHASH_ERR_ALLOC_FAILURE:
+		status = PEER_ID_E_ALLOC_FAILED;
+		break;
+	default:
+		status = PEER_ID_E_CRYPTO_FAILED;
+		break;
+	}
+
+	return status;
+}
+
+static peer_id_error_t peer_id_copy_bytes(peer_id_t *pid, const uint8_t *src, size_t src_size)
+{
+	peer_id_error_t status;
+	uint8_t *copy;
+
+	status = PEER_ID_SUCCESS;
+	copy = NULL;
+	if ((pid == NULL) || (src == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else if (src_size == (size_t)0U)
+	{
+		status = PEER_ID_E_INVALID_RANGE;
+	}
+	else
+	{
+		copy = (uint8_t *)malloc(src_size);
+		if (copy == NULL)
+		{
+			status = PEER_ID_E_ALLOC_FAILED;
+		}
+		else
+		{
+			(void)memcpy(copy, src, src_size);
+			pid->bytes = copy;
+			pid->size = src_size;
+		}
+	}
+
+	return status;
+}
+
+static peer_id_error_t peer_id_validate_multihash_bytes(const uint8_t *multihash, size_t multihash_size)
+{
+	peer_id_error_t status;
+	uint64_t hash_code;
+	uint64_t digest_len_u64;
+	size_t hash_code_size;
+	size_t digest_len_size;
+	size_t payload_offset;
+	size_t payload_size;
+	size_t expected_size;
+	unsigned_varint_err_t varint_status;
+
+	status = PEER_ID_SUCCESS;
+	hash_code = (uint64_t)0U;
+	digest_len_u64 = (uint64_t)0U;
+	hash_code_size = (size_t)0U;
+	digest_len_size = (size_t)0U;
+	payload_offset = (size_t)0U;
+	expected_size = (size_t)0U;
+	if ((multihash == NULL) || (multihash_size == (size_t)0U))
+	{
+		status = PEER_ID_E_INVALID_STRING;
+	}
+	else
+	{
+		varint_status = unsigned_varint_decode(multihash, multihash_size, &hash_code, &hash_code_size);
+		if ((varint_status != UNSIGNED_VARINT_OK) || (hash_code_size >= multihash_size) ||
+		    (peer_id_is_supported_multihash_code(hash_code) == 0))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		payload_size = multihash_size - hash_code_size;
+		varint_status = unsigned_varint_decode(multihash + hash_code_size, payload_size, &digest_len_u64,
+						       &digest_len_size);
+		if ((varint_status != UNSIGNED_VARINT_OK) || (digest_len_size >= payload_size))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+		else if (digest_len_u64 > (uint64_t)(payload_size - digest_len_size))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		payload_offset = hash_code_size + digest_len_size;
+		if ((payload_offset > multihash_size) || (digest_len_u64 > SIZE_MAX))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+		else
+		{
+			expected_size = payload_offset + (size_t)digest_len_u64;
+			if (expected_size != multihash_size)
+			{
+				status = PEER_ID_E_INVALID_STRING;
+			}
+		}
+	}
+
+	return status;
+}
+
+static multibase_t peer_id_multibase_from_prefix(char prefix)
+{
+	multibase_t base;
+
+	base = PEER_ID_MULTIBASE_INVALID;
+	switch (prefix)
+	{
+	case BASE32_CHARACTER:
+		base = MULTIBASE_BASE32;
+		break;
+	case BASE32_UPPER_CHARACTER:
+		base = MULTIBASE_BASE32_UPPER;
+		break;
+	case BASE58_BTC_CHARACTER:
+		base = MULTIBASE_BASE58_BTC;
+		break;
+	case BASE64_CHARACTER:
+		base = MULTIBASE_BASE64;
+		break;
+	case BASE64_URL_CHARACTER:
+		base = MULTIBASE_BASE64_URL;
+		break;
+	case BASE64_URL_PAD_CHARACTER:
+		base = MULTIBASE_BASE64_URL_PAD;
+		break;
+	case BASE16_CHARACTER:
+		base = MULTIBASE_BASE16;
+		break;
+	case BASE16_UPPER_CHARACTER:
+		base = MULTIBASE_BASE16_UPPER;
+		break;
+	default:
+		break;
+	}
+
+	return base;
+}
+
+static peer_id_error_t peer_id_decode_multibase_string(multibase_t base, const char *input, uint8_t **decoded_out,
+						       size_t *decoded_size_out)
+{
+	peer_id_error_t status;
+	size_t input_len;
+	uint8_t *decoded;
+	ptrdiff_t decode_result;
+
+	status = PEER_ID_SUCCESS;
+	input_len = (size_t)0U;
+	decoded = NULL;
+	decode_result = (ptrdiff_t)0;
+	if ((input == NULL) || (decoded_out == NULL) || (decoded_size_out == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else
+	{
+		*decoded_out = NULL;
+		*decoded_size_out = (size_t)0U;
+		input_len = strlen(input);
+		if (input_len == (size_t)0U)
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		decoded = (uint8_t *)malloc(input_len);
+		if (decoded == NULL)
+		{
+			status = PEER_ID_E_ALLOC_FAILED;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		decode_result = multibase_decode(base, input, decoded, input_len);
+		if ((decode_result <= 0) || ((size_t)decode_result > input_len))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+		else
+		{
+			*decoded_out = decoded;
+			*decoded_size_out = (size_t)decode_result;
+			decoded = NULL;
+		}
+	}
+
+	if (decoded != NULL)
+	{
+		free(decoded);
+	}
+
+	return status;
+}
+
+static peer_id_error_t peer_id_decode_legacy_string(const char *str, peer_id_t *pid)
+{
+	peer_id_error_t status;
+	size_t str_len;
+	size_t prefixed_len;
+	char *prefixed;
+	uint8_t *decoded;
+	size_t decoded_len;
+
+	status = PEER_ID_SUCCESS;
+	str_len = (size_t)0U;
+	prefixed_len = (size_t)0U;
+	prefixed = NULL;
+	decoded = NULL;
+	decoded_len = (size_t)0U;
+	if ((str == NULL) || (pid == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else
+	{
+		str_len = strlen(str);
+		if (str_len == (size_t)0U)
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+		else if (peer_id_size_add(str_len, (size_t)2U, &prefixed_len) == 0)
+		{
+			status = PEER_ID_E_INVALID_RANGE;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		prefixed = (char *)malloc(prefixed_len);
+		if (prefixed == NULL)
+		{
+			status = PEER_ID_E_ALLOC_FAILED;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		prefixed[0] = BASE58_BTC_CHARACTER;
+		(void)memcpy(prefixed + 1, str, str_len + (size_t)1U);
+
+		status = peer_id_decode_multibase_string(MULTIBASE_BASE58_BTC, prefixed, &decoded, &decoded_len);
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_validate_multihash_bytes(decoded, decoded_len);
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_copy_bytes(pid, decoded, decoded_len);
+	}
+
+	if (decoded != NULL)
+	{
+		free(decoded);
+	}
+	if (prefixed != NULL)
+	{
+		free(prefixed);
+	}
+
+	return status;
+}
+
+static peer_id_error_t peer_id_decode_cid_string(const char *str, multibase_t base, peer_id_t *pid)
+{
+	peer_id_error_t status;
+	uint8_t *decoded;
+	size_t decoded_size;
+	uint64_t codec;
+	size_t codec_size;
+	size_t multihash_offset;
+	unsigned_varint_err_t varint_status;
+
+	status = PEER_ID_SUCCESS;
+	decoded = NULL;
+	decoded_size = (size_t)0U;
+	codec = (uint64_t)0U;
+	codec_size = (size_t)0U;
+	multihash_offset = (size_t)0U;
+	if ((str == NULL) || (pid == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_decode_multibase_string(base, str, &decoded, &decoded_size);
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		if ((decoded_size < (size_t)2U) || (decoded[0] != (uint8_t)MULTICODEC_CIDV1))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		varint_status = unsigned_varint_decode(decoded + 1, decoded_size - 1, &codec, &codec_size);
+		if ((varint_status != UNSIGNED_VARINT_OK) || (codec != (uint64_t)MULTICODEC_LIBP2P_KEY))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		multihash_offset = (size_t)1U + codec_size;
+		if ((multihash_offset >= decoded_size) || (multihash_offset < codec_size))
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_validate_multihash_bytes(decoded + multihash_offset, decoded_size - multihash_offset);
+	}
+
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_copy_bytes(pid, decoded + multihash_offset, decoded_size - multihash_offset);
+	}
+
+	if (decoded != NULL)
+	{
+		free(decoded);
+	}
+
+	return status;
+}
+
 peer_id_error_t peer_id_create_from_public_key(const uint8_t *pubkey_buf, size_t pubkey_len, peer_id_t *pid)
 {
-    if (!pubkey_buf || !pid)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
+	peer_id_error_t status;
+	uint64_t key_type;
+	const uint8_t *key_data;
+	size_t key_data_len;
+	uint64_t hash_function_code;
+	size_t digest_len;
+	size_t hash_varint_size;
+	size_t digest_varint_size;
+	size_t required_size;
+	uint8_t *multihash;
+	int encode_result;
 
-    if (pubkey_len > PEER_ID_MAX_PUBKEY_LEN)
-    {
-        return PEER_ID_E_BUFFER_TOO_SMALL;
-    }
+	status = PEER_ID_SUCCESS;
+	key_type = (uint64_t)0U;
+	key_data = NULL;
+	key_data_len = (size_t)0U;
+	hash_function_code = MULTIHASH_CODE_SHA2_256;
+	digest_len = (size_t)0U;
+	hash_varint_size = (size_t)0U;
+	digest_varint_size = (size_t)0U;
+	required_size = (size_t)0U;
+	multihash = NULL;
+	encode_result = 0;
+	if ((pubkey_buf == NULL) || (pid == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else
+	{
+		peer_id_reset_output(pid);
+		if ((pubkey_len == (size_t)0U) || (pubkey_len > PEER_ID_MAX_PUBLIC_KEY_PROTO_SIZE))
+		{
+			status = PEER_ID_E_INVALID_RANGE;
+		}
+	}
 
-    // Initialize output
-    pid->bytes = NULL;
-    pid->size = 0;
+	if (status == PEER_ID_SUCCESS)
+	{
+		if (parse_public_key_proto(pubkey_buf, pubkey_len, &key_type, &key_data, &key_data_len) < 0)
+		{
+			status = PEER_ID_E_INVALID_PROTOBUF;
+		}
+		else if (key_type > (uint64_t)PEER_ID_ECDSA_KEY_TYPE)
+		{
+			status = PEER_ID_E_UNSUPPORTED_KEY;
+		}
+		else if ((key_data == NULL) || (key_data_len == (size_t)0U))
+		{
+			status = PEER_ID_E_INVALID_PROTOBUF;
+		}
+	}
 
-    // Parse the public-key protobuf
-    uint64_t key_type = 0;
-    const uint8_t *key_data = NULL;
-    size_t key_data_len = 0;
-    int parse_result = parse_public_key_proto(pubkey_buf, pubkey_len, &key_type, &key_data, &key_data_len);
-    if (parse_result < 0)
-    {
-        return PEER_ID_E_INVALID_PROTOBUF;
-    }
+	if (status == PEER_ID_SUCCESS)
+	{
+		if (pubkey_len <= PEER_ID_IDENTITY_HASH_MAX_SIZE)
+		{
+			hash_function_code = MULTIHASH_CODE_IDENTITY;
+			digest_len = pubkey_len;
+		}
+		else
+		{
+			hash_function_code = MULTIHASH_CODE_SHA2_256;
+			digest_len = PEER_ID_SHA2_256_DIGEST_SIZE;
+		}
 
-    // Choose hash function code
-    uint64_t hash_function_code;
-    if (pubkey_len <= PEER_ID_IDENTITY_HASH_MAX_SIZE)
-    {
-        hash_function_code = MULTICODEC_IDENTITY;
-    }
-    else
-    {
-        hash_function_code = MULTICODEC_SHA2_256;
-    }
+		hash_varint_size = unsigned_varint_size(hash_function_code);
+		digest_varint_size = unsigned_varint_size((uint64_t)digest_len);
+		if ((peer_id_size_add(hash_varint_size, digest_varint_size, &required_size) == 0) ||
+		    (peer_id_size_add(required_size, digest_len, &required_size) == 0))
+		{
+			status = PEER_ID_E_INVALID_RANGE;
+		}
+	}
 
-    // Compute varint sizes
-    size_t hash_code_size = unsigned_varint_size(hash_function_code);
-    size_t digest_len_size = unsigned_varint_size((hash_function_code == MULTICODEC_IDENTITY) ? pubkey_len : 32);
-    size_t payload_len = (hash_function_code == MULTICODEC_IDENTITY) ? pubkey_len : 32;
-    if (payload_len > SIZE_MAX - hash_code_size - digest_len_size)
-    {
-        return PEER_ID_E_BUFFER_TOO_SMALL;
-    }
+	if (status == PEER_ID_SUCCESS)
+	{
+		multihash = (uint8_t *)malloc(required_size);
+		if (multihash == NULL)
+		{
+			status = PEER_ID_E_ALLOC_FAILED;
+		}
+	}
 
-    size_t max_multihash_size = hash_code_size + digest_len_size + ((hash_function_code == MULTICODEC_IDENTITY) ? pubkey_len : 32);
+	if (status == PEER_ID_SUCCESS)
+	{
+		encode_result = multihash_encode(hash_function_code, pubkey_buf, pubkey_len, multihash, required_size);
+		if (encode_result <= 0)
+		{
+			status = peer_id_map_multihash_error(encode_result);
+		}
+		else if ((size_t)encode_result > required_size)
+		{
+			status = PEER_ID_E_ENCODING_FAILED;
+		}
+		else
+		{
+			pid->bytes = multihash;
+			pid->size = (size_t)encode_result;
+			multihash = NULL;
+		}
+	}
 
-    pid->bytes = (uint8_t *)malloc(max_multihash_size);
-    if (!pid->bytes)
-    {
-        return PEER_ID_E_ALLOC_FAILED;
-    }
+	if (multihash != NULL)
+	{
+		free(multihash);
+	}
 
-    int result = multihash_encode(hash_function_code, pubkey_buf, pubkey_len, pid->bytes, max_multihash_size);
-    if (result < 0)
-    {
-        free(pid->bytes);
-        pid->bytes = NULL;
-        pid->size = 0;
-        switch (result)
-        {
-            case MULTIHASH_ERR_NULL_POINTER:
-                return PEER_ID_E_NULL_PTR;
-            case MULTIHASH_ERR_INVALID_INPUT:
-                return PEER_ID_E_INVALID_PROTOBUF;
-            case MULTIHASH_ERR_UNSUPPORTED_FUN:
-                return PEER_ID_E_UNSUPPORTED_KEY;
-            case MULTIHASH_ERR_DIGEST_TOO_LARGE:
-                return PEER_ID_E_BUFFER_TOO_SMALL;
-            case MULTIHASH_ERR_ALLOC_FAILURE:
-                return PEER_ID_E_ALLOC_FAILED;
-            default:
-                return PEER_ID_E_CRYPTO_FAILED;
-        }
-    }
-
-    pid->size = result;
-    return PEER_ID_SUCCESS;
+	return status;
 }
 
-/**
- * @brief Create a peer ID from a private key.
- *
- * This function generates a peer ID from a given private key buffer. It supports
- * multiple key types, including RSA, Ed25519, secp256k1, and ECDSA. The function
- * first parses the private key to determine its type and then derives the corresponding
- * public key. Finally, it creates a peer ID from the public key.
- *
- * @param privkey_buf The buffer containing the private key.
- * @param privkey_len The length of the private key buffer.
- * @param pid Pointer to the peer_id_t structure where the resulting peer ID will be stored.
- * @return peer_id_error_t Error code indicating success or type of failure.
- */
 peer_id_error_t peer_id_create_from_private_key(const uint8_t *privkey_buf, size_t privkey_len, peer_id_t *pid)
 {
-    if (!privkey_buf || !pid)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
+	peer_id_error_t status;
+	peer_id_error_t derive_status;
+	uint64_t key_type;
+	const uint8_t *key_data;
+	size_t key_data_len;
+	uint8_t *pubkey_buf;
+	size_t pubkey_len;
 
-    pid->bytes = NULL;
-    pid->size = 0;
+	status = PEER_ID_SUCCESS;
+	derive_status = PEER_ID_SUCCESS;
+	key_type = (uint64_t)0U;
+	key_data = NULL;
+	key_data_len = (size_t)0U;
+	pubkey_buf = NULL;
+	pubkey_len = (size_t)0U;
+	if ((privkey_buf == NULL) || (pid == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else
+	{
+		peer_id_reset_output(pid);
+	}
 
-    uint64_t key_type = 0;
-    const uint8_t *key_data = NULL;
-    size_t key_data_len = 0;
-    int parse_result = parse_private_key_proto(privkey_buf, privkey_len, &key_type, &key_data, &key_data_len);
-    if (parse_result < 0)
-    {
-        return PEER_ID_E_INVALID_PROTOBUF;
-    }
+	if (status == PEER_ID_SUCCESS)
+	{
+		if (parse_private_key_proto(privkey_buf, privkey_len, &key_type, &key_data, &key_data_len) < 0)
+		{
+			status = PEER_ID_E_INVALID_PROTOBUF;
+		}
+		else if ((key_data == NULL) || (key_data_len == (size_t)0U))
+		{
+			status = PEER_ID_E_INVALID_PROTOBUF;
+		}
+	}
 
-    uint8_t *pubkey_buf = NULL;
-    size_t pubkey_len = 0;
-    peer_id_error_t ret;
-    switch (key_type)
-    {
-        case 0:
-            ret = peer_id_create_from_private_key_rsa(key_data, key_data_len, &pubkey_buf, &pubkey_len);
-            break;
-        case 1:
-            ret = peer_id_create_from_private_key_ed25519(key_data, key_data_len, &pubkey_buf, &pubkey_len);
-            break;
-        case 2:
-            ret = peer_id_create_from_private_key_secp256k1(key_data, key_data_len, &pubkey_buf, &pubkey_len);
-            break;
-        case 3:
-            ret = peer_id_create_from_private_key_ecdsa(key_data, key_data_len, &pubkey_buf, &pubkey_len);
-            break;
-        default:
-            return PEER_ID_E_UNSUPPORTED_KEY;
-    }
+	if (status == PEER_ID_SUCCESS)
+	{
+		switch (key_type)
+		{
+		case PEER_ID_RSA_KEY_TYPE:
+			derive_status =
+				peer_id_create_from_private_key_rsa(key_data, key_data_len, &pubkey_buf, &pubkey_len);
+			break;
+		case PEER_ID_ED25519_KEY_TYPE:
+			derive_status = peer_id_create_from_private_key_ed25519(key_data, key_data_len, &pubkey_buf,
+										&pubkey_len);
+			break;
+		case PEER_ID_SECP256K1_KEY_TYPE:
+			derive_status = peer_id_create_from_private_key_secp256k1(key_data, key_data_len, &pubkey_buf,
+										  &pubkey_len);
+			break;
+		case PEER_ID_ECDSA_KEY_TYPE:
+			derive_status =
+				peer_id_create_from_private_key_ecdsa(key_data, key_data_len, &pubkey_buf, &pubkey_len);
+			break;
+		default:
+			derive_status = PEER_ID_E_UNSUPPORTED_KEY;
+			break;
+		}
 
-    if (ret != PEER_ID_SUCCESS)
-    {
-        return ret;
-    }
+		if (derive_status != PEER_ID_SUCCESS)
+		{
+			status = derive_status;
+		}
+		else if ((pubkey_buf == NULL) || (pubkey_len == (size_t)0U))
+		{
+			status = PEER_ID_E_CRYPTO_FAILED;
+		}
+	}
 
-    ret = peer_id_create_from_public_key(pubkey_buf, pubkey_len, pid);
-    free(pubkey_buf);
-    return ret;
+	if (status == PEER_ID_SUCCESS)
+	{
+		status = peer_id_create_from_public_key(pubkey_buf, pubkey_len, pid);
+	}
+
+	if (pubkey_buf != NULL)
+	{
+		free(pubkey_buf);
+	}
+
+	return status;
 }
 
-/**
- * @brief Encode a peer ID into a specified format.
- *
- * This function encodes a given peer ID into a specified format, such as
- * multibase or CIDv1. It handles different encoding scenarios and ensures
- * that the output buffer is appropriately sized and populated.
- *
- * @param pid The peer ID to be encoded.
- * @param format The format to encode the peer ID into.
- * @param out The buffer to store the encoded peer ID.
- * @param out_size The size of the output buffer.
- * @return int The size of the encoded peer ID, or an error code indicating
- *         the type of failure.
- */
 peer_id_error_t peer_id_create_from_string(const char *str, peer_id_t *pid)
 {
-    if (!str || !pid)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
+	peer_id_error_t status;
+	multibase_t base;
 
-    pid->bytes = NULL;
-    pid->size = 0;
+	status = PEER_ID_SUCCESS;
+	base = PEER_ID_MULTIBASE_INVALID;
+	if ((str == NULL) || (pid == NULL))
+	{
+		status = PEER_ID_E_NULL_PTR;
+	}
+	else
+	{
+		peer_id_reset_output(pid);
+		if (str[0] == '\0')
+		{
+			status = PEER_ID_E_INVALID_STRING;
+		}
+	}
 
-    if (starts_with(str, "Qm") || starts_with(str, "1"))
-    {
-        size_t input_len = strlen(str);
+	if (status == PEER_ID_SUCCESS)
+	{
+		base = peer_id_multibase_from_prefix(str[0]);
+		if (base != PEER_ID_MULTIBASE_INVALID)
+		{
+			status = peer_id_decode_cid_string(str, base, pid);
+			if (status == PEER_ID_SUCCESS)
+			{
+				return PEER_ID_SUCCESS;
+			}
+			if (status != PEER_ID_E_INVALID_STRING)
+			{
+				return status;
+			}
+		}
 
-        if (input_len > SIZE_MAX - 2)
-        {
-            return PEER_ID_E_BUFFER_TOO_SMALL;
-        }
+		status = peer_id_decode_legacy_string(str, pid);
+	}
 
-        char *prefixed_str = (char *)malloc(input_len + 2);
-        if (!prefixed_str)
-        {
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        prefixed_str[0] = BASE58_BTC_CHARACTER;
-        strcpy(prefixed_str + 1, str);
-
-        size_t max_decoded_size = input_len;
-        uint8_t *decoded = (uint8_t *)malloc(max_decoded_size);
-        if (!decoded)
-        {
-            free(prefixed_str);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        int result = multibase_decode(MULTIBASE_BASE58_BTC, prefixed_str, decoded, max_decoded_size);
-        free(prefixed_str);
-        if (result < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_ENCODING_FAILED;
-        }
-
-        size_t digest_len;
-        if (extract_multihash_digest_length(decoded, result, &digest_len) < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        uint8_t *digest = (uint8_t *)malloc(digest_len);
-        if (!digest)
-        {
-            free(decoded);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        uint64_t hash_func_code;
-        size_t actual_digest_len = digest_len;
-        int mh_result = multihash_decode(decoded, result, &hash_func_code, digest, &actual_digest_len);
-        free(digest);
-        if (mh_result < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        pid->bytes = (uint8_t *)malloc(result);
-        if (!pid->bytes)
-        {
-            free(decoded);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        memcpy(pid->bytes, decoded, result);
-        pid->size = result;
-        free(decoded);
-        return PEER_ID_SUCCESS;
-    }
-    else if (isalnum((unsigned char)str[0]))
-    {
-        multibase_t base = multibase_from_prefix(str[0]);
-        if (base == (multibase_t)-1)
-        {
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        size_t input_len = strlen(str);
-        size_t max_decoded_size = input_len;
-        uint8_t *decoded = (uint8_t *)malloc(max_decoded_size);
-        if (!decoded)
-        {
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        int result = multibase_decode(base, str, decoded, max_decoded_size);
-        if (result < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_ENCODING_FAILED;
-        }
-
-        if (result < 2 || decoded[0] != MULTICODEC_CIDV1)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        uint64_t multicodec_code;
-        size_t codec_size;
-        unsigned_varint_err_t varint_result = unsigned_varint_decode(decoded + 1, result - 1, &multicodec_code, &codec_size);
-        if (varint_result != UNSIGNED_VARINT_OK || multicodec_code != MULTICODEC_LIBP2P_KEY)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        size_t multihash_offset = 1 + codec_size;
-        if (multihash_offset >= result)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        size_t digest_len;
-        if (extract_multihash_digest_length(decoded + multihash_offset, result - multihash_offset, &digest_len) < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        uint8_t *digest = (uint8_t *)malloc(digest_len);
-        if (!digest)
-        {
-            free(decoded);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        uint64_t hash_func_code;
-        size_t actual_digest_len = digest_len;
-        int mh_result = multihash_decode(decoded + multihash_offset, result - multihash_offset, &hash_func_code, digest, &actual_digest_len);
-        free(digest);
-        if (mh_result < 0)
-        {
-            free(decoded);
-            return PEER_ID_E_INVALID_STRING;
-        }
-
-        size_t peerid_len = result - multihash_offset;
-        pid->bytes = (uint8_t *)malloc(peerid_len);
-        if (!pid->bytes)
-        {
-            free(decoded);
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        memcpy(pid->bytes, decoded + multihash_offset, peerid_len);
-        pid->size = peerid_len;
-        free(decoded);
-        return PEER_ID_SUCCESS;
-    }
-    else
-    {
-        return PEER_ID_E_INVALID_STRING;
-    }
+	return status;
 }
 
-/**
- * @brief Convert a peer ID to a string representation.
- *
- * This function converts a peer ID into a string format based on the specified
- * format type. It supports different encoding formats such as Base58 and Multibase CIDv1.
- *
- * @param pid Pointer to the peer_id_t structure containing the peer ID.
- * @param format The desired output format for the peer ID string.
- * @param out The buffer to store the resulting string representation of the peer ID.
- * @param out_size The size of the output buffer.
- * @return int Error code indicating success or type of failure.
- */
 int peer_id_to_string(const peer_id_t *pid, peer_id_format_t format, char *out, size_t out_size)
 {
-    if (!pid || !pid->bytes || !out)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
-    if (out_size == 0)
-    {
-        return PEER_ID_E_BUFFER_TOO_SMALL;
-    }
+	int result;
+	size_t codec_varint_size;
+	size_t prefix_size;
+	size_t cid_size;
+	size_t written;
+	uint8_t *cid;
+	ptrdiff_t encode_result;
 
-    if (format == PEER_ID_FMT_BASE58_LEGACY)
-    {
-        int result = multibase_encode(MULTIBASE_BASE58_BTC, pid->bytes, pid->size, out, out_size);
-        if (result < 0)
-        {
-            return PEER_ID_E_ENCODING_FAILED;
-        }
-        if (result > 1 && out[0] == BASE58_BTC_CHARACTER)
-        {
-            memmove(out, out + 1, result);
-            out[result - 1] = '\0';
-            return result - 1;
-        }
-        return result;
-    }
-    else if (format == PEER_ID_FMT_MULTIBASE_CIDv1)
-    {
-        size_t varint_size = unsigned_varint_size(MULTICODEC_LIBP2P_KEY);
+	result = peer_id_to_string_error(PEER_ID_E_ENCODING_FAILED);
+	codec_varint_size = (size_t)0U;
+	prefix_size = (size_t)0U;
+	cid_size = (size_t)0U;
+	written = (size_t)0U;
+	cid = NULL;
+	encode_result = (ptrdiff_t)0;
+	if ((pid == NULL) || (out == NULL) || (pid->bytes == NULL))
+	{
+		result = peer_id_to_string_error(PEER_ID_E_NULL_PTR);
+	}
+	else if (out_size == (size_t)0U)
+	{
+		result = peer_id_to_string_error(PEER_ID_E_BUFFER_TOO_SMALL);
+	}
+	else
+	{
+		out[0] = '\0';
+		if (pid->size == (size_t)0U)
+		{
+			result = peer_id_to_string_error(PEER_ID_E_INVALID_RANGE);
+		}
+		else if (format == PEER_ID_FMT_BASE58_LEGACY)
+		{
+			encode_result = multibase_encode(MULTIBASE_BASE58_BTC, pid->bytes, pid->size, out, out_size);
+			if ((encode_result <= 1) || (out[0] != BASE58_BTC_CHARACTER))
+			{
+				result = peer_id_to_string_error(PEER_ID_E_ENCODING_FAILED);
+			}
+			else
+			{
+				(void)memmove(out, out + 1, (size_t)encode_result);
+				result = (int)encode_result - 1;
+			}
+		}
+		else if (format == PEER_ID_FMT_MULTIBASE_CIDv1)
+		{
+			codec_varint_size = unsigned_varint_size((uint64_t)MULTICODEC_LIBP2P_KEY);
+			if ((peer_id_size_add((size_t)1U, codec_varint_size, &prefix_size) == 0) ||
+			    (peer_id_size_add(prefix_size, pid->size, &cid_size) == 0))
+			{
+				result = peer_id_to_string_error(PEER_ID_E_INVALID_RANGE);
+			}
+			else
+			{
+				cid = (uint8_t *)malloc(cid_size);
+				if (cid == NULL)
+				{
+					result = peer_id_to_string_error(PEER_ID_E_ALLOC_FAILED);
+				}
+				else
+				{
+					cid[0] = (uint8_t)MULTICODEC_CIDV1;
+					if (unsigned_varint_encode((uint64_t)MULTICODEC_LIBP2P_KEY, cid + 1,
+								   codec_varint_size, &written) != UNSIGNED_VARINT_OK)
+					{
+						result = peer_id_to_string_error(PEER_ID_E_ENCODING_FAILED);
+					}
+					else
+					{
+						prefix_size = (size_t)1U + written;
+						(void)memcpy(cid + prefix_size, pid->bytes, pid->size);
+						encode_result = multibase_encode(
+							MULTIBASE_BASE32, cid, prefix_size + pid->size, out, out_size);
+						if (encode_result <= 0)
+						{
+							result = peer_id_to_string_error(PEER_ID_E_ENCODING_FAILED);
+						}
+						else
+						{
+							result = (int)encode_result;
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			result = peer_id_to_string_error(PEER_ID_E_ENCODING_FAILED);
+		}
+	}
 
-        if (pid->size > SIZE_MAX - 1 - varint_size)
-        {
-            return PEER_ID_E_BUFFER_TOO_SMALL;
-        }
+	if (cid != NULL)
+	{
+		free(cid);
+	}
+	if ((result < 0) && (out != NULL) && (out_size > (size_t)0U))
+	{
+		out[0] = '\0';
+	}
 
-        size_t cid_size = 1 + varint_size + pid->size;
-        uint8_t *cid = (uint8_t *)malloc(cid_size);
-        if (!cid)
-        {
-            return PEER_ID_E_ALLOC_FAILED;
-        }
-
-        cid[0] = MULTICODEC_CIDV1;
-        size_t written;
-        if (unsigned_varint_encode(MULTICODEC_LIBP2P_KEY, cid + 1, varint_size, &written) != UNSIGNED_VARINT_OK)
-        {
-            free(cid);
-            return PEER_ID_E_ENCODING_FAILED;
-        }
-        memcpy(cid + 1 + written, pid->bytes, pid->size);
-
-        int result = multibase_encode(MULTIBASE_BASE32, cid, 1 + written + pid->size, out, out_size);
-        free(cid);
-        if (result < 0)
-        {
-            return PEER_ID_E_ENCODING_FAILED;
-        }
-        return result;
-    }
-    else
-    {
-        return PEER_ID_E_ENCODING_FAILED;
-    }
+	return result;
 }
 
-/**
- * @brief Compare two peer IDs for equality.
- *
- * This function checks if two peer IDs are equal by comparing their byte arrays.
- * It performs a constant-time comparison to prevent timing attacks.
- *
- * @param a The first peer ID to compare.
- * @param b The second peer ID to compare.
- * @return int Returns 1 if the peer IDs are equal, 0 if they are not, and -1 if
- *         either of the peer IDs is invalid (e.g., null pointers or uninitialized bytes).
- */
 int peer_id_equals(const peer_id_t *a, const peer_id_t *b)
 {
-    if (!a || !b || !a->bytes || !b->bytes)
-    {
-        return -1;
-    }
-    if (a->size != b->size)
-    {
-        return 0;
-    }
+	uint8_t diff;
+	size_t index;
 
-    uint8_t diff = 0;
-    for (size_t i = 0; i < a->size; i++)
-    {
-        diff |= a->bytes[i] ^ b->bytes[i];
-    }
-    return diff == 0;
+	if ((a == NULL) || (b == NULL) || (a->bytes == NULL) || (b->bytes == NULL))
+	{
+		return -1;
+	}
+	if (a->size != b->size)
+	{
+		return 0;
+	}
+
+	diff = (uint8_t)0U;
+	for (index = (size_t)0U; index < a->size; ++index)
+	{
+		diff = (uint8_t)(diff | (uint8_t)(a->bytes[index] ^ b->bytes[index]));
+	}
+
+	return (diff == (uint8_t)0U) ? 1 : 0;
 }
 
-/**
- * @brief Destroy a peer ID.
- *
- * This function deallocates the memory associated with a peer ID's byte array
- * and resets its size to zero. It ensures that the peer ID is properly cleaned up
- * to prevent memory leaks.
- *
- * @param pid Pointer to the peer ID to be destroyed. If the pointer or its byte array
- *            is NULL, the function does nothing.
- */
 void peer_id_destroy(peer_id_t *pid)
 {
-    if (pid && pid->bytes)
-    {
-        free(pid->bytes);
-        pid->bytes = NULL;
-        pid->size = 0;
-    }
+	if (pid != NULL)
+	{
+		if (pid->bytes != NULL)
+		{
+			free(pid->bytes);
+			pid->bytes = NULL;
+		}
+		pid->size = (size_t)0U;
+	}
 }
