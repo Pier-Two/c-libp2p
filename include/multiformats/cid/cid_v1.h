@@ -15,10 +15,10 @@ extern "C" {
  * @brief CIDv1 public API.
  *
  * CIDv1 binary layout:
- *   <varint(version=1)><varint(codec)><multihash>
+ *   [varint(version=1)][varint(codec)][multihash]
  *
  * CIDv1 string layout:
- *   <multibase-prefix><encoded-binary-cidv1>
+ *   [multibase-prefix][encoded-binary-cidv1]
  */
 
 /** @brief CIDv1 version value. */
@@ -154,7 +154,7 @@ ptrdiff_t cid_v1_from_string(cid_v1_t *cid, const char *str);
 /**
  * @brief Convert CIDv1 to human-readable form:
  *
- * `<multibase-name> - cidv1 - <codec-name> - <multihash-name>-<hex-digest>`
+ * `[multibase-name] - cidv1 - [codec-name] - [multihash-name]-[hex-digest]`
  *
  * @param[in]  cid      Source CID object.
  * @param[in]  base     Preferred multibase name for output prefix section.

@@ -13,7 +13,7 @@ extern "C" {
  * @brief CIDv0 public API.
  *
  * CIDv0 binary layout:
- *   <multihash-code=0x12><digest-len=0x20><32-byte digest>
+ *   [multihash-code=0x12][digest-len=0x20][32-byte digest]
  *
  * CIDv0 string layout:
  *   Base58BTC string with fixed length 46 characters (commonly `Qm...`).
@@ -69,7 +69,7 @@ int cid_v0_init(cid_v0_t *cid, const uint8_t *digest, size_t digest_len);
  * @brief Encode CIDv0 to binary form.
  *
  * Writes exactly @ref CIDV0_BINARY_SIZE bytes as:
- * `<0x12><0x20><digest[32]>`.
+ * `[0x12][0x20][digest[32]]`.
  *
  * @param[in]  cid      Source CID object.
  * @param[out] out      Output buffer.
