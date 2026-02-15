@@ -2,30 +2,28 @@
 #define MULTIADDR_H
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum
-{
-    MULTIADDR_SUCCESS = 0,               /**< No error.                          */
-    MULTIADDR_ERR_NULL_POINTER = -1,     /**< A null pointer was passed.         */
-    MULTIADDR_ERR_INVALID_STRING = -2,   /**< Failed to parse multiaddr string.  */
-    MULTIADDR_ERR_INVALID_DATA = -3,     /**< Binary data not a valid multiaddr. */
-    MULTIADDR_ERR_BUFFER_TOO_SMALL = -4, /**< Insufficient out buffer size.   */
-    MULTIADDR_ERR_NO_MATCH = -5,         /**< Decapsulation match not found.     */
-    MULTIADDR_ERR_ALLOC_FAILURE = -6,    /**< Memory allocation failed.           */
-    MULTIADDR_ERR_UNKNOWN_PROTOCOL = -7  /**< Protocol code is not recognized. */
-} multiaddr_error_t;
+typedef int multiaddr_error_t;
+
+#define MULTIADDR_SUCCESS ((multiaddr_error_t)0)		 /**< No error.                          */
+#define MULTIADDR_ERR_NULL_POINTER ((multiaddr_error_t) - 1)	 /**< A null pointer was passed.         */
+#define MULTIADDR_ERR_INVALID_STRING ((multiaddr_error_t) - 2)	 /**< Failed to parse multiaddr string.  */
+#define MULTIADDR_ERR_INVALID_DATA ((multiaddr_error_t) - 3)	 /**< Binary data not a valid multiaddr. */
+#define MULTIADDR_ERR_BUFFER_TOO_SMALL ((multiaddr_error_t) - 4) /**< Insufficient out buffer size.      */
+#define MULTIADDR_ERR_NO_MATCH ((multiaddr_error_t) - 5)	 /**< Decapsulation match not found.     */
+#define MULTIADDR_ERR_ALLOC_FAILURE ((multiaddr_error_t) - 6)	 /**< Memory allocation failed.          */
+#define MULTIADDR_ERR_UNKNOWN_PROTOCOL ((multiaddr_error_t) - 7) /**< Protocol code is not recognized.   */
 
 /**
  * @brief Multiaddr opaque struct.
  *
  * Internally, a multiaddr is often stored in its binary format:
- *   <proto code (varint)><addr bytes>... repeated ...
+ *   [proto code (varint)][addr bytes] ... repeated
  */
 typedef struct multiaddr_s multiaddr_t;
 

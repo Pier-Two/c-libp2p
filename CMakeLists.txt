@@ -229,6 +229,8 @@ target_include_directories(libp2p_metrics PUBLIC ${PROJECT_SOURCE_DIR}/include)
 # ---------------------------------------------
 add_library(libp2p_log
     src/util/log.c
+    src/util/memory.c
+    src/util/net_addr.c
 )
 target_include_directories(libp2p_log PUBLIC ${PROJECT_SOURCE_DIR}/include)
 
