@@ -280,8 +280,14 @@ static libp2p_ping_err_t stream_write_all(libp2p_stream_t *s, const uint8_t *buf
         const peer_id_t *p = libp2p_stream_remote_peer(s);
         char peer_buf[128];
         const char *peer_str = "<unknown>";
-        if (p && peer_id_to_string(p, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf)) >= 0)
-            peer_str = peer_buf;
+        if (p)
+        {
+            size_t peer_len = 0U;
+            if (peer_id_text_write(p, PEER_ID_TEXT_LEGACY_BASE58, peer_buf, sizeof(peer_buf), &peer_len) ==
+                    PEER_ID_OK &&
+                peer_len > 0U)
+                peer_str = peer_buf;
+        }
         char addr_buf[256];
         const char *addr_str = "<unknown>";
         const char *cached_addr = libp2p_stream_remote_addr_str(s);

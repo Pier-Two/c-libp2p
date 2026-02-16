@@ -42,8 +42,8 @@ int main(void)
     if (!pub_pb) { fprintf(stderr, "hex_to_bytes failed\n"); libp2p_peerstore_free(ps); return 1; }
 
     peer_id_t pid = {0};
-    if (peer_id_create_from_public_key(pub_pb, pub_len, &pid) != PEER_ID_SUCCESS) {
-        fprintf(stderr, "peer_id_create_from_public_key failed\n");
+    if (peer_id_new_from_public_key_pb(pub_pb, pub_len, &pid) != PEER_ID_OK) {
+        fprintf(stderr, "peer_id_new_from_public_key_pb failed\n");
         free(pub_pb); libp2p_peerstore_free(ps); return 1;
     }
 
@@ -107,14 +107,14 @@ int main(void)
 
     multiaddr_free(ma);
     free(pub_pb);
-    peer_id_destroy(&pid);
+    peer_id_free(&pid);
     libp2p_peerstore_free(ps);
 
     return failures ? 1 : 0;
 
 out_err:
     free(pub_pb);
-    peer_id_destroy(&pid);
+    peer_id_free(&pid);
     libp2p_peerstore_free(ps);
     return 1;
 }

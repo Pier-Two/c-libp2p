@@ -95,8 +95,9 @@ static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer,
 {
     if (!peer || !buffer || length == 0)
         return "-";
-    int rc = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
-    if (rc > 0)
+    size_t out_len = 0U;
+    if (peer_id_text_write(peer, PEER_ID_TEXT_LEGACY_BASE58, buffer, length, &out_len) == PEER_ID_OK &&
+        out_len > 0U)
         return buffer;
     return "-";
 }
@@ -965,9 +966,7 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
     const char *peer_repr_enq = "-";
     if (entry->peer)
     {
-        int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf_enq, sizeof(peer_buf_enq));
-        if (rc > 0)
-            peer_repr_enq = peer_buf_enq;
+        peer_repr_enq = gossipsub_peer_to_string(entry->peer, peer_buf_enq, sizeof(peer_buf_enq));
     }
 
     libp2p_log_level_t log_level = (libp2p_log_is_enabled(LIBP2P_LOG_TRACE)
@@ -1000,9 +999,7 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs,
         const char *peer_repr = "-";
         if (entry->peer)
         {
-            int rc = peer_id_to_string(entry->peer, PEER_ID_FMT_BASE58_LEGACY, peer_buf, sizeof(peer_buf));
-            if (rc > 0)
-                peer_repr = peer_buf;
+            peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
         }
 
         libp2p_gossipsub_RPC *decoded = NULL;

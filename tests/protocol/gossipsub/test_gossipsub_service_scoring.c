@@ -114,9 +114,9 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
     }
 
     if (peer_a_ok)
-        peer_id_destroy(&peer_a);
+        peer_id_free(&peer_a);
     if (peer_b_ok)
-        peer_id_destroy(&peer_b);
+        peer_id_free(&peer_b);
 
     return failures;
 }
@@ -243,7 +243,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (peer_ok)
-                peer_id_destroy(&score_peer);
+                peer_id_free(&score_peer);
         }
     
         {
@@ -379,7 +379,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
 
             if (peer_ok)
-                peer_id_destroy(&op_peer);
+                peer_id_free(&op_peer);
         }
 
         {
@@ -502,7 +502,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (peer_ok)
-                peer_id_destroy(&first_peer);
+                peer_id_free(&first_peer);
         }
     
         {
@@ -588,7 +588,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (peer_ok)
-                peer_id_destroy(&mesh_peer);
+                peer_id_free(&mesh_peer);
         }
     
         {
@@ -685,7 +685,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (peer_ok)
-                peer_id_destroy(&failure_peer);
+                peer_id_free(&failure_peer);
         }
     
         {
@@ -834,7 +834,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (peer_ok)
-                peer_id_destroy(&invalid_peer);
+                peer_id_free(&invalid_peer);
         }
     
         {
@@ -979,7 +979,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
     
             if (runtime_peer_ok)
-                peer_id_destroy(&runtime_peer);
+                peer_id_free(&runtime_peer);
         }
 
         {
@@ -1123,7 +1123,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
 
             if (peer_ok)
-                peer_id_destroy(&spam_peer);
+                peer_id_free(&spam_peer);
         }
 
         {
@@ -1230,7 +1230,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             }
 
             if (peer_ok)
-                peer_id_destroy(&promise_peer);
+                peer_id_free(&promise_peer);
         }
 
         {
@@ -1239,8 +1239,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
             const char *explicit_topic_name = "explicit/test/topic";
             peer_id_t explicit_peer = { 0 };
             peer_id_t mesh_peer = { 0 };
-            int explicit_peer_ok = (peer_id_create_from_string(explicit_peer_str, &explicit_peer) == PEER_ID_SUCCESS);
-            int mesh_peer_ok = (peer_id_create_from_string(mesh_peer_str, &mesh_peer) == PEER_ID_SUCCESS);
+            int explicit_peer_ok = (peer_id_new_from_text(explicit_peer_str, &explicit_peer) == PEER_ID_OK);
+            int mesh_peer_ok = (peer_id_new_from_text(mesh_peer_str, &mesh_peer) == PEER_ID_OK);
 
         }
 

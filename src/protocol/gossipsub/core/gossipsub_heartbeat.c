@@ -47,8 +47,9 @@ static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer,
 {
     if (!peer || !buffer || length == 0)
         return "-";
-    int rc = peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, buffer, length);
-    if (rc > 0)
+    size_t out_len = 0U;
+    if (peer_id_text_write(peer, PEER_ID_TEXT_LEGACY_BASE58, buffer, length, &out_len) == PEER_ID_OK &&
+        out_len > 0U)
         return buffer;
     return "-";
 }

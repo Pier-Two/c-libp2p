@@ -200,7 +200,7 @@ int setup_gossip_peer(libp2p_gossipsub_t *gs,
         return 0;
 
     memset(out_peer, 0, sizeof(*out_peer));
-    if (peer_id_create_from_string(peer_str, out_peer) != PEER_ID_SUCCESS)
+    if (peer_id_new_from_text(peer_str, out_peer) != PEER_ID_OK)
         return 0;
 
     uint8_t *frame = NULL;
@@ -208,7 +208,7 @@ int setup_gossip_peer(libp2p_gossipsub_t *gs,
     libp2p_err_t enc_rc = encode_subscription_rpc(topic, 1, &frame, &frame_len);
     if (enc_rc != LIBP2P_ERR_OK || !frame || frame_len == 0)
     {
-        peer_id_destroy(out_peer);
+        peer_id_free(out_peer);
         if (frame)
             free(frame);
         return 0;
@@ -218,14 +218,14 @@ int setup_gossip_peer(libp2p_gossipsub_t *gs,
     free(frame);
     if (inj_rc != LIBP2P_ERR_OK)
     {
-        peer_id_destroy(out_peer);
+        peer_id_free(out_peer);
         return 0;
     }
 
     libp2p_err_t conn_rc = libp2p_gossipsub__peer_set_connected(gs, out_peer, 1);
     if (conn_rc != LIBP2P_ERR_OK)
     {
-        peer_id_destroy(out_peer);
+        peer_id_free(out_peer);
         return 0;
     }
 
@@ -711,24 +711,24 @@ libp2p_err_t encode_signed_peer_record(const peer_id_t *peer,
     if (rc != LIBP2P_ERR_OK || !record_buf || record_len == 0)
         goto cleanup;
 
-    peer_id_error_t pb_rc = peer_id_build_public_key_protobuf(PEER_ID_ED25519_KEY_TYPE,
+    peer_id_error_t pb_rc = peer_id_build_public_key_protobuf(PEER_ID_KEY_ED25519,
                                                               pk,
                                                               sizeof(pk),
                                                               &pubkey_pb,
                                                               &pubkey_pb_len);
-    if (pb_rc != PEER_ID_SUCCESS || !pubkey_pb || pubkey_pb_len == 0)
+    if (pb_rc != PEER_ID_OK || !pubkey_pb || pubkey_pb_len == 0)
         goto cleanup;
 
     if (peer)
     {
         peer_id_t derived = { 0 };
-        if (peer_id_create_from_public_key(pubkey_pb, pubkey_pb_len, &derived) != PEER_ID_SUCCESS)
+        if (peer_id_new_from_public_key_pb(pubkey_pb, pubkey_pb_len, &derived) != PEER_ID_OK)
         {
-            peer_id_destroy(&derived);
+            peer_id_free(&derived);
             goto cleanup;
         }
-        int equal = peer_id_equals(peer, &derived);
-        peer_id_destroy(&derived);
+        int equal = peer_id_equal(peer, &derived);
+        peer_id_free(&derived);
         if (!equal)
         {
             result = LIBP2P_ERR_UNSUPPORTED;
@@ -949,7 +949,7 @@ libp2p_err_t encode_prune_rpc(const char *topic,
     {
         static const char *const px_peer_id = "12D3KooWMFFPRc3yLVaM76FUQojVKkD2VwGdMan3ZDV4SSQdlqzC";
         peer_id_t px_peer = { 0 };
-        if (peer_id_create_from_string(px_peer_id, &px_peer) == PEER_ID_SUCCESS)
+        if (peer_id_new_from_text(px_peer_id, &px_peer) == PEER_ID_OK)
         {
             libp2p_gossipsub_PeerInfo *px_info = NULL;
             noise_rc = libp2p_gossipsub_ControlPrune_add_peers(prune, &px_info);
@@ -957,7 +957,7 @@ libp2p_err_t encode_prune_rpc(const char *topic,
             {
                 noise_rc = libp2p_gossipsub_PeerInfo_set_peer_id(px_info, px_peer.bytes, px_peer.size);
             }
-            peer_id_destroy(&px_peer);
+            peer_id_free(&px_peer);
             if (noise_rc != NOISE_ERROR_NONE)
                 goto cleanup;
         }
@@ -1138,7 +1138,7 @@ void gossipsub_service_free_env(gossipsub_service_test_env_t *env)
 
     if (env->config_peer_ok)
     {
-        peer_id_destroy(&env->config_peer);
+        peer_id_free(&env->config_peer);
         env->config_peer_ok = 0;
     }
 

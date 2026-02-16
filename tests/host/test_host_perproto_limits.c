@@ -42,27 +42,27 @@ int main(void)
     /* First admit should pass */
     int rc1 = libp2p_rsrc_admit_stream(host, &p1, TEST_PROTO_ID, 0);
     print_case("admit first inbound", rc1 == 0);
-    if (rc1 != 0) { peer_id_destroy(&p1); peer_id_destroy(&p2); libp2p_host_free(host); return 1; }
+    if (rc1 != 0) { peer_id_free(&p1); peer_id_free(&p2); libp2p_host_free(host); return 1; }
 
     /* Second admit for same peer should fail (per-peer limit = 1) */
     int rc2 = libp2p_rsrc_admit_stream(host, &p1, TEST_PROTO_ID, 0);
     print_case("deny second inbound same peer", rc2 != 0);
-    if (rc2 == 0) { libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); peer_id_destroy(&p1); peer_id_destroy(&p2); libp2p_host_free(host); return 1; }
+    if (rc2 == 0) { libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); peer_id_free(&p1); peer_id_free(&p2); libp2p_host_free(host); return 1; }
 
     /* Second admit from different peer should fail (total cap = 1) */
     int rc3 = libp2p_rsrc_admit_stream(host, &p2, TEST_PROTO_ID, 0);
     print_case("deny second inbound different peer due to total cap", rc3 != 0);
-    if (rc3 == 0) { libp2p_rsrc_release_stream(host, &p2, TEST_PROTO_ID, 0); libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); peer_id_destroy(&p1); peer_id_destroy(&p2); libp2p_host_free(host); return 1; }
+    if (rc3 == 0) { libp2p_rsrc_release_stream(host, &p2, TEST_PROTO_ID, 0); libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0); peer_id_free(&p1); peer_id_free(&p2); libp2p_host_free(host); return 1; }
 
     /* Release first, then admit from peer2 should succeed */
     libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0);
     int rc4 = libp2p_rsrc_admit_stream(host, &p2, TEST_PROTO_ID, 0);
     print_case("admit after release from another peer", rc4 == 0);
-    if (rc4 != 0) { peer_id_destroy(&p1); peer_id_destroy(&p2); libp2p_host_free(host); return 1; }
+    if (rc4 != 0) { peer_id_free(&p1); peer_id_free(&p2); libp2p_host_free(host); return 1; }
 
     /* Cleanup */
     libp2p_rsrc_release_stream(host, &p2, TEST_PROTO_ID, 0);
-    peer_id_destroy(&p1); peer_id_destroy(&p2);
+    peer_id_free(&p1); peer_id_free(&p2);
     libp2p_host_free(host);
     return 0;
 }

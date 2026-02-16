@@ -93,13 +93,13 @@ int main(void)
 
     /* Identify controller */
     libp2p_identify_service_t *ids = NULL; libp2p_identify_opts_t opts = { .struct_size = sizeof(opts) };
-    if (libp2p_identify_new(ha, &opts, &ids) != 0 || !ids) { peer_id_destroy(pidB); free(pidB); return 1; }
+    if (libp2p_identify_new(ha, &opts, &ids) != 0 || !ids) { peer_id_free(pidB); free(pidB); return 1; }
 
     protocols_update_waiter_t proto_waiter;
     if (!protocols_update_waiter_start(&proto_waiter, ha, pidB, "[TEST_CTRL]"))
     {
         libp2p_identify_ctrl_free(ids);
-        peer_id_destroy(pidB); free(pidB);
+        peer_id_free(pidB); free(pidB);
         libp2p_host_stop(ha); libp2p_host_stop(hb);
         libp2p_host_free(ha); libp2p_host_free(hb);
         return 1;
@@ -136,7 +136,7 @@ int main(void)
 
     libp2p_host_free_peer_protocols(protos, n);
     libp2p_identify_ctrl_free(ids);
-    peer_id_destroy(pidB); free(pidB);
+    peer_id_free(pidB); free(pidB);
     libp2p_host_stop(ha); libp2p_host_stop(hb);
     libp2p_host_free(ha); libp2p_host_free(hb);
     return ok ? 0 : 1;

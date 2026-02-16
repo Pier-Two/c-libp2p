@@ -147,7 +147,7 @@ static void server_on_open(libp2p_stream_t *s, void *user_data)
     if (!ctx || !s)
         return;
     const peer_id_t *remote = libp2p_stream_remote_peer(s);
-    if (ctx->expected_remote && remote && peer_id_equals(remote, ctx->expected_remote) == 1)
+    if (ctx->expected_remote && remote && peer_id_equal(remote, ctx->expected_remote) == 1)
         atomic_store_explicit(&ctx->open_seen, 1, memory_order_release);
 }
 
@@ -258,7 +258,7 @@ int main(void)
     fprintf(stderr, "[test] stream opened events observed\n");
 
     const peer_id_t *remote = libp2p_stream_remote_peer(stream);
-    if (!remote || peer_id_equals(remote, server_peer) != 1)
+    if (!remote || peer_id_equal(remote, server_peer) != 1)
         goto cleanup;
     fprintf(stderr, "[test] remote peer verified\n");
 
@@ -311,12 +311,12 @@ cleanup:
     }
     if (client_peer)
     {
-        peer_id_destroy(client_peer);
+        peer_id_free(client_peer);
         free(client_peer);
     }
     if (server_peer)
     {
-        peer_id_destroy(server_peer);
+        peer_id_free(server_peer);
         free(server_peer);
     }
     if (client)

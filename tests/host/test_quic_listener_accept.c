@@ -171,7 +171,7 @@ int main(void)
     }
 
     peer_id_t expected_peer = {0};
-    if (peer_id_create_from_string("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", &expected_peer) != PEER_ID_SUCCESS)
+    if (peer_id_new_from_text("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", &expected_peer) != PEER_ID_OK)
     {
         multiaddr_free(local_addr);
         multiaddr_free(remote_addr);
@@ -184,7 +184,7 @@ int main(void)
     peer_id_t *conn_peer = (peer_id_t *)calloc(1, sizeof(*conn_peer));
     if (!conn_peer)
     {
-        peer_id_destroy(&expected_peer);
+        peer_id_free(&expected_peer);
         multiaddr_free(local_addr);
         multiaddr_free(remote_addr);
         free(session);
@@ -192,9 +192,9 @@ int main(void)
         libp2p_host_free(host);
         return 1;
     }
-    if (peer_id_create_from_string("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", conn_peer) != PEER_ID_SUCCESS)
+    if (peer_id_new_from_text("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", conn_peer) != PEER_ID_OK)
     {
-        peer_id_destroy(&expected_peer);
+        peer_id_free(&expected_peer);
         free(conn_peer);
         multiaddr_free(local_addr);
         multiaddr_free(remote_addr);
@@ -207,7 +207,7 @@ int main(void)
     libp2p_conn_t *conn = libp2p_quic_conn_new(local_addr, remote_addr, session, stub_session_close, stub_session_free, conn_peer);
     if (!conn)
     {
-        peer_id_destroy(&expected_peer);
+        peer_id_free(&expected_peer);
         multiaddr_free(local_addr);
         multiaddr_free(remote_addr);
         libp2p__host_set_quic_muxer_factory(NULL);
@@ -221,7 +221,7 @@ int main(void)
     if (!ok || !uc)
     {
         libp2p_conn_free(conn);
-        peer_id_destroy(&expected_peer);
+        peer_id_free(&expected_peer);
         multiaddr_free(remote_addr);
         libp2p__host_set_quic_muxer_factory(NULL);
         libp2p_host_free(host);
@@ -237,14 +237,14 @@ int main(void)
     ok &= check(uc->remote_peer != NULL, "uconn remote peer set");
     if (uc->remote_peer)
     {
-        ok &= check(peer_id_equals(uc->remote_peer, &expected_peer) == 1, "remote peer matches expectation");
+        ok &= check(peer_id_equal(uc->remote_peer, &expected_peer) == 1, "remote peer matches expectation");
     }
 
     ok &= check(uc->conn == conn, "uconn wraps original connection");
     ok &= check(uc->muxer != NULL, "uconn muxer created");
 
     libp2p_muxer_free((libp2p_muxer_t *)uc->muxer);
-    peer_id_destroy(uc->remote_peer);
+    peer_id_free(uc->remote_peer);
     free(uc->remote_peer);
     free(uc);
     libp2p_conn_free(conn);
@@ -256,7 +256,7 @@ int main(void)
     ok &= check(stub_muxer_free_called == 1, "muxer free called once");
     ok &= check(session_free_called == 1, "session free invoked");
 
-    peer_id_destroy(&expected_peer);
+    peer_id_free(&expected_peer);
     libp2p__host_set_quic_muxer_factory(NULL);
     libp2p_host_free(host);
     return ok ? 0 : 1;

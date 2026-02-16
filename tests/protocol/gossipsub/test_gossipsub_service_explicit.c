@@ -14,8 +14,8 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
     const char *explicit_topic_name = "explicit/test/topic";
     peer_id_t explicit_peer = { 0 };
     peer_id_t mesh_peer = { 0 };
-    int explicit_peer_ok = (peer_id_create_from_string(explicit_peer_str, &explicit_peer) == PEER_ID_SUCCESS);
-    int mesh_peer_ok = (peer_id_create_from_string(mesh_peer_str, &mesh_peer) == PEER_ID_SUCCESS);
+    int explicit_peer_ok = (peer_id_new_from_text(explicit_peer_str, &explicit_peer) == PEER_ID_OK);
+    int mesh_peer_ok = (peer_id_new_from_text(mesh_peer_str, &mesh_peer) == PEER_ID_OK);
     print_result("gossipsub_explicit_peer_id", explicit_peer_ok);
     if (!explicit_peer_ok)
         failures++;
@@ -191,9 +191,9 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
     }
 
     if (explicit_peer_ok)
-        peer_id_destroy(&explicit_peer);
+        peer_id_free(&explicit_peer);
     if (mesh_peer_ok)
-        peer_id_destroy(&mesh_peer);
+        peer_id_free(&mesh_peer);
 
     return failures;
 }

@@ -50,7 +50,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 
     const char *config_peer_str = "12D3KooWL9qw9QdCsiPUQXGWxZhwivKar35CFYuU9B9kavHuV2XZ";
     peer_id_t config_peer = { 0 };
-    int config_peer_ok = (peer_id_create_from_string(config_peer_str, &config_peer) == PEER_ID_SUCCESS);
+    int config_peer_ok = (peer_id_new_from_text(config_peer_str, &config_peer) == PEER_ID_OK);
     print_result("gossipsub_explicit_config_peer_id", config_peer_ok);
     if (!config_peer_ok)
     {
@@ -305,7 +305,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 
         const char *test_peer_str = "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E";
         peer_id_t self_peer = { 0 };
-        int peer_ok = (peer_id_create_from_string(test_peer_str, &self_peer) == PEER_ID_SUCCESS);
+        int peer_ok = (peer_id_new_from_text(test_peer_str, &self_peer) == PEER_ID_OK);
         libp2p_err_t enc_err = LIBP2P_ERR_INTERNAL;
         libp2p_err_t inj_err = LIBP2P_ERR_INTERNAL;
 
@@ -366,7 +366,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
             failures++;
 
         if (peer_ok)
-            peer_id_destroy(&self_peer);
+            peer_id_free(&self_peer);
     }
     else
     {

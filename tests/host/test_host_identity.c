@@ -46,8 +46,8 @@ int main(void)
     if (rc != 0) { free(sk); libp2p_host_free(host); return 1; }
 
     peer_id_t expected = {0};
-    if (peer_id_create_from_private_key(sk, sk_len, &expected) != PEER_ID_SUCCESS) {
-        fprintf(stderr, "peer_id_create_from_private_key failed\n");
+    if (peer_id_new_from_private_key_pb(sk, sk_len, &expected) != PEER_ID_OK) {
+        fprintf(stderr, "peer_id_new_from_private_key_pb failed\n");
         free(sk); libp2p_host_free(host); return 1;
     }
 
@@ -58,13 +58,13 @@ int main(void)
     if (!ok) failures++;
 
     if (ok) {
-        int eq = peer_id_equals(&expected, got);
+        int eq = peer_id_equal(&expected, got);
         print_result("host_peer_id_matches_expected", eq == 1);
         if (eq != 1) failures++;
     }
 
-    if (got) { peer_id_destroy(got); free(got); }
-    peer_id_destroy(&expected);
+    if (got) { peer_id_free(got); free(got); }
+    peer_id_free(&expected);
     free(sk);
     libp2p_host_free(host);
     return failures ? 1 : 0;

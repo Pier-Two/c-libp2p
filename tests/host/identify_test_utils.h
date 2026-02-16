@@ -54,7 +54,7 @@ static void protocols_update_cb(const libp2p_event_t *evt, void *ud)
     if (w->expected)
     {
         const peer_id_t *peer = evt->u.peer_protocols_updated.peer;
-        if (!peer || peer_id_equals(peer, w->expected) != 1)
+        if (!peer || peer_id_equal(peer, w->expected) != 1)
             return;
     }
 

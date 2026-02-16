@@ -13,7 +13,7 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
         const char *subscription_peer_str = "12D3KooWFnNMhkbi8d4Ryh5UCnmAeUXUQCA2PMAMFLyLLKkR6aom";
         const char *subscription_topic = "test/topic";
         peer_id_t subscription_peer = { 0 };
-        int sub_peer_ok = (peer_id_create_from_string(subscription_peer_str, &subscription_peer) == PEER_ID_SUCCESS);
+        int sub_peer_ok = (peer_id_new_from_text(subscription_peer_str, &subscription_peer) == PEER_ID_OK);
         print_result("gossipsub_subscription_peer_id", sub_peer_ok);
         if (!sub_peer_ok)
             failures++;
@@ -92,7 +92,7 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
             failures++;
 
         if (sub_peer_ok)
-            peer_id_destroy(&subscription_peer);
+            peer_id_free(&subscription_peer);
     }
 
     {
@@ -100,8 +100,8 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
         const char *peer2_str = "12D3KooWN9oSkqZSS7Y7gsnAmfmNgmcByKYEzGyv1mCXN8vQiyTe";
         peer_id_t mesh_peer1 = { 0 };
         peer_id_t mesh_peer2 = { 0 };
-        int peer1_ok = (peer_id_create_from_string(peer1_str, &mesh_peer1) == PEER_ID_SUCCESS);
-        int peer2_ok = (peer_id_create_from_string(peer2_str, &mesh_peer2) == PEER_ID_SUCCESS);
+        int peer1_ok = (peer_id_new_from_text(peer1_str, &mesh_peer1) == PEER_ID_OK);
+        int peer2_ok = (peer_id_new_from_text(peer2_str, &mesh_peer2) == PEER_ID_OK);
         int mesh_ids_ok = peer1_ok && peer2_ok;
         print_result("gossipsub_mesh_peer_ids_created", mesh_ids_ok);
         if (!mesh_ids_ok)
@@ -165,15 +165,15 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
         }
 
         if (peer1_ok)
-            peer_id_destroy(&mesh_peer1);
+            peer_id_free(&mesh_peer1);
         if (peer2_ok)
-            peer_id_destroy(&mesh_peer2);
+            peer_id_free(&mesh_peer2);
     }
 
     {
         const char *fanout_peer_str = "12D3KooWJMCZpZGsGWpRieyU7gnaNmJKbnHiKK4xqSSdoRRt9P5r";
         peer_id_t fanout_peer = { 0 };
-        int fanout_peer_ok = (peer_id_create_from_string(fanout_peer_str, &fanout_peer) == PEER_ID_SUCCESS);
+        int fanout_peer_ok = (peer_id_new_from_text(fanout_peer_str, &fanout_peer) == PEER_ID_OK);
         print_result("gossipsub_fanout_peer_id_created", fanout_peer_ok);
         if (!fanout_peer_ok)
             failures++;
@@ -215,7 +215,7 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
         }
 
         if (fanout_peer_ok)
-            peer_id_destroy(&fanout_peer);
+            peer_id_free(&fanout_peer);
     }
 
     return failures;

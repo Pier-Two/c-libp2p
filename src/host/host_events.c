@@ -141,7 +141,8 @@ void libp2p__notify_peer_protocols_updated(libp2p_host_t *host, const peer_id_t 
     evt.u.peer_protocols_updated.num_protocols = list_len;
 
     char pid_buf[128];
-    if (peer_id_to_string(peer, PEER_ID_FMT_BASE58_LEGACY, pid_buf, sizeof(pid_buf)) < 0)
+    size_t pid_len = 0U;
+    if (peer_id_text_write(peer, PEER_ID_TEXT_LEGACY_BASE58, pid_buf, sizeof(pid_buf), &pid_len) != PEER_ID_OK)
         snprintf(pid_buf, sizeof(pid_buf), "<unknown>");
     LIBP2P_TRACE("idpush", "event peer protocols updated peer=%s count=%zu", pid_buf, list_len);
     libp2p_event_publish(host, &evt);

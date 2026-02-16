@@ -42,14 +42,14 @@ Identify is disabled—use the controller in `include/libp2p/identify.h`:
 libp2p_identify_service_t *identify = NULL;
 libp2p_identify_new(host, NULL, &identify);
 
-peer_id_t peer = {0};
-peer_id_create_from_string("12D3KooW...", &peer);  /* replace with the target id */
+peer_id_t *peer = NULL;
+peer_id_new_from_text("12D3KooW...", &peer);  /* replace with the target id */
 
-if (libp2p_identify_request(identify, &peer) == 0) {
+if (peer != NULL && libp2p_identify_request(identify, peer) == 0) {
     /* peerstore now holds the fresh metadata */
 }
 
-peer_id_destroy(&peer);
+peer_id_free(peer);
 libp2p_identify_ctrl_free(identify);
 ```
 

@@ -195,13 +195,15 @@ static void expect_peer_id(const char *name,
                   "public key missing (len=%zu)", ident.public_key_len);
 
         char buf[128] = {0};
-        int str_rc = peer_id_to_string(ident.peer, PEER_ID_FMT_BASE58_LEGACY, buf, sizeof(buf));
+        size_t str_len = 0U;
+        peer_id_error_t str_err =
+            peer_id_text_write(ident.peer, PEER_ID_TEXT_LEGACY_BASE58, buf, sizeof(buf), &str_len);
         snprintf(label, sizeof(label), "%s (peer id encode)", name);
-        TEST_TRUE(label, str_rc > 0 && (size_t)str_rc < sizeof(buf),
-                  "peer_id_to_string rc=%d", str_rc);
-        if (str_rc > 0 && (size_t)str_rc < sizeof(buf))
+        TEST_TRUE(label, str_err == PEER_ID_OK && str_len > 0U && str_len < sizeof(buf),
+                  "peer_id_text_write err=%d", (int)str_err);
+        if (str_err == PEER_ID_OK && str_len > 0U && str_len < sizeof(buf))
         {
-            buf[str_rc] = '\0';
+            buf[str_len] = '\0';
             snprintf(label, sizeof(label), "%s (peer id match)", name);
             TEST_TRUE(label, strcmp(buf, expected_peer) == 0,
                       "expected %s, got %s", expected_peer, buf);

@@ -96,9 +96,9 @@ int main(void)
         libp2p_host_free(host);
         return 1;
     }
-    if (peer_id_create_from_string("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", conn_peer) != PEER_ID_SUCCESS)
+    if (peer_id_new_from_text("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", conn_peer) != PEER_ID_OK)
     {
-        peer_id_destroy(conn_peer);
+        peer_id_free(conn_peer);
         free(conn_peer);
         free(session);
         libp2p_host_free(host);
@@ -114,7 +114,7 @@ int main(void)
     if (!conn)
     {
         libp2p__host_set_quic_muxer_factory(NULL);
-        peer_id_destroy(conn_peer);
+        peer_id_free(conn_peer);
         free(conn_peer);
         free(session);
         libp2p_host_free(host);

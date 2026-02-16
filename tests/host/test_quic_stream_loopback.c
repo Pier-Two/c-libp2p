@@ -558,7 +558,7 @@ int main(void)
 
     {
         const peer_id_t *remote_peer = libp2p_stream_remote_peer(base_stream);
-        if (!remote_peer || peer_id_equals(remote_peer, expected_server_peer) != 1)
+        if (!remote_peer || peer_id_equal(remote_peer, expected_server_peer) != 1)
         {
             ok = 0;
             goto cleanup;
@@ -665,7 +665,7 @@ cleanup:
     libp2p_quic_tls_certificate_clear(&server_cert);
     if (expected_server_peer)
     {
-        peer_id_destroy(expected_server_peer);
+        peer_id_free(expected_server_peer);
         free(expected_server_peer);
     }
 

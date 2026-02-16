@@ -10,7 +10,7 @@ static ping_count_entry_t *find_entry(const libp2p_host_t *host, const peer_id_t
     ping_count_entry_t *it = host->ping_counts;
     while (it)
     {
-        if (peer_id_equals(&it->key, peer) == 1)
+        if (peer_id_equal(&it->key, peer) == 1)
             return it;
         it = it->next;
     }
@@ -90,7 +90,7 @@ void libp2p__ping_counts_dec(libp2p_host_t *host, const peer_id_t *peer, int out
                 if (*pp == e)
                 {
                     *pp = e->next;
-                    peer_id_destroy(&e->key);
+                    peer_id_free(&e->key);
                     free(e);
                     e = NULL;
                     break;
@@ -110,7 +110,7 @@ void libp2p__ping_counts_free(libp2p_host_t *host)
     while (it)
     {
         ping_count_entry_t *next = it->next;
-        peer_id_destroy(&it->key);
+        peer_id_free(&it->key);
         free(it);
         it = next;
     }
