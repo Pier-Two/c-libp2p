@@ -1,58 +1,86 @@
-#include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
+#include "multiformats/multihash/multihash.h"
 #include "peer_id/peer_id.h"
-#include "peer_id/peer_id_secp256k1.h"
-#include "peer_id/peer_id_ed25519.h"
-#include "peer_id/peer_id_ecdsa.h"
-#include "peer_id/peer_id_rsa.h"
 
-/* Helper function to print test results. */
-static void print_standard(const char *test_name, const char *details, int passed)
+static int g_failures = 0;
+
+static void print_standard(const char *name, const char *details, int passed)
 {
-	if (passed)
+	if (passed != 0)
 	{
-		printf("TEST: %-50s | PASS\n", test_name);
+		printf("TEST: %-56s | PASS\n", name);
 	}
 	else
 	{
-		printf("TEST: %-50s | FAIL: %s\n", test_name, details);
+		printf("TEST: %-56s | FAIL: %s\n", name, details);
+		++g_failures;
 	}
 }
 
-/* Helper function: convert a hex string to a byte array.
-   The caller must free the returned array.
-*/
+static void test_ok(const char *name, int cond, const char *details)
+{
+	print_standard(name, details, cond);
+}
+
 static uint8_t *hex_to_bytes(const char *hex, size_t *out_len)
 {
-	size_t hex_len = strlen(hex);
-	if (hex_len % 2 != 0)
+	size_t hex_len;
+	size_t bytes_len;
+	size_t i;
+	uint8_t *bytes;
+
+	if ((hex == NULL) || (out_len == NULL))
 	{
 		return NULL;
 	}
-	size_t bytes_len = hex_len / 2;
-	uint8_t *bytes = malloc(bytes_len);
-	if (!bytes)
+
+	hex_len = strlen(hex);
+	if ((hex_len % (size_t)2U) != (size_t)0U)
 	{
 		return NULL;
 	}
-	for (size_t i = 0; i < bytes_len; i++)
+
+	bytes_len = hex_len / (size_t)2U;
+	bytes = (uint8_t *)malloc(bytes_len);
+	if (bytes == NULL)
 	{
-		char byte_str[3] = {hex[i * 2], hex[i * 2 + 1], '\0'};
-		bytes[i] = (uint8_t)strtol(byte_str, NULL, 16);
+		return NULL;
 	}
+
+	for (i = (size_t)0U; i < bytes_len; ++i)
+	{
+		char byte_str[3];
+
+		byte_str[0] = hex[i * 2U];
+		byte_str[1] = hex[i * 2U + 1U];
+		byte_str[2] = '\0';
+		bytes[i] = (uint8_t)strtoul(byte_str, NULL, 16);
+	}
+
 	*out_len = bytes_len;
 	return bytes;
 }
 
-/* Test vectors (hex-encoded) for secp256k1 keys from the spec */
 #define SECP256K1_PUBLIC_HEX "08021221037777e994e452c21604f91de093ce415f5432f701dd8cd1a7a6fea0e630bfca99"
 #define SECP256K1_PRIVATE_HEX "0802122053DADF1D5A164D6B4ACDB15E24AA4C5B1D3461BDBD42ABEDB0A4404D56CED8FB"
 
-/* Test vectors (hex-encoded) for RSA keys from the spec */
+#define RSA_PUBLIC_HEX                                                                                                 \
+	"080012a60430820222300d06092a864886f70d01010105000382020f003082020a0282020100e1beab071d08200bde24eef00d049449" \
+	"b07770ff9910257b2d7d5dda242ce8f0e2f12e1af4b32d9efd2c090f66b0f29986dbb645dae9880089704a94e5066d594162ae6ee889" \
+	"2e6ec70701db0a6c445c04778eb3de1293aa1a23c3825b85c6620a2bc3f82f9b0c309bc0ab3aeb1873282bebd3da03c33e76c21e9beb" \
+	"172fd44c9e43be32e2c99827033cf8d0f0c606f4579326c930eb4e854395ad941256542c793902185153c474bed109d6ff5141ebf9cd" \
+	"256cf58893a37f83729f97e7cb435ec679d2e33901d27bb35aa0d7e20561da08885ef0abbf8e2fb48d6a5487047a9ecb1ad41fa7ed84" \
+	"f6e3e8ecd5d98b3982d2a901b4454991766da295ab78822add5612a2df83bcee814cf50973e80d7ef38111b1bd87da2ae92438a2c8cb" \
+	"cc70b31ee319939a3b9c761dbc13b5c086d6b64bf7ae7dacc14622375d92a8ff9af7eb962162bbddebf90acb32adb5e4e4029f1c9601" \
+	"9949ecfbfeffd7ac1e3fbcc6b6168c34be3d5a2e5999fcbb39bba7adbca78eab09b9bc39f7fa4b93411f4cc175e70c0a083e96bfaefb" \
+	"04a9580b4753c1738a6a760ae1afd851a1a4bdad231cf56e9284d832483df215a46c1c21bdf0c6cfe951c18f1ee4078c79c13d63edb6" \
+	"e14feaeffabc90ad317e4875fe648101b0864097e998f0ca3025ef9638cd2b0caecd3770ab54a1d9c6ca959b0f5dcbc90caeefc4135b" \
+	"aca6fd475224269bbe1b0203010001"
+
 #define RSA_PRIVATE_HEX                                                                                                \
 	"080012ae123082092a0201000282020100e1beab071d08200bde24eef00d049449b07770ff9910257b2d7d5dda242ce8f0e2f12e1af4" \
 	"b32d9efd2c090f66b0f29986dbb645dae9880089704a94e5066d594162ae6ee8892e6ec70701db0a6c445c04778eb3de1293aa1a23c3" \
@@ -98,26 +126,12 @@ static uint8_t *hex_to_bytes(const char *hex, size_t *out_len)
 	"5d46c2b013fbf59b750c3b92d8d3ed9e6d1fd0ef1ec091a5c286a3fe2dead292f40f380065731e2079ebb9f2a7ef2c415ecbb488da98" \
 	"f3a12609ca1b6ec8c734032c8bd513292ff842c375d4acd1b02dfb206b24cd815f8e2f9d4af8e7dea0370b19c1b23cc531d78b40e06e" \
 	"1119ee2e08f6f31c6e2e8444c568d13c5d451a291ae0c9f1d4f27d23b3a00d60ad"
-#define RSA_PUBLIC_HEX                                                                                                 \
-	"080012a60430820222300d06092a864886f70d01010105000382020f003082020a0282020100e1beab071d08200bde24eef00d049449" \
-	"b07770ff9910257b2d7d5dda242ce8f0e2f12e1af4b32d9efd2c090f66b0f29986dbb645dae9880089704a94e5066d594162ae6ee889" \
-	"2e6ec70701db0a6c445c04778eb3de1293aa1a23c3825b85c6620a2bc3f82f9b0c309bc0ab3aeb1873282bebd3da03c33e76c21e9beb" \
-	"172fd44c9e43be32e2c99827033cf8d0f0c606f4579326c930eb4e854395ad941256542c793902185153c474bed109d6ff5141ebf9cd" \
-	"256cf58893a37f83729f97e7cb435ec679d2e33901d27bb35aa0d7e20561da08885ef0abbf8e2fb48d6a5487047a9ecb1ad41fa7ed84" \
-	"f6e3e8ecd5d98b3982d2a901b4454991766da295ab78822add5612a2df83bcee814cf50973e80d7ef38111b1bd87da2ae92438a2c8cb" \
-	"cc70b31ee319939a3b9c761dbc13b5c086d6b64bf7ae7dacc14622375d92a8ff9af7eb962162bbddebf90acb32adb5e4e4029f1c9601" \
-	"9949ecfbfeffd7ac1e3fbcc6b6168c34be3d5a2e5999fcbb39bba7adbca78eab09b9bc39f7fa4b93411f4cc175e70c0a083e96bfaefb" \
-	"04a9580b4753c1738a6a760ae1afd851a1a4bdad231cf56e9284d832483df215a46c1c21bdf0c6cfe951c18f1ee4078c79c13d63edb6" \
-	"e14feaeffabc90ad317e4875fe648101b0864097e998f0ca3025ef9638cd2b0caecd3770ab54a1d9c6ca959b0f5dcbc90caeefc4135b" \
-	"aca6fd475224269bbe1b0203010001"
 
-/* Test vectors (hex-encoded) for ED25519 keys from the spec */
 #define ED25519_PRIVATE_HEX                                                                                            \
 	"080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf3d3b34b" \
 	"871c3cacf6010f0e42d474fce27e"
 #define ED25519_PUBLIC_HEX "080112201ed1e8fae2c4a144b8be8fd4b47bf3d3b34b871c3cacf6010f0e42d474fce27e"
 
-/* New test vectors (hex-encoded) for ECDSA keys from the spec */
 #define ECDSA_PRIVATE_HEX                                                                                              \
 	"08031279307702010104203E5B1FE9712E6C314942A750BD67485DE3C1EFE85B1BFB520AE8F9AE3DFA4A4CA00A06082A8648CE3D0301" \
 	"07A14403420004DE3D300FA36AE0E8F5D530899D83ABAB44ABF3161F162A4BC901D8E6ECDA020E8B6D5F8DA30525E71D6851510C098E" \
@@ -126,277 +140,303 @@ static uint8_t *hex_to_bytes(const char *hex, size_t *out_len)
 	"0803125b3059301306072a8648ce3d020106082a8648ce3d03010703420004de3d300fa36ae0e8f5d530899d83abab44abf3161f162a" \
 	"4bc901d8e6ecda020e8b6d5f8da30525e71d6851510c098e5c47c646a597fb4dcec034e9f77c409e62"
 
-typedef struct
+typedef struct peer_key_vector
 {
 	const char *name;
 	const char *public_hex;
 	const char *private_hex;
 } peer_key_vector_t;
 
-static int g_failures = 0;
-
-static void report_result(const char *test_name, int passed, const char *details)
+static peer_id_error_t pid_from_public_hex(const char *hex, peer_id_t **out)
 {
-	if (passed != 0)
+	size_t len;
+	uint8_t *bytes;
+	peer_id_error_t rc;
+
+	len = (size_t)0U;
+	bytes = hex_to_bytes(hex, &len);
+	if (bytes == NULL)
 	{
-		print_standard(test_name, "", 1);
+		return PEER_ID_ERR_ALLOC;
 	}
-	else
-	{
-		++g_failures;
-		print_standard(test_name, details, 0);
-	}
+
+	rc = peer_id_new_from_public_key_pb(bytes, len, out);
+	free(bytes);
+	return rc;
 }
 
-static peer_id_error_t peer_id_from_public_hex(const char *hex, peer_id_t *out)
+static peer_id_error_t pid_from_private_hex(const char *hex, peer_id_t **out)
 {
-	peer_id_error_t status;
-	size_t key_len;
-	uint8_t *key_bytes;
+	size_t len;
+	uint8_t *bytes;
+	peer_id_error_t rc;
 
-	status = PEER_ID_E_ALLOC_FAILED;
-	key_len = 0U;
-	key_bytes = hex_to_bytes(hex, &key_len);
-	if (key_bytes != NULL)
+	len = (size_t)0U;
+	bytes = hex_to_bytes(hex, &len);
+	if (bytes == NULL)
 	{
-		status = peer_id_create_from_public_key(key_bytes, key_len, out);
-		free(key_bytes);
+		return PEER_ID_ERR_ALLOC;
 	}
 
-	return status;
+	rc = peer_id_new_from_private_key_pb(bytes, len, out);
+	free(bytes);
+	return rc;
 }
 
-static peer_id_error_t peer_id_from_private_hex(const char *hex, peer_id_t *out)
+static void run_vector_roundtrip(const peer_key_vector_t *v)
 {
-	peer_id_error_t status;
-	size_t key_len;
-	uint8_t *key_bytes;
-
-	status = PEER_ID_E_ALLOC_FAILED;
-	key_len = 0U;
-	key_bytes = hex_to_bytes(hex, &key_len);
-	if (key_bytes != NULL)
-	{
-		status = peer_id_create_from_private_key(key_bytes, key_len, out);
-		free(key_bytes);
-	}
-
-	return status;
-}
-
-static void run_round_trip_vector(const peer_key_vector_t *vector)
-{
+	char name[128];
 	char legacy[512];
 	char cid[512];
-	char test_name[128];
-	peer_id_t from_public;
-	peer_id_t from_private;
-	peer_id_t from_legacy;
-	peer_id_t from_cid;
-	peer_id_error_t status;
-	int rc;
+	size_t out_len;
+	peer_id_t *from_pub;
+	peer_id_t *from_priv;
+	peer_id_t *from_legacy;
+	peer_id_t *from_cid;
+	peer_id_error_t rc;
 
-	from_public.bytes = NULL;
-	from_public.size = 0U;
-	from_private.bytes = NULL;
-	from_private.size = 0U;
-	from_legacy.bytes = NULL;
-	from_legacy.size = 0U;
-	from_cid.bytes = NULL;
-	from_cid.size = 0U;
+	out_len = (size_t)0U;
+	from_pub = NULL;
+	from_priv = NULL;
+	from_legacy = NULL;
+	from_cid = NULL;
 
-	snprintf(test_name, sizeof(test_name), "%s create from public", vector->name);
-	status = peer_id_from_public_hex(vector->public_hex, &from_public);
-	report_result(test_name, status == PEER_ID_SUCCESS, "peer_id_create_from_public_key failed");
-	if (status != PEER_ID_SUCCESS)
+	snprintf(name, sizeof(name), "%s: from public", v->name);
+	rc = pid_from_public_hex(v->public_hex, &from_pub);
+	test_ok(name, rc == PEER_ID_OK, "peer_id_new_from_public_key_pb failed");
+	if (rc != PEER_ID_OK)
 	{
 		goto cleanup;
 	}
 
-	snprintf(test_name, sizeof(test_name), "%s create from private", vector->name);
-	status = peer_id_from_private_hex(vector->private_hex, &from_private);
-	report_result(test_name, status == PEER_ID_SUCCESS, "peer_id_create_from_private_key failed");
-	if (status != PEER_ID_SUCCESS)
+	snprintf(name, sizeof(name), "%s: from private", v->name);
+	rc = pid_from_private_hex(v->private_hex, &from_priv);
+	test_ok(name, rc == PEER_ID_OK, "peer_id_new_from_private_key_pb failed");
+	if (rc != PEER_ID_OK)
 	{
 		goto cleanup;
 	}
 
-	snprintf(test_name, sizeof(test_name), "%s private/public equality", vector->name);
-	report_result(test_name, peer_id_equals(&from_public, &from_private) == 1, "derived peer IDs differ");
+	snprintf(name, sizeof(name), "%s: pub/private equal", v->name);
+	test_ok(name, peer_id_equal(from_pub, from_priv) == 1, "derived peer ids differ");
 
-	snprintf(test_name, sizeof(test_name), "%s to legacy string", vector->name);
-	rc = peer_id_to_string(&from_public, PEER_ID_FMT_BASE58_LEGACY, legacy, sizeof(legacy));
-	report_result(test_name, rc > 0, "peer_id_to_string legacy failed");
-	if (rc <= 0)
+	snprintf(name, sizeof(name), "%s: legacy write", v->name);
+	rc = peer_id_text_write(from_pub, PEER_ID_TEXT_LEGACY_BASE58, legacy, sizeof(legacy), &out_len);
+	test_ok(name, (rc == PEER_ID_OK) && (out_len > 0U), "legacy write failed");
+	if (rc != PEER_ID_OK)
 	{
 		goto cleanup;
 	}
 
-	snprintf(test_name, sizeof(test_name), "%s parse legacy string", vector->name);
-	status = peer_id_create_from_string(legacy, &from_legacy);
-	report_result(test_name, status == PEER_ID_SUCCESS, "peer_id_create_from_string legacy failed");
-	if (status == PEER_ID_SUCCESS)
+	snprintf(name, sizeof(name), "%s: parse legacy", v->name);
+	rc = peer_id_new_from_text(legacy, &from_legacy);
+	test_ok(name, rc == PEER_ID_OK, "legacy parse failed");
+	if (rc == PEER_ID_OK)
 	{
-		snprintf(test_name, sizeof(test_name), "%s legacy round trip equals", vector->name);
-		report_result(test_name, peer_id_equals(&from_public, &from_legacy) == 1,
-			      "legacy parse differs from original");
+		snprintf(name, sizeof(name), "%s: legacy roundtrip equal", v->name);
+		test_ok(name, peer_id_equal(from_pub, from_legacy) == 1, "legacy roundtrip mismatch");
 	}
 
-	snprintf(test_name, sizeof(test_name), "%s to cid string", vector->name);
-	rc = peer_id_to_string(&from_public, PEER_ID_FMT_MULTIBASE_CIDv1, cid, sizeof(cid));
-	report_result(test_name, rc > 0, "peer_id_to_string cid failed");
-	if (rc <= 0)
+	snprintf(name, sizeof(name), "%s: cid write", v->name);
+	rc = peer_id_text_write(from_pub, PEER_ID_TEXT_CIDV1_BASE32, cid, sizeof(cid), &out_len);
+	test_ok(name, (rc == PEER_ID_OK) && (out_len > 0U), "cid write failed");
+	if (rc != PEER_ID_OK)
 	{
 		goto cleanup;
 	}
 
-	snprintf(test_name, sizeof(test_name), "%s parse cid string", vector->name);
-	status = peer_id_create_from_string(cid, &from_cid);
-	report_result(test_name, status == PEER_ID_SUCCESS, "peer_id_create_from_string cid failed");
-	if (status == PEER_ID_SUCCESS)
+	snprintf(name, sizeof(name), "%s: parse cid", v->name);
+	rc = peer_id_new_from_text(cid, &from_cid);
+	test_ok(name, rc == PEER_ID_OK, "cid parse failed");
+	if (rc == PEER_ID_OK)
 	{
-		snprintf(test_name, sizeof(test_name), "%s cid round trip equals", vector->name);
-		report_result(test_name, peer_id_equals(&from_public, &from_cid) == 1,
-			      "cid parse differs from original");
+		snprintf(name, sizeof(name), "%s: cid roundtrip equal", v->name);
+		test_ok(name, peer_id_equal(from_pub, from_cid) == 1, "cid roundtrip mismatch");
 	}
+
+	snprintf(name, sizeof(name), "%s: default write legacy", v->name);
+	rc = peer_id_text_write_default(from_pub, legacy, sizeof(legacy), &out_len);
+	test_ok(name, (rc == PEER_ID_OK) && (legacy[0] == 'Q' || legacy[0] == '1'), "default writer not legacy");
 
 cleanup:
-	peer_id_destroy(&from_public);
-	peer_id_destroy(&from_private);
-	peer_id_destroy(&from_legacy);
-	peer_id_destroy(&from_cid);
+	peer_id_free(from_pub);
+	peer_id_free(from_priv);
+	peer_id_free(from_legacy);
+	peer_id_free(from_cid);
 }
 
-static void run_basic_behavior_tests(void)
+static void run_parse_strict_tests(void)
 {
-	peer_id_t left;
-	peer_id_t right;
-	peer_id_t invalid;
-	peer_id_error_t status;
-	char out[8];
-	int rc;
+	peer_id_t *pid;
+	peer_id_error_t rc;
 
-	left.bytes = NULL;
-	left.size = 0U;
-	right.bytes = NULL;
-	right.size = 0U;
-	invalid.bytes = NULL;
-	invalid.size = 7U;
+	pid = NULL;
 
-	status = peer_id_from_public_hex(SECP256K1_PUBLIC_HEX, &left);
-	report_result("create secp256k1 for behavior tests", status == PEER_ID_SUCCESS, "setup failed");
-	if (status != PEER_ID_SUCCESS)
-	{
-		goto cleanup;
-	}
+	rc = peer_id_new_from_text("", &pid);
+	test_ok("strict parse: empty rejected", rc == PEER_ID_ERR_INVALID_STRING, "empty should fail");
 
-	status = peer_id_from_public_hex(SECP256K1_PUBLIC_HEX, &right);
-	report_result("create second secp256k1 for equals", status == PEER_ID_SUCCESS, "setup failed");
-	if (status != PEER_ID_SUCCESS)
-	{
-		goto cleanup;
-	}
+	rc = peer_id_new_from_text("@@@", &pid);
+	test_ok("strict parse: invalid prefix rejected", rc == PEER_ID_ERR_INVALID_STRING, "bad prefix should fail");
 
-	report_result("peer_id_equals same value", peer_id_equals(&left, &right) == 1, "expected equal peer IDs");
+	rc = peer_id_new_from_text("QmInvalidPeerId%", &pid);
+	test_ok("strict parse: malformed legacy rejected", rc == PEER_ID_ERR_INVALID_STRING, "bad legacy should fail");
 
-	if (right.size > 0U)
-	{
-		right.bytes[0] = (uint8_t)(right.bytes[0] ^ 0xFFU);
-	}
-	report_result("peer_id_equals different value", peer_id_equals(&left, &right) == 0,
-		      "expected different peer IDs");
+	rc = peer_id_new_from_text("bafyinvalid", &pid);
+	test_ok("strict parse: malformed cid rejected", rc == PEER_ID_ERR_INVALID_STRING, "bad cid should fail");
 
-	report_result("peer_id_equals null input", peer_id_equals(&left, NULL) == -1, "expected invalid-input result");
-
-	out[0] = 'X';
-	rc = peer_id_to_string(&left, PEER_ID_FMT_BASE58_LEGACY, out, sizeof(out));
-	report_result("peer_id_to_string short buffer", (rc < 0) && (out[0] == '\0'),
-		      "expected short-buffer failure with output reset");
-
-	rc = peer_id_to_string(NULL, PEER_ID_FMT_BASE58_LEGACY, out, sizeof(out));
-	report_result("peer_id_to_string null pid", rc == -PEER_ID_E_NULL_PTR, "expected null pointer error");
-
-	rc = peer_id_to_string(&left, PEER_ID_FMT_BASE58_LEGACY, NULL, sizeof(out));
-	report_result("peer_id_to_string null output", rc == -PEER_ID_E_NULL_PTR, "expected null pointer error");
-
-	rc = peer_id_to_string(&left, PEER_ID_FMT_BASE58_LEGACY, out, 0U);
-	report_result("peer_id_to_string zero output size", rc == -PEER_ID_E_BUFFER_TOO_SMALL,
-		      "expected buffer-too-small error");
-
-	rc = peer_id_to_string(&left, (peer_id_format_t)99, out, sizeof(out));
-	report_result("peer_id_to_string unsupported format", rc == -PEER_ID_E_ENCODING_FAILED,
-		      "expected unsupported-format failure");
-
-	peer_id_destroy(&invalid);
-	report_result("peer_id_destroy resets size when bytes are null", invalid.size == 0U,
-		      "expected size reset for null bytes");
-
-cleanup:
-	peer_id_destroy(&left);
-	peer_id_destroy(&right);
+	rc = peer_id_new_from_text("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", &pid);
+	test_ok("strict parse: known id accepted", rc == PEER_ID_OK, "known id should parse");
+	peer_id_free(pid);
 }
 
-static void run_invalid_input_tests(void)
+static void run_multihash_integrity_tests(void)
 {
-	const uint8_t dummy = 0x00U;
-	const uint8_t malformed_public[] = {0x08U, 0x01U, 0x12U, 0x05U, 0xAAU};
-	const uint8_t malformed_private[] = {0x08U, 0x01U, 0x12U, 0x40U, 0xAAU};
-	const uint8_t unsupported_private[] = {0x08U, 0x04U, 0x12U, 0x01U, 0x00U};
-	peer_id_t pid;
-	peer_id_error_t status;
-	char legacy[256];
-	int rc;
+	const uint8_t bad1[] = {0x12U};
+	const uint8_t bad2[] = {0x12U, 0x20U, 0xAAU};
+	const uint8_t bad3[] = {0x00U, 0x02U, 0xAAU};
+	peer_id_t *pid;
+	peer_id_error_t rc;
 
-	pid.bytes = NULL;
-	pid.size = 0U;
+	pid = NULL;
 
-	status = peer_id_create_from_public_key(NULL, 1U, &pid);
-	report_result("public key null input", status == PEER_ID_E_NULL_PTR, "expected null pointer error");
+	rc = peer_id_new_from_multihash(bad1, sizeof(bad1), &pid);
+	test_ok("multihash integrity: truncated varint", rc == PEER_ID_ERR_INVALID_STRING, "should reject");
 
-	status = peer_id_create_from_public_key(&dummy, 1U, NULL);
-	report_result("public key null output", status == PEER_ID_E_NULL_PTR, "expected null pointer error");
+	rc = peer_id_new_from_multihash(bad2, sizeof(bad2), &pid);
+	test_ok("multihash integrity: truncated digest", rc == PEER_ID_ERR_INVALID_STRING, "should reject");
 
-	status = peer_id_create_from_public_key(&dummy, (size_t)((64U * 1024U) + 1U), &pid);
-	report_result("public key oversize", status == PEER_ID_E_INVALID_RANGE, "expected invalid-range error");
+	rc = peer_id_new_from_multihash(bad3, sizeof(bad3), &pid);
+	test_ok("multihash integrity: identity length mismatch", rc == PEER_ID_ERR_INVALID_STRING, "should reject");
+}
 
-	status = peer_id_create_from_public_key(malformed_public, sizeof(malformed_public), &pid);
-	report_result("public key malformed protobuf", status == PEER_ID_E_INVALID_PROTOBUF,
-		      "expected invalid-protobuf error");
+static void run_pb_strictness_tests(void)
+{
+	const uint8_t reordered[] = {0x12U, 0x01U, 0x01U, 0x08U, 0x01U};
+	const uint8_t missing_data[] = {0x08U, 0x01U};
+	const uint8_t extra_field[] = {0x08U, 0x01U, 0x12U, 0x01U, 0xAAU, 0x18U, 0x01U};
+	const uint8_t non_minimal_type[] = {0x08U, 0x81U, 0x00U, 0x12U, 0x01U, 0xAAU};
+	peer_id_t *pid;
+	peer_id_error_t rc;
 
-	status = peer_id_create_from_private_key(NULL, 1U, &pid);
-	report_result("private key null input", status == PEER_ID_E_NULL_PTR, "expected null pointer error");
+	pid = NULL;
 
-	status = peer_id_create_from_private_key(malformed_private, sizeof(malformed_private), &pid);
-	report_result("private key malformed protobuf", status == PEER_ID_E_INVALID_PROTOBUF,
-		      "expected invalid-protobuf error");
+	rc = peer_id_new_from_public_key_pb(reordered, sizeof(reordered), &pid);
+	test_ok("pb strict: field order", rc == PEER_ID_ERR_INVALID_PROTOBUF, "reordered fields must fail");
 
-	status = peer_id_create_from_private_key(unsupported_private, sizeof(unsupported_private), &pid);
-	report_result("private key unsupported type", status == PEER_ID_E_INVALID_PROTOBUF,
-		      "expected invalid-protobuf error");
+	rc = peer_id_new_from_public_key_pb(missing_data, sizeof(missing_data), &pid);
+	test_ok("pb strict: missing field", rc == PEER_ID_ERR_INVALID_PROTOBUF, "missing data must fail");
 
-	status = peer_id_create_from_string(NULL, &pid);
-	report_result("string null input", status == PEER_ID_E_NULL_PTR, "expected null pointer error");
+	rc = peer_id_new_from_public_key_pb(extra_field, sizeof(extra_field), &pid);
+	test_ok("pb strict: extra field", rc == PEER_ID_ERR_INVALID_PROTOBUF, "extra field must fail");
 
-	status = peer_id_create_from_string("", &pid);
-	report_result("string empty input", status == PEER_ID_E_INVALID_STRING, "expected invalid-string error");
+	rc = peer_id_new_from_public_key_pb(non_minimal_type, sizeof(non_minimal_type), &pid);
+	test_ok("pb strict: non-minimal varint", rc == PEER_ID_ERR_INVALID_PROTOBUF, "non-minimal varint must fail");
+}
 
-	status = peer_id_create_from_string("@@@", &pid);
-	report_result("string non-base input", status == PEER_ID_E_INVALID_STRING, "expected invalid-string error");
+static void run_identity_threshold_tests(void)
+{
+	uint8_t pb42[42];
+	uint8_t pb43[43];
+	size_t pb42_len;
+	size_t pb43_len;
+	peer_id_t *pid42;
+	peer_id_t *pid43;
+	const uint8_t *mh;
+	size_t mh_len;
 
-	status = peer_id_create_from_string("bafyinvalid", &pid);
-	report_result("string malformed cid", status == PEER_ID_E_INVALID_STRING, "expected invalid-string error");
+	(void)memset(pb42, 0, sizeof(pb42));
+	(void)memset(pb43, 0, sizeof(pb43));
+	pb42[0] = 0x08U;
+	pb42[1] = 0x01U;
+	pb42[2] = 0x12U;
+	pb42[3] = 0x26U; /* 38-byte payload => total protobuf length 42 */
+	(void)memset(pb42 + 4, 0xA5, 38U);
+	pb43[0] = 0x08U;
+	pb43[1] = 0x01U;
+	pb43[2] = 0x12U;
+	pb43[3] = 0x27U; /* 39-byte payload => total protobuf length 43 */
+	(void)memset(pb43 + 4, 0x5A, 39U);
+	pb42_len = sizeof(pb42);
+	pb43_len = sizeof(pb43);
+	pid42 = NULL;
+	pid43 = NULL;
+	mh = NULL;
+	mh_len = (size_t)0U;
+	test_ok("threshold pb length 42", pb42_len == 42U, "expected 42-byte pb");
+	test_ok("threshold pb length 43", pb43_len == 43U, "expected 43-byte pb");
 
-	status = peer_id_create_from_string("QmInvalidPeerId%", &pid);
-	report_result("string malformed legacy", status == PEER_ID_E_INVALID_STRING, "expected invalid-string error");
+	test_ok("threshold pid42", peer_id_new_from_public_key_pb(pb42, pb42_len, &pid42) == PEER_ID_OK,
+		"pid42 failed");
+	test_ok("threshold pid43", peer_id_new_from_public_key_pb(pb43, pb43_len, &pid43) == PEER_ID_OK,
+		"pid43 failed");
 
-	status = peer_id_create_from_string("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", &pid);
-	report_result("string known peer id", status == PEER_ID_SUCCESS, "expected known peer ID to parse");
-	if (status == PEER_ID_SUCCESS)
+	if (pid42 != NULL)
 	{
-		rc = peer_id_to_string(&pid, PEER_ID_FMT_BASE58_LEGACY, legacy, sizeof(legacy));
-		report_result("known peer id legacy encode", rc > 0, "expected known peer ID to encode");
+		test_ok("threshold pid42 view", peer_id_multihash_view(pid42, &mh, &mh_len) == PEER_ID_OK,
+			"view failed");
+		test_ok("threshold <=42 uses identity", (mh_len > 0U) && (mh[0] == (uint8_t)MULTIHASH_CODE_IDENTITY),
+			"expected identity");
 	}
-	peer_id_destroy(&pid);
+
+	if (pid43 != NULL)
+	{
+		test_ok("threshold pid43 view", peer_id_multihash_view(pid43, &mh, &mh_len) == PEER_ID_OK,
+			"view failed");
+		test_ok("threshold >42 uses sha2-256", (mh_len > 0U) && (mh[0] == (uint8_t)MULTIHASH_CODE_SHA2_256),
+			"expected sha2-256");
+	}
+
+	peer_id_free(pid42);
+	peer_id_free(pid43);
+}
+
+static void run_clone_and_buffer_tests(void)
+{
+	peer_id_t *pid;
+	peer_id_t *clone;
+	peer_id_error_t rc;
+	const uint8_t *a;
+	const uint8_t *b;
+	size_t a_len;
+	size_t b_len;
+	uint8_t small[2];
+	size_t out_len;
+	char text[8];
+
+	pid = NULL;
+	clone = NULL;
+	a = NULL;
+	b = NULL;
+	a_len = (size_t)0U;
+	b_len = (size_t)0U;
+	out_len = (size_t)0U;
+	text[0] = 'X';
+
+	rc = pid_from_public_hex(SECP256K1_PUBLIC_HEX, &pid);
+	test_ok("clone setup", rc == PEER_ID_OK, "setup failed");
+	if (rc != PEER_ID_OK)
+	{
+		return;
+	}
+
+	rc = peer_id_clone(pid, &clone);
+	test_ok("clone success", rc == PEER_ID_OK, "clone failed");
+	test_ok("clone equality", peer_id_equal(pid, clone) == 1, "clone not equal");
+
+	if ((peer_id_multihash_view(pid, &a, &a_len) == PEER_ID_OK) &&
+	    (peer_id_multihash_view(clone, &b, &b_len) == PEER_ID_OK))
+	{
+		test_ok("clone independence", (a != b) && (a_len == b_len), "clone shares storage");
+	}
+
+	rc = peer_id_multihash_copy(pid, small, sizeof(small), &out_len);
+	test_ok("copy short buffer", rc == PEER_ID_ERR_BUFFER_TOO_SMALL, "expected short buffer error");
+
+	rc = peer_id_text_write(pid, PEER_ID_TEXT_LEGACY_BASE58, text, sizeof(text), &out_len);
+	test_ok("write short buffer resets output", (rc != PEER_ID_OK) && (text[0] == '\0'), "expected reset");
+
+	peer_id_free(pid);
+	peer_id_free(clone);
 }
 
 int main(void)
@@ -407,17 +447,20 @@ int main(void)
 		{"ed25519", ED25519_PUBLIC_HEX, ED25519_PRIVATE_HEX},
 		{"ecdsa", ECDSA_PUBLIC_HEX, ECDSA_PRIVATE_HEX},
 	};
-	size_t index;
+	size_t i;
 
-	for (index = 0U; index < (sizeof(vectors) / sizeof(vectors[0])); ++index)
+	for (i = (size_t)0U; i < (sizeof(vectors) / sizeof(vectors[0])); ++i)
 	{
-		run_round_trip_vector(&vectors[index]);
+		run_vector_roundtrip(&vectors[i]);
 	}
 
-	run_basic_behavior_tests();
-	run_invalid_input_tests();
+	run_parse_strict_tests();
+	run_multihash_integrity_tests();
+	run_pb_strictness_tests();
+	run_identity_threshold_tests();
+	run_clone_and_buffer_tests();
 
-	if (g_failures > 0)
+	if (g_failures != 0)
 	{
 		printf("\nSome tests failed. Total failures: %d\n", g_failures);
 		return EXIT_FAILURE;

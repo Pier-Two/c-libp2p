@@ -8,8 +8,7 @@
 #include "peer_id/peer_id.h"
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 /*
@@ -25,81 +24,62 @@ typedef peer_id_t libp2p_peer_id_t;
  * PublicKey/PrivateKey message blobs. */
 typedef struct libp2p_public_key
 {
-    const uint8_t *bytes;
-    size_t len;
+	const uint8_t *bytes;
+	size_t len;
 } libp2p_public_key_t;
 
 typedef struct libp2p_private_key
 {
-    const uint8_t *bytes;
-    size_t len;
+	const uint8_t *bytes;
+	size_t len;
 } libp2p_private_key_t;
 
-/* Default textual representation is CIDv1 (multibase). */
+/* Default textual representation follows transitional peer-id guidance (legacy base58). */
 static inline int libp2p_peer_id_to_string(const libp2p_peer_id_t *pid, char *buf, size_t buf_len)
 {
-    return peer_id_to_string(pid, PEER_ID_FMT_MULTIBASE_CIDv1, buf, buf_len);
+	size_t out_len;
+	peer_id_error_t rc;
+
+	out_len = (size_t)0U;
+	rc = peer_id_text_write_default(pid, buf, buf_len, &out_len);
+	if (rc != PEER_ID_OK)
+	{
+		return -((int)rc);
+	}
+	return (int)out_len;
 }
 
 static inline int libp2p_peer_id_from_string(const char *s, libp2p_peer_id_t **out)
 {
-    if (!s || !out)
-        return PEER_ID_E_NULL_PTR;
-    libp2p_peer_id_t *p = (libp2p_peer_id_t *)calloc(1, sizeof(*p));
-    if (!p)
-        return PEER_ID_E_ALLOC_FAILED;
-    peer_id_error_t rc = peer_id_create_from_string(s, p);
-    if (rc != PEER_ID_SUCCESS)
-    {
-        free(p);
-        return rc;
-    }
-    *out = p;
-    return 0;
+	if (!s || !out)
+		return PEER_ID_ERR_NULL_PTR;
+	return peer_id_new_from_text(s, out);
 }
 
-static inline int libp2p_peer_id_equal(const libp2p_peer_id_t *a, const libp2p_peer_id_t *b) { return peer_id_equals(a, b); }
+static inline int libp2p_peer_id_equal(const libp2p_peer_id_t *a, const libp2p_peer_id_t *b)
+{
+	return peer_id_equal(a, b);
+}
 
 static inline int libp2p_peer_id_from_public_key(const libp2p_public_key_t *pk, libp2p_peer_id_t **out)
 {
-    if (!pk || !pk->bytes || pk->len == 0 || !out)
-        return PEER_ID_E_NULL_PTR;
-    libp2p_peer_id_t *p = (libp2p_peer_id_t *)calloc(1, sizeof(*p));
-    if (!p)
-        return PEER_ID_E_ALLOC_FAILED;
-    peer_id_error_t rc = peer_id_create_from_public_key(pk->bytes, pk->len, p);
-    if (rc != PEER_ID_SUCCESS)
-    {
-        free(p);
-        return rc;
-    }
-    *out = p;
-    return 0;
+	if (!pk || !pk->bytes || pk->len == 0 || !out)
+		return PEER_ID_ERR_NULL_PTR;
+	return peer_id_new_from_public_key_pb(pk->bytes, pk->len, out);
 }
 
 static inline int libp2p_peer_id_from_private_key(const libp2p_private_key_t *sk, libp2p_peer_id_t **out)
 {
-    if (!sk || !sk->bytes || sk->len == 0 || !out)
-        return PEER_ID_E_NULL_PTR;
-    libp2p_peer_id_t *p = (libp2p_peer_id_t *)calloc(1, sizeof(*p));
-    if (!p)
-        return PEER_ID_E_ALLOC_FAILED;
-    peer_id_error_t rc = peer_id_create_from_private_key(sk->bytes, sk->len, p);
-    if (rc != PEER_ID_SUCCESS)
-    {
-        free(p);
-        return rc;
-    }
-    *out = p;
-    return 0;
+	if (!sk || !sk->bytes || sk->len == 0 || !out)
+		return PEER_ID_ERR_NULL_PTR;
+	return peer_id_new_from_private_key_pb(sk->bytes, sk->len, out);
 }
 
 static inline void libp2p_peer_id_free(libp2p_peer_id_t *pid)
 {
-    if (!pid)
-        return;
-    peer_id_destroy(pid);
-    free(pid);
+	if (!pid)
+		return;
+	peer_id_free(pid);
 }
 
 #ifdef __cplusplus

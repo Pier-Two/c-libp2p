@@ -1,14 +1,10 @@
 #ifdef _WIN32
-// avoid pulling in the world
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-// core Windows types, plus LONG, DWORD, etc.
 #include <windows.h>
-// Win32 CryptoAPI (CryptGenRandom, CryptAcquireContext, …)
 #include <wincrypt.h>
 #else
-// POSIX / BSD side
 #include <fcntl.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -17,128 +13,164 @@
 #endif
 #endif
 
-#include "../../external/secp256k1/include/secp256k1.h"
-#include "peer_id/peer_id.h"
-#include "peer_id/peer_id_proto.h"
-#include "peer_id/peer_id_secp256k1.h"
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../external/secp256k1/include/secp256k1.h"
+#include "peer_id_internal.h"
+
 #ifndef HAVE_EXPLICIT_BZERO
-static void explicit_bzero(void *s, size_t n)
+static void explicit_bzero_local(void *s, size_t n)
 {
-    volatile unsigned char *p = s;
-    while (n--)
-        *p++ = 0;
+	volatile unsigned char *p;
+
+	p = (volatile unsigned char *)s;
+	while (n > (size_t)0U)
+	{
+		*p = (unsigned char)0U;
+		++p;
+		--n;
+	}
 }
+#else
+#define explicit_bzero_local explicit_bzero
 #endif
 
 static int get_random_bytes(void *buf, size_t len)
 {
 #if defined(__linux__)
-    ssize_t r = getrandom(buf, len, 0);
-    if (r == (ssize_t)len)
-    {
-        return 0;
-    }
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-    {
-        return -1;
-    }
-    size_t total = 0;
-    while (total < len)
-    {
-        ssize_t n = read(fd, (char *)buf + total, len - total);
-        if (n <= 0)
-        {
-            close(fd);
-            return -1;
-        }
-        total += n;
-    }
-    close(fd);
-    return 0;
+	ssize_t r;
+	int fd;
+	size_t total;
 
+	r = getrandom(buf, len, 0);
+	if (r == (ssize_t)len)
+	{
+		return 0;
+	}
+
+	fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+	{
+		return -1;
+	}
+
+	total = (size_t)0U;
+	while (total < len)
+	{
+		ssize_t n;
+
+		n = read(fd, (char *)buf + total, len - total);
+		if (n <= 0)
+		{
+			close(fd);
+			return -1;
+		}
+		total += (size_t)n;
+	}
+	close(fd);
+	return 0;
 #elif defined(_WIN32)
-    HCRYPTPROV hProv = 0;
-    if (!CryptAcquireContextA(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
-    {
-        return -1;
-    }
-    if (!CryptGenRandom(hProv, (DWORD)len, (BYTE *)buf))
-    {
-        CryptReleaseContext(hProv, 0);
-        return -1;
-    }
-    CryptReleaseContext(hProv, 0);
-    return 0;
+	HCRYPTPROV h_prov;
 
+	h_prov = (HCRYPTPROV)0;
+	if (CryptAcquireContextA(&h_prov, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT) == FALSE)
+	{
+		return -1;
+	}
+	if (CryptGenRandom(h_prov, (DWORD)len, (BYTE *)buf) == FALSE)
+	{
+		CryptReleaseContext(h_prov, 0);
+		return -1;
+	}
+	CryptReleaseContext(h_prov, 0);
+	return 0;
 #else
-    arc4random_buf(buf, len);
-    return 0;
+	arc4random_buf(buf, len);
+	return 0;
 #endif
 }
 
-peer_id_error_t peer_id_create_from_private_key_secp256k1(const uint8_t *key_data, size_t key_data_len, uint8_t **pubkey_buf, size_t *pubkey_len)
+peer_id_error_t peer_id_internal_pub_from_private_secp256k1(const uint8_t *key_data, size_t key_data_len,
+							    uint8_t **pubkey_buf, size_t *pubkey_len)
 {
-    if (!key_data || !pubkey_buf || !pubkey_len)
-    {
-        return PEER_ID_E_NULL_PTR;
-    }
-    if (key_data_len != 32)
-    {
-        return PEER_ID_E_INVALID_PROTOBUF;
-    }
+	peer_id_error_t status;
+	secp256k1_context *ctx;
+	unsigned char seed32[32];
+	uint8_t seckey[32];
+	secp256k1_pubkey pubkey;
+	uint8_t raw_pubkey[33];
+	size_t len;
 
-    secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
-    if (!ctx)
-    {
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
+	status = PEER_ID_OK;
+	ctx = NULL;
+	len = sizeof(raw_pubkey);
 
-    unsigned char seed32[32];
-    if (get_random_bytes(seed32, sizeof(seed32)) != 0 || !secp256k1_context_randomize(ctx, seed32))
-    {
-        explicit_bzero(seed32, sizeof(seed32));
-        secp256k1_context_destroy(ctx);
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
-    explicit_bzero(seed32, sizeof(seed32));
+	if ((key_data == NULL) || (pubkey_buf == NULL) || (pubkey_len == NULL))
+	{
+		return PEER_ID_ERR_NULL_PTR;
+	}
 
-    if (!secp256k1_ec_seckey_verify(ctx, key_data))
-    {
-        secp256k1_context_destroy(ctx);
-        return PEER_ID_E_INVALID_PROTOBUF;
-    }
+	*pubkey_buf = NULL;
+	*pubkey_len = (size_t)0U;
 
-    uint8_t seckey[32];
-    memcpy(seckey, key_data, 32);
+	if (key_data_len != (size_t)32U)
+	{
+		return PEER_ID_ERR_INVALID_PROTOBUF;
+	}
 
-    secp256k1_pubkey pubkey;
-    if (!secp256k1_ec_pubkey_create(ctx, &pubkey, seckey))
-    {
-        explicit_bzero(seckey, sizeof(seckey));
-        secp256k1_context_destroy(ctx);
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
+	ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN | SECP256K1_CONTEXT_VERIFY);
+	if (ctx == NULL)
+	{
+		return PEER_ID_ERR_CRYPTO;
+	}
 
-    uint8_t raw_pubkey[33];
-    size_t len = sizeof(raw_pubkey);
-    if (!secp256k1_ec_pubkey_serialize(ctx, raw_pubkey, &len, &pubkey, SECP256K1_EC_COMPRESSED) || len != 33)
-    {
-        explicit_bzero(seckey, sizeof(seckey));
-        secp256k1_context_destroy(ctx);
-        return PEER_ID_E_CRYPTO_FAILED;
-    }
+	if ((get_random_bytes(seed32, sizeof(seed32)) != 0) || (secp256k1_context_randomize(ctx, seed32) == 0))
+	{
+		explicit_bzero_local(seed32, sizeof(seed32));
+		secp256k1_context_destroy(ctx);
+		return PEER_ID_ERR_CRYPTO;
+	}
+	explicit_bzero_local(seed32, sizeof(seed32));
 
-    secp256k1_context_destroy(ctx);
+	if (secp256k1_ec_seckey_verify(ctx, key_data) == 0)
+	{
+		secp256k1_context_destroy(ctx);
+		return PEER_ID_ERR_INVALID_PROTOBUF;
+	}
 
-    peer_id_error_t err = peer_id_build_public_key_protobuf(PEER_ID_SECP256K1_KEY_TYPE, raw_pubkey, len, pubkey_buf, pubkey_len);
+	(void)memcpy(seckey, key_data, sizeof(seckey));
 
-    explicit_bzero(&pubkey, sizeof(pubkey));
-    explicit_bzero(seckey, sizeof(seckey));
+	if (secp256k1_ec_pubkey_create(ctx, &pubkey, seckey) == 0)
+	{
+		explicit_bzero_local(seckey, sizeof(seckey));
+		secp256k1_context_destroy(ctx);
+		return PEER_ID_ERR_CRYPTO;
+	}
 
-    return err;
+	if ((secp256k1_ec_pubkey_serialize(ctx, raw_pubkey, &len, &pubkey, SECP256K1_EC_COMPRESSED) == 0) ||
+	    (len != sizeof(raw_pubkey)))
+	{
+		explicit_bzero_local(seckey, sizeof(seckey));
+		explicit_bzero_local(&pubkey, sizeof(pubkey));
+		secp256k1_context_destroy(ctx);
+		return PEER_ID_ERR_CRYPTO;
+	}
+
+	secp256k1_context_destroy(ctx);
+
+	status = peer_id_internal_build_public_key_pb(PEER_ID_KEY_SECP256K1, raw_pubkey, len, pubkey_buf, pubkey_len);
+
+	explicit_bzero_local(&pubkey, sizeof(pubkey));
+	explicit_bzero_local(seckey, sizeof(seckey));
+
+	return status;
+}
+
+peer_id_error_t peer_id_new_from_private_key_pb_secp256k1(const uint8_t *key_data, size_t key_data_len,
+							  uint8_t **pubkey_buf, size_t *pubkey_len)
+{
+	return peer_id_internal_pub_from_private_secp256k1(key_data, key_data_len, pubkey_buf, pubkey_len);
 }

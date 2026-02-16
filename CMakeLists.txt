@@ -1175,7 +1175,7 @@ add_module(
     src/peer_id
 )
 target_link_libraries(peer_id_ed25519 PRIVATE
-    libtomcrypt peer_id_proto
+    eddsa peer_id_proto
 )
 
 # ---------------------------------------------
@@ -1215,6 +1215,11 @@ add_module(
     tests/peer_id/test_peer_id.c
     ""
     ""
+)
+
+target_sources(peer_id PRIVATE
+    src/peer_id/peer_id_parse_text.c
+    src/peer_id/peer_id_keyops.c
 )
 
 target_link_libraries(peer_id

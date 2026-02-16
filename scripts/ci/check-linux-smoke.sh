@@ -38,13 +38,24 @@ else
 fi
 
 if [ -n "${range}" ]; then
-  files="$(git diff --name-only "${range}" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)"
-  if [ -z "${files}" ]; then
+  mapfile -t files < <(git diff --name-only "${range}" -- '*.c' '*.h' | grep -E '^(src|include|tests)/' || true)
+  if [ "${#files[@]}" -eq 0 ]; then
     echo "No changed C source/header files in src/include/tests; skipping format check."
   else
-    echo "Formatting check scope:"
-    echo "${files}"
-    echo "${files}" | xargs clang-format --style=file --dry-run --Werror
+    existing_files=()
+    for file in "${files[@]}"; do
+      if [ -f "${file}" ]; then
+        existing_files+=("${file}")
+      fi
+    done
+
+    if [ "${#existing_files[@]}" -eq 0 ]; then
+      echo "No existing changed C source/header files in src/include/tests; skipping format check."
+    else
+      echo "Formatting check scope:"
+      printf '%s\n' "${existing_files[@]}"
+      printf '%s\n' "${existing_files[@]}" | xargs clang-format --style=file --dry-run --Werror
+    fi
   fi
 fi
 
