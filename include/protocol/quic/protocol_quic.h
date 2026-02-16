@@ -106,7 +106,7 @@ static inline libp2p_quic_tls_cert_options_t libp2p_quic_tls_cert_options_defaul
     opts.identity_key_type = 0;
     opts.identity_key = NULL;
     opts.identity_key_len = 0;
-    opts.not_after_lifetime = 3600; /* 1 hour */
+    opts.not_after_lifetime = 15552000; /* 180 days */
     return opts;
 }
 

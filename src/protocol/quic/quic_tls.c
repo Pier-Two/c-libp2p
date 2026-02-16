@@ -630,7 +630,8 @@ int libp2p_quic_tls_generate_certificate(const libp2p_quic_tls_cert_options_t *o
 
 	memset(out, 0, sizeof(*out));
 
-	uint32_t lifetime = opts->not_after_lifetime ? opts->not_after_lifetime : 3600;
+	uint32_t default_lifetime = libp2p_quic_tls_cert_options_default().not_after_lifetime;
+	uint32_t lifetime = opts->not_after_lifetime ? opts->not_after_lifetime : default_lifetime;
 
 	EVP_PKEY_CTX *pctx = NULL;
 	EVP_PKEY *tls_key = NULL;
