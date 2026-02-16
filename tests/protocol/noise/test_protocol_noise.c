@@ -148,8 +148,7 @@ static int peer_id_from_ed25519_priv(const uint8_t *sk, peer_id_t **pid)
 	ed25519_genpub(pub, sk);
 	uint8_t *pubpb = NULL;
 	size_t pubpb_len = 0;
-	if (peer_id_build_public_key_protobuf(PEER_ID_KEY_ED25519, pub, sizeof(pub), &pubpb, &pubpb_len) !=
-	    PEER_ID_OK)
+	if (peer_id_build_public_key_protobuf(PEER_ID_KEY_ED25519, pub, sizeof(pub), &pubpb, &pubpb_len) != PEER_ID_OK)
 		return -1;
 	int ret = peer_id_new_from_public_key_pb(pubpb, pubpb_len, pid);
 	free(pubpb);

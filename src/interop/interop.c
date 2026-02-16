@@ -493,8 +493,8 @@ static void interop_evt_cb(const libp2p_event_t *evt, void *ud)
 			{
 				char pid_buf[128];
 				size_t pid_len = 0U;
-				if (peer_id_text_write(pid, PEER_ID_TEXT_LEGACY_BASE58, pid_buf, sizeof(pid_buf), &pid_len) ==
-					    PEER_ID_OK &&
+				if (peer_id_text_write(pid, PEER_ID_TEXT_LEGACY_BASE58, pid_buf, sizeof(pid_buf),
+						       &pid_len) == PEER_ID_OK &&
 				    pid_len > 0U)
 				{
 					size_t base_len = strlen(publish_buf);

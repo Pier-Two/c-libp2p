@@ -312,8 +312,8 @@ static int build_public_key_protobuf(uint64_t key_type, const uint8_t *identity_
 	{
 		uint8_t pub[32];
 		ed25519_genpub(pub, identity_key);
-		peer_id_error_t perr = peer_id_build_public_key_protobuf(PEER_ID_KEY_ED25519, pub, sizeof(pub),
-									 out_pb, out_pb_len);
+		peer_id_error_t perr =
+			peer_id_build_public_key_protobuf(PEER_ID_KEY_ED25519, pub, sizeof(pub), out_pb, out_pb_len);
 		secure_zero(pub, sizeof(pub));
 		return (perr == PEER_ID_OK) ? LIBP2P_ERR_OK : LIBP2P_ERR_INTERNAL;
 	}
@@ -336,8 +336,8 @@ static int build_public_key_protobuf(uint64_t key_type, const uint8_t *identity_
 			secp256k1_context_destroy(ctx);
 			return LIBP2P_ERR_INTERNAL;
 		}
-		peer_id_error_t perr = peer_id_build_public_key_protobuf(PEER_ID_KEY_SECP256K1, comp, comp_len,
-									 out_pb, out_pb_len);
+		peer_id_error_t perr =
+			peer_id_build_public_key_protobuf(PEER_ID_KEY_SECP256K1, comp, comp_len, out_pb, out_pb_len);
 		secp256k1_context_destroy(ctx);
 		return (perr == PEER_ID_OK) ? LIBP2P_ERR_OK : LIBP2P_ERR_INTERNAL;
 	}
@@ -417,8 +417,8 @@ static int build_public_key_protobuf(uint64_t key_type, const uint8_t *identity_
 			free(der_buf);
 			return LIBP2P_ERR_INTERNAL;
 		}
-		peer_id_error_t perr = peer_id_build_public_key_protobuf(PEER_ID_KEY_ECDSA, der_buf,
-									 (size_t)der_len, out_pb, out_pb_len);
+		peer_id_error_t perr = peer_id_build_public_key_protobuf(PEER_ID_KEY_ECDSA, der_buf, (size_t)der_len,
+									 out_pb, out_pb_len);
 		secure_zero(der_buf, (size_t)der_len);
 		free(der_buf);
 		return (perr == PEER_ID_OK) ? LIBP2P_ERR_OK : LIBP2P_ERR_INTERNAL;
