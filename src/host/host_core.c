@@ -74,8 +74,8 @@ static int duplicate_const_string_array(const char *const *src, size_t count, co
 	return 0;
 }
 
-/* 90 days in seconds. */
-static const uint32_t HOST_QUIC_CERT_LIFETIME_S = 7776000U;
+/* 180 days in seconds. */
+static const uint32_t HOST_QUIC_CERT_LIFETIME_S = 15552000U;
 
 static int dup_opts(const libp2p_host_options_t *in, libp2p_host_options_t *out)
 {
