@@ -95,16 +95,10 @@ static libp2p_transport_err_t stub_quic_dial(libp2p_transport_t *self, const mul
 		return LIBP2P_TRANSPORT_ERR_INTERNAL;
 	session->owner = ctx;
 
-	peer_id_t *peer = (peer_id_t *)calloc(1, sizeof(*peer));
-	if (!peer)
-	{
-		free(session);
-		return LIBP2P_TRANSPORT_ERR_INTERNAL;
-	}
-	if (peer_id_new_from_text("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", peer) != PEER_ID_OK)
+	peer_id_t *peer = NULL;
+	if (peer_id_new_from_text("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", &peer) != PEER_ID_OK)
 	{
 		peer_id_free(peer);
-		free(peer);
 		free(session);
 		return LIBP2P_TRANSPORT_ERR_INTERNAL;
 	}
@@ -113,7 +107,6 @@ static libp2p_transport_err_t stub_quic_dial(libp2p_transport_t *self, const mul
 	if (!conn)
 	{
 		peer_id_free(peer);
-		free(peer);
 		free(session);
 		return LIBP2P_TRANSPORT_ERR_INTERNAL;
 	}
@@ -383,7 +376,7 @@ int main(void)
 		libp2p_host_free(host);
 		return fail_msg("remote peer missing");
 	}
-	peer_id_t expected_peer = {0};
+	peer_id_t *expected_peer = NULL;
 	if (peer_id_new_from_text("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", &expected_peer) != PEER_ID_OK)
 	{
 		libp2p_stream_close(cb_state.stream);
@@ -392,8 +385,8 @@ int main(void)
 		libp2p_host_free(host);
 		return fail_msg("expected peer parse failed");
 	}
-	int same_peer = peer_id_equal(rpeer, &expected_peer);
-	peer_id_free(&expected_peer);
+	int same_peer = peer_id_equal(rpeer, expected_peer);
+	peer_id_free(expected_peer);
 	if (same_peer != 1)
 	{
 		libp2p_stream_close(cb_state.stream);

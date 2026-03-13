@@ -54,7 +54,7 @@ int main(void)
 		return 1;
 	}
 
-	peer_id_t pid = {0};
+	peer_id_t *pid = NULL;
 	if (peer_id_new_from_public_key_pb(pub_pb, pub_len, &pid) != PEER_ID_OK)
 	{
 		fprintf(stderr, "peer_id_new_from_public_key_pb failed\n");
@@ -72,7 +72,7 @@ int main(void)
 		goto out_err;
 	}
 
-	int rc = libp2p_peerstore_add_addr(ps, &pid, ma, 60 * 1000);
+	int rc = libp2p_peerstore_add_addr(ps, pid, ma, 60 * 1000);
 	print_result("peerstore_add_addr", rc == 0);
 	if (rc != 0)
 	{
@@ -81,7 +81,7 @@ int main(void)
 
 	const multiaddr_t **out_addrs = NULL;
 	size_t out_len = 0;
-	rc = libp2p_peerstore_get_addrs(ps, &pid, &out_addrs, &out_len);
+	rc = libp2p_peerstore_get_addrs(ps, pid, &out_addrs, &out_len);
 	int ok = (rc == 0 && out_len >= 1 && out_addrs != NULL);
 	print_result("peerstore_get_addrs", ok);
 	if (!ok)
@@ -107,14 +107,14 @@ int main(void)
 
 	/* Protocols set/get */
 	const char *protos[2] = {"/ipfs/id/1.0.0", "/ipfs/ping/1.0.0"};
-	rc = libp2p_peerstore_set_protocols(ps, &pid, protos, 2);
+	rc = libp2p_peerstore_set_protocols(ps, pid, protos, 2);
 	print_result("peerstore_set_protocols", rc == 0);
 	if (rc != 0)
 		failures++;
 
 	const char **got = NULL;
 	size_t got_len = 0;
-	rc = libp2p_peerstore_get_protocols(ps, &pid, &got, &got_len);
+	rc = libp2p_peerstore_get_protocols(ps, pid, &got, &got_len);
 	ok = (rc == 0 && got && got_len == 2);
 	print_result("peerstore_get_protocols", ok);
 	if (!ok)
@@ -130,7 +130,7 @@ int main(void)
 	libp2p_peerstore_free_protocols(got, got_len);
 
 	/* Public key store (no getter; just store should succeed) */
-	rc = libp2p_peerstore_set_public_key(ps, &pid, pub_pb, pub_len);
+	rc = libp2p_peerstore_set_public_key(ps, pid, pub_pb, pub_len);
 	print_result("peerstore_set_public_key", rc == 0);
 	if (rc != 0)
 		failures++;
@@ -138,7 +138,7 @@ int main(void)
 	/* Public key getter and equality check */
 	uint8_t *got_pb = NULL;
 	size_t got_pb_len = 0;
-	rc = libp2p_peerstore_get_public_key(ps, &pid, &got_pb, &got_pb_len);
+	rc = libp2p_peerstore_get_public_key(ps, pid, &got_pb, &got_pb_len);
 	int okpk = (rc == 0 && got_pb && got_pb_len == pub_len && memcmp(got_pb, pub_pb, pub_len) == 0);
 	print_result("peerstore_get_public_key", okpk);
 	if (!okpk)
@@ -147,14 +147,14 @@ int main(void)
 
 	multiaddr_free(ma);
 	free(pub_pb);
-	peer_id_free(&pid);
+	peer_id_free(pid);
 	libp2p_peerstore_free(ps);
 
 	return failures ? 1 : 0;
 
 out_err:
 	free(pub_pb);
-	peer_id_free(&pid);
+	peer_id_free(pid);
 	libp2p_peerstore_free(ps);
 	return 1;
 }

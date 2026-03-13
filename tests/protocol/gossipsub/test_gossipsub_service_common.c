@@ -181,12 +181,12 @@ int decode_prune_px_count(const uint8_t *frame, size_t frame_len, const char *to
 	return match_found;
 }
 
-int setup_gossip_peer(libp2p_gossipsub_t *gs, const char *topic, const char *peer_str, peer_id_t *out_peer)
+int setup_gossip_peer(libp2p_gossipsub_t *gs, const char *topic, const char *peer_str, peer_id_t **out_peer)
 {
 	if (!gs || !topic || !peer_str || !out_peer)
 		return 0;
 
-	memset(out_peer, 0, sizeof(*out_peer));
+	*out_peer = NULL;
 	if (peer_id_new_from_text(peer_str, out_peer) != PEER_ID_OK)
 		return 0;
 
@@ -195,32 +195,35 @@ int setup_gossip_peer(libp2p_gossipsub_t *gs, const char *topic, const char *pee
 	libp2p_err_t enc_rc = encode_subscription_rpc(topic, 1, &frame, &frame_len);
 	if (enc_rc != LIBP2P_ERR_OK || !frame || frame_len == 0)
 	{
-		peer_id_free(out_peer);
+		peer_id_free(*out_peer);
+		*out_peer = NULL;
 		if (frame)
 			free(frame);
 		return 0;
 	}
 
-	libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, out_peer, frame, frame_len);
+	libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, *out_peer, frame, frame_len);
 	free(frame);
 	if (inj_rc != LIBP2P_ERR_OK)
 	{
-		peer_id_free(out_peer);
+		peer_id_free(*out_peer);
+		*out_peer = NULL;
 		return 0;
 	}
 
-	libp2p_err_t conn_rc = libp2p_gossipsub__peer_set_connected(gs, out_peer, 1);
+	libp2p_err_t conn_rc = libp2p_gossipsub__peer_set_connected(gs, *out_peer, 1);
 	if (conn_rc != LIBP2P_ERR_OK)
 	{
-		peer_id_free(out_peer);
+		peer_id_free(*out_peer);
+		*out_peer = NULL;
 		return 0;
 	}
 
-	(void)libp2p_gossipsub__peer_clear_sendq(gs, out_peer);
+	(void)libp2p_gossipsub__peer_clear_sendq(gs, *out_peer);
 	return 1;
 }
 
-int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_id_t *peers, size_t count,
+int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_id_t **peers, size_t count,
 			       const uint8_t *payload, size_t payload_len, size_t expected, size_t *out_selected,
 			       size_t *out_limit)
 {
@@ -241,7 +244,7 @@ int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_i
 
 	usleep(10000);
 	for (size_t i = 0; i < count; ++i)
-		(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
+		(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
 
 	if (libp2p_gossipsub__heartbeat(gs) != LIBP2P_ERR_OK)
 		return 0;
@@ -256,7 +259,7 @@ int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_i
 		queue_shape_ok = 1;
 		for (size_t i = 0; i < count; ++i)
 		{
-			size_t qlen = libp2p_gossipsub__peer_sendq_len(gs, &peers[i]);
+			size_t qlen = libp2p_gossipsub__peer_sendq_len(gs, peers[i]);
 			if (qlen > 0)
 			{
 				if (qlen != 1)
@@ -553,9 +556,12 @@ static libp2p_err_t build_peer_record_unsigned(const uint8_t *payload_type, size
 static int peer_record_write_fields(NoiseProtobuf *pbuf, const peer_id_t *peer, const multiaddr_t *const *addrs,
 				    size_t addr_count)
 {
-	if (!pbuf || !peer || !peer->bytes || peer->size == 0)
+	const uint8_t *peer_mh = NULL;
+	size_t peer_mh_len = 0;
+	if (!pbuf || !peer || peer_id_multihash_view(peer, &peer_mh, &peer_mh_len) != PEER_ID_OK ||
+	    !peer_mh || peer_mh_len == 0)
 		return 0;
-	if (noise_protobuf_write_bytes(pbuf, 1, peer->bytes, peer->size) != NOISE_ERROR_NONE)
+	if (noise_protobuf_write_bytes(pbuf, 1, peer_mh, peer_mh_len) != NOISE_ERROR_NONE)
 		return 0;
 	if (noise_protobuf_write_uint64(pbuf, 2, 1) != NOISE_ERROR_NONE)
 		return 0;
@@ -667,14 +673,14 @@ libp2p_err_t encode_signed_peer_record(const peer_id_t *peer, const multiaddr_t 
 
 	if (peer)
 	{
-		peer_id_t derived = {0};
+		peer_id_t *derived = NULL;
 		if (peer_id_new_from_public_key_pb(pubkey_pb, pubkey_pb_len, &derived) != PEER_ID_OK)
 		{
-			peer_id_free(&derived);
+			peer_id_free(derived);
 			goto cleanup;
 		}
-		int equal = peer_id_equal(peer, &derived);
-		peer_id_free(&derived);
+		int equal = peer_id_equal(peer, derived);
+		peer_id_free(derived);
 		if (!equal)
 		{
 			result = LIBP2P_ERR_UNSUPPORTED;
@@ -756,7 +762,10 @@ cleanup:
 libp2p_err_t encode_prune_px_rpc(const char *topic, const peer_id_t *px_peer, const uint8_t *signed_record,
 				 size_t signed_record_len, uint8_t **out_buf, size_t *out_len)
 {
-	if (!topic || !px_peer || !px_peer->bytes || px_peer->size == 0 || !out_buf || !out_len)
+	const uint8_t *px_mh = NULL;
+	size_t px_mh_len = 0;
+	if (!topic || !px_peer || peer_id_multihash_view(px_peer, &px_mh, &px_mh_len) != PEER_ID_OK ||
+	    !px_mh || px_mh_len == 0 || !out_buf || !out_len)
 		return LIBP2P_ERR_NULL_PTR;
 	*out_buf = NULL;
 	*out_len = 0;
@@ -787,7 +796,7 @@ libp2p_err_t encode_prune_px_rpc(const char *topic, const peer_id_t *px_peer, co
 	if (noise_rc != NOISE_ERROR_NONE || !info)
 		goto cleanup;
 
-	noise_rc = libp2p_gossipsub_PeerInfo_set_peer_id(info, px_peer->bytes, px_peer->size);
+	noise_rc = libp2p_gossipsub_PeerInfo_set_peer_id(info, px_mh, px_mh_len);
 	if (noise_rc != NOISE_ERROR_NONE)
 		goto cleanup;
 
@@ -885,16 +894,19 @@ libp2p_err_t encode_prune_rpc(const char *topic, int include_px, uint8_t **out_b
 	if (include_px)
 	{
 		static const char *const px_peer_id = "12D3KooWMFFPRc3yLVaM76FUQojVKkD2VwGdMan3ZDV4SSQdlqzC";
-		peer_id_t px_peer = {0};
+		peer_id_t *px_peer = NULL;
 		if (peer_id_new_from_text(px_peer_id, &px_peer) == PEER_ID_OK)
 		{
+			const uint8_t *px_peer_mh = NULL;
+			size_t px_peer_mh_len = 0;
+			peer_id_multihash_view(px_peer, &px_peer_mh, &px_peer_mh_len);
 			libp2p_gossipsub_PeerInfo *px_info = NULL;
 			noise_rc = libp2p_gossipsub_ControlPrune_add_peers(prune, &px_info);
-			if (noise_rc == NOISE_ERROR_NONE && px_info)
+			if (noise_rc == NOISE_ERROR_NONE && px_info && px_peer_mh && px_peer_mh_len > 0)
 			{
-				noise_rc = libp2p_gossipsub_PeerInfo_set_peer_id(px_info, px_peer.bytes, px_peer.size);
+				noise_rc = libp2p_gossipsub_PeerInfo_set_peer_id(px_info, px_peer_mh, px_peer_mh_len);
 			}
-			peer_id_free(&px_peer);
+			peer_id_free(px_peer);
 			if (noise_rc != NOISE_ERROR_NONE)
 				goto cleanup;
 		}
@@ -1070,7 +1082,8 @@ void gossipsub_service_free_env(gossipsub_service_test_env_t *env)
 
 	if (env->config_peer_ok)
 	{
-		peer_id_free(&env->config_peer);
+		peer_id_free(env->config_peer);
+		env->config_peer = NULL;
 		env->config_peer_ok = 0;
 	}
 

@@ -275,7 +275,6 @@ int main(void)
 		if (pidA)
 		{
 			peer_id_free(pidA);
-			free(pidA);
 		}
 		return 1;
 	}
@@ -289,7 +288,6 @@ int main(void)
 		if (pidA)
 		{
 			peer_id_free(pidA);
-			free(pidA);
 		}
 		return 1;
 	}
@@ -329,7 +327,6 @@ int main(void)
 	if (pidA)
 	{
 		peer_id_free(pidA);
-		free(pidA);
 	}
 	fprintf(stderr, "[TEST_RCV] stopping hosts\n");
 	libp2p_host_stop(hb);

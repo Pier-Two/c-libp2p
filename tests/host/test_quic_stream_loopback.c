@@ -640,7 +640,6 @@ cleanup:
 	if (expected_server_peer)
 	{
 		peer_id_free(expected_server_peer);
-		free(expected_server_peer);
 	}
 
 	if (server_ctx_inited)

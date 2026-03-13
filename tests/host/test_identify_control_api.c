@@ -137,7 +137,6 @@ int main(void)
 	if (libp2p_identify_new(ha, &opts, &ids) != 0 || !ids)
 	{
 		peer_id_free(pidB);
-		free(pidB);
 		return 1;
 	}
 
@@ -146,7 +145,6 @@ int main(void)
 	{
 		libp2p_identify_ctrl_free(ids);
 		peer_id_free(pidB);
-		free(pidB);
 		libp2p_host_stop(ha);
 		libp2p_host_stop(hb);
 		libp2p_host_free(ha);
@@ -192,7 +190,6 @@ int main(void)
 	libp2p_host_free_peer_protocols(protos, n);
 	libp2p_identify_ctrl_free(ids);
 	peer_id_free(pidB);
-	free(pidB);
 	libp2p_host_stop(ha);
 	libp2p_host_stop(hb);
 	libp2p_host_free(ha);

@@ -31,8 +31,8 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 
 	const char *peer_a_str = "12D3KooWKihXhd6hExP1dcrQom7uxVkxrSF7CXQQqiweRCLFLACn";
 	const char *peer_b_str = "12D3KooWPyUCDV3zLh3yfrBh7ku19gt1rjYPdByJ72kX3HY4cGJm";
-	peer_id_t peer_a = {0};
-	peer_id_t peer_b = {0};
+	peer_id_t *peer_a = NULL;
+	peer_id_t *peer_b = NULL;
 	int peer_a_ok = setup_gossip_peer(gs, topic_name, peer_a_str, &peer_a);
 	print_result("gossipsub_score_ip_colocation_peer_a", peer_a_ok);
 	if (!peer_a_ok)
@@ -46,8 +46,8 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 
 	if (peer_a_ok && peer_b_ok)
 	{
-		libp2p_err_t set_a_rc = libp2p_gossipsub__peer_set_remote_ip(gs, &peer_a, "192.0.2.10");
-		libp2p_err_t set_b_rc = libp2p_gossipsub__peer_set_remote_ip(gs, &peer_b, "192.0.2.10");
+		libp2p_err_t set_a_rc = libp2p_gossipsub__peer_set_remote_ip(gs, peer_a, "192.0.2.10");
+		libp2p_err_t set_b_rc = libp2p_gossipsub__peer_set_remote_ip(gs, peer_b, "192.0.2.10");
 		int set_a_ok = (set_a_rc == LIBP2P_ERR_OK);
 		int set_b_ok = (set_b_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_score_ip_colocation_set_a", set_a_ok);
@@ -61,8 +61,8 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 		{
 			(void)libp2p_gossipsub__heartbeat(gs);
 			double expected_penalty = env->cfg.ip_colocation_weight * 1.0;
-			double score_a = libp2p_gossipsub__peer_get_score(gs, &peer_a, NULL);
-			double score_b = libp2p_gossipsub__peer_get_score(gs, &peer_b, NULL);
+			double score_a = libp2p_gossipsub__peer_get_score(gs, peer_a, NULL);
+			double score_b = libp2p_gossipsub__peer_get_score(gs, peer_b, NULL);
 			int penalty_a_ok = (fabs(score_a - expected_penalty) < 1e-6);
 			int penalty_b_ok = (fabs(score_b - expected_penalty) < 1e-6);
 			print_result("gossipsub_score_ip_colocation_penalty_a", penalty_a_ok);
@@ -72,7 +72,7 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 			if (!penalty_b_ok)
 				failures++;
 
-			libp2p_err_t reset_b_rc = libp2p_gossipsub__peer_set_remote_ip(gs, &peer_b, "198.51.100.20");
+			libp2p_err_t reset_b_rc = libp2p_gossipsub__peer_set_remote_ip(gs, peer_b, "198.51.100.20");
 			int reset_b_ok = (reset_b_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_ip_colocation_reset_b", reset_b_ok);
 			if (!reset_b_ok)
@@ -81,8 +81,8 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 			if (reset_b_ok)
 			{
 				(void)libp2p_gossipsub__heartbeat(gs);
-				double score_a_after = libp2p_gossipsub__peer_get_score(gs, &peer_a, NULL);
-				double score_b_after = libp2p_gossipsub__peer_get_score(gs, &peer_b, NULL);
+				double score_a_after = libp2p_gossipsub__peer_get_score(gs, peer_a, NULL);
+				double score_b_after = libp2p_gossipsub__peer_get_score(gs, peer_b, NULL);
 				int cleared_a_ok = (fabs(score_a_after) < 1e-6);
 				int cleared_b_ok = (fabs(score_b_after) < 1e-6);
 				print_result("gossipsub_score_ip_colocation_clear_a", cleared_a_ok);
@@ -94,10 +94,10 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 			}
 		}
 
-		(void)libp2p_gossipsub__peer_clear_sendq(gs, &peer_a);
-		(void)libp2p_gossipsub__peer_clear_sendq(gs, &peer_b);
-		(void)libp2p_gossipsub__peer_set_connected(gs, &peer_a, 0);
-		(void)libp2p_gossipsub__peer_set_connected(gs, &peer_b, 0);
+		(void)libp2p_gossipsub__peer_clear_sendq(gs, peer_a);
+		(void)libp2p_gossipsub__peer_clear_sendq(gs, peer_b);
+		(void)libp2p_gossipsub__peer_set_connected(gs, peer_a, 0);
+		(void)libp2p_gossipsub__peer_set_connected(gs, peer_b, 0);
 	}
 
 	if (subscribe_ok)
@@ -110,9 +110,9 @@ static int run_ip_colocation_test(gossipsub_service_test_env_t *env)
 	}
 
 	if (peer_a_ok)
-		peer_id_free(&peer_a);
+		peer_id_free(peer_a);
 	if (peer_b_ok)
-		peer_id_free(&peer_b);
+		peer_id_free(peer_b);
 
 	return failures;
 }
@@ -146,8 +146,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWRbYFJd8hVZCqxx1Zt9KJ9kzPWxtLs5FoX4iVQQPPrw3Y";
-		peer_id_t score_peer;
-		memset(&score_peer, 0, sizeof(score_peer));
+		peer_id_t *score_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &score_peer);
@@ -157,13 +156,13 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &score_peer, 1);
+			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, score_peer, 1);
 			int mesh_ok = (mesh_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_mesh_add", mesh_ok);
 			if (!mesh_ok)
 				failures++;
 
-			double initial_score = libp2p_gossipsub__peer_get_score(gs, &score_peer, NULL);
+			double initial_score = libp2p_gossipsub__peer_get_score(gs, score_peer, NULL);
 			int initial_ok = (initial_score >= -1e-6 && initial_score <= 1e-6);
 			print_result("gossipsub_score_initial_zero", initial_ok);
 			if (!initial_ok)
@@ -171,7 +170,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 			usleep(20000);
 			libp2p_gossipsub__heartbeat(gs);
-			double score_first = libp2p_gossipsub__peer_get_score(gs, &score_peer, NULL);
+			double score_first = libp2p_gossipsub__peer_get_score(gs, score_peer, NULL);
 			int positive_ok = (score_first > 0.0);
 			print_result("gossipsub_score_positive", positive_ok);
 			if (!positive_ok)
@@ -179,26 +178,26 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 			usleep(20000);
 			libp2p_gossipsub__heartbeat(gs);
-			double score_second = libp2p_gossipsub__peer_get_score(gs, &score_peer, NULL);
+			double score_second = libp2p_gossipsub__peer_get_score(gs, score_peer, NULL);
 			int increasing_ok = (score_second > score_first);
 			print_result("gossipsub_score_increasing", increasing_ok);
 			if (!increasing_ok)
 				failures++;
 
-			libp2p_err_t remove_rc = libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &score_peer);
+			libp2p_err_t remove_rc = libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, score_peer);
 			int remove_ok = (remove_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_mesh_remove", remove_ok);
 			if (!remove_ok)
 				failures++;
 
 			libp2p_gossipsub__heartbeat(gs);
-			double score_removed = libp2p_gossipsub__peer_get_score(gs, &score_peer, NULL);
+			double score_removed = libp2p_gossipsub__peer_get_score(gs, score_peer, NULL);
 			int reset_ok = (score_removed >= -1e-6 && score_removed <= 0.05);
 			print_result("gossipsub_score_reset", reset_ok);
 			if (!reset_ok)
 				failures++;
 
-			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, &score_peer, 5.0);
+			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, score_peer, 5.0);
 			int override_set_ok = (override_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_override_set", override_set_ok);
 			if (!override_set_ok)
@@ -207,15 +206,15 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			usleep(10000);
 			libp2p_gossipsub__heartbeat(gs);
 			int override_flag = 0;
-			double override_score = libp2p_gossipsub__peer_get_score(gs, &score_peer, &override_flag);
+			double override_score = libp2p_gossipsub__peer_get_score(gs, score_peer, &override_flag);
 			int override_ok = (override_flag == 1 && override_score >= 4.9 && override_score <= 5.1);
 			print_result("gossipsub_score_override_persist", override_ok);
 			if (!override_ok)
 				failures++;
 
-			(void)libp2p_gossipsub__peer_set_score(gs, &score_peer, 0.0);
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &score_peer);
-			libp2p_gossipsub__peer_set_connected(gs, &score_peer, 0);
+			(void)libp2p_gossipsub__peer_set_score(gs, score_peer, 0.0);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, score_peer);
+			libp2p_gossipsub__peer_set_connected(gs, score_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -233,7 +232,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&score_peer);
+			peer_id_free(score_peer);
 	}
 
 	{
@@ -250,7 +249,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWLL8sR3cQoQ1Mo3eLKP9whXphJEG9wZb5G1fWQYTTK91S";
-		peer_id_t op_peer = {0};
+		peer_id_t *op_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &op_peer);
@@ -262,13 +261,13 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		{
 			int base_updates = env->score_update_count;
 			double desired_score = 2.5;
-			libp2p_err_t op_rc = libp2p_gossipsub_set_peer_application_score(gs, &op_peer, desired_score);
+			libp2p_err_t op_rc = libp2p_gossipsub_set_peer_application_score(gs, op_peer, desired_score);
 			int application_set_ok = (op_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_operator_application_set", application_set_ok);
 			if (!application_set_ok)
 				failures++;
 
-			double score_after_set = libp2p_gossipsub__peer_get_score(gs, &op_peer, NULL);
+			double score_after_set = libp2p_gossipsub__peer_get_score(gs, op_peer, NULL);
 			int application_value_ok = (fabs(score_after_set - desired_score) < 1e-6);
 			print_result("gossipsub_score_operator_application_value", application_value_ok);
 			if (!application_value_ok)
@@ -282,13 +281,13 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 			base_updates = env->score_update_count;
 			double penalty_delta = 1.25;
-			op_rc = libp2p_gossipsub_add_peer_behaviour_penalty(gs, &op_peer, penalty_delta);
+			op_rc = libp2p_gossipsub_add_peer_behaviour_penalty(gs, op_peer, penalty_delta);
 			int penalty_add_ok = (op_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_operator_penalty_add", penalty_add_ok);
 			if (!penalty_add_ok)
 				failures++;
 
-			double score_after_penalty = libp2p_gossipsub__peer_get_score(gs, &op_peer, NULL);
+			double score_after_penalty = libp2p_gossipsub__peer_get_score(gs, op_peer, NULL);
 			double penalty_weight = env->cfg.behaviour_penalty_weight;
 			double expected_penalty_score =
 				desired_score + penalty_weight * (penalty_delta * penalty_delta);
@@ -304,13 +303,13 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				failures++;
 
 			base_updates = env->score_update_count;
-			op_rc = libp2p_gossipsub_set_peer_behaviour_penalty(gs, &op_peer, 0.0);
+			op_rc = libp2p_gossipsub_set_peer_behaviour_penalty(gs, op_peer, 0.0);
 			int penalty_reset_ok = (op_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_operator_penalty_reset", penalty_reset_ok);
 			if (!penalty_reset_ok)
 				failures++;
 
-			double score_after_reset = libp2p_gossipsub__peer_get_score(gs, &op_peer, NULL);
+			double score_after_reset = libp2p_gossipsub__peer_get_score(gs, op_peer, NULL);
 			int penalty_reset_value_ok = (fabs(score_after_reset - desired_score) < 1e-6);
 			print_result("gossipsub_score_operator_penalty_reset_value", penalty_reset_value_ok);
 			if (!penalty_reset_value_ok)
@@ -323,7 +322,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				failures++;
 
 			base_updates = env->score_update_count;
-			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, &op_peer, 4.0);
+			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, op_peer, 4.0);
 			int override_ok = (override_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_operator_override_set", override_ok);
 			if (!override_ok)
@@ -337,14 +336,14 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				failures++;
 
 			base_updates = env->score_update_count;
-			(void)libp2p_gossipsub__peer_clear_score_override(gs, &op_peer);
+			(void)libp2p_gossipsub__peer_clear_score_override(gs, op_peer);
 			(void)libp2p_gossipsub__heartbeat(gs);
 			int override_clear_callback_ok =
 				(env->score_update_count >= base_updates + 1) && (env->score_update_last_override == 0);
 			print_result("gossipsub_score_operator_override_clear_callback", override_clear_callback_ok);
 			if (!override_clear_callback_ok)
 				failures++;
-			double score_post_clear = libp2p_gossipsub__peer_get_score(gs, &op_peer, NULL);
+			double score_post_clear = libp2p_gossipsub__peer_get_score(gs, op_peer, NULL);
 			int override_clear_value_ok = (fabs(score_post_clear - desired_score) < 1e-6);
 			print_result("gossipsub_score_operator_override_cleared", override_clear_value_ok);
 			if (!override_clear_value_ok)
@@ -366,7 +365,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&op_peer);
+			peer_id_free(op_peer);
 	}
 
 	{
@@ -399,7 +398,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWNhqcS8N5cCw6mU4esDaS6XdZWQU3oS9LFCH4x4ETyCQT";
-		peer_id_t first_peer = {0};
+		peer_id_t *first_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &first_peer);
@@ -409,7 +408,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &first_peer, 1);
+			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, first_peer, 1);
 			int mesh_ok = (mesh_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_first_delivery_mesh_add", mesh_ok);
 			if (!mesh_ok)
@@ -423,7 +422,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 					.topic = {.struct_size = sizeof(first_msg.topic), .topic = topic_name},
 					.data = payload,
 					.data_len = sizeof(payload),
-					.from = &first_peer,
+					.from = first_peer,
 					.seqno = seqno,
 					.seqno_len = sizeof(seqno),
 					.raw_message = NULL,
@@ -441,7 +440,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				if (encode_ok)
 				{
 					libp2p_err_t inj_rc =
-						libp2p_gossipsub__inject_frame(gs, &first_peer, frame, frame_len);
+						libp2p_gossipsub__inject_frame(gs, first_peer, frame, frame_len);
 					int inject_ok = (inj_rc == LIBP2P_ERR_OK);
 					print_result("gossipsub_score_first_delivery_inject", inject_ok);
 					if (!inject_ok)
@@ -449,7 +448,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 					else
 					{
 						usleep(10000);
-						double score = libp2p_gossipsub__peer_get_score(gs, &first_peer, NULL);
+						double score = libp2p_gossipsub__peer_get_score(gs, first_peer, NULL);
 						int score_ok = (score > 0.0);
 						print_result("gossipsub_score_first_delivery_positive", score_ok);
 						if (!score_ok)
@@ -461,9 +460,9 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 					free(frame);
 			}
 
-			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &first_peer);
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &first_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &first_peer, 0);
+			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, first_peer);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, first_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, first_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -481,7 +480,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&first_peer);
+			peer_id_free(first_peer);
 	}
 
 	{
@@ -514,7 +513,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWHZjVdysJ8V5Y2Tyshzw31wY1M2fjTw83YVHC6rU1ttzv";
-		peer_id_t mesh_peer = {0};
+		peer_id_t *mesh_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &mesh_peer);
@@ -524,8 +523,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			(void)libp2p_gossipsub__peer_clear_score_override(gs, &mesh_peer);
-			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &mesh_peer, 1);
+			(void)libp2p_gossipsub__peer_clear_score_override(gs, mesh_peer);
+			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, mesh_peer, 1);
 			int mesh_ok = (mesh_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_mesh_penalty_mesh_add", mesh_ok);
 			if (!mesh_ok)
@@ -534,16 +533,16 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (mesh_ok)
 			{
 				libp2p_gossipsub__heartbeat(gs);
-				double score = libp2p_gossipsub__peer_get_score(gs, &mesh_peer, NULL);
+				double score = libp2p_gossipsub__peer_get_score(gs, mesh_peer, NULL);
 				int penalty_ok = (score < -0.5);
 				print_result("gossipsub_score_mesh_penalty_negative", penalty_ok);
 				if (!penalty_ok)
 					failures++;
 			}
 
-			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &mesh_peer);
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &mesh_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &mesh_peer, 0);
+			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, mesh_peer);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, mesh_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, mesh_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -561,7 +560,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&mesh_peer);
+			peer_id_free(mesh_peer);
 	}
 
 	{
@@ -594,7 +593,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWQX1pP6uPQ7RZicMv6z4dGYBHc9B7iKLB9gowgCJFzQEw";
-		peer_id_t failure_peer = {0};
+		peer_id_t *failure_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &failure_peer);
@@ -604,8 +603,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			(void)libp2p_gossipsub__peer_clear_score_override(gs, &failure_peer);
-			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &failure_peer, 1);
+			(void)libp2p_gossipsub__peer_clear_score_override(gs, failure_peer);
+			libp2p_err_t mesh_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, failure_peer, 1);
 			int mesh_ok = (mesh_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_failure_penalty_mesh_add", mesh_ok);
 			if (!mesh_ok)
@@ -614,28 +613,28 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (mesh_ok)
 			{
 				libp2p_gossipsub__heartbeat(gs);
-				double score_before = libp2p_gossipsub__peer_get_score(gs, &failure_peer, NULL);
+				double score_before = libp2p_gossipsub__peer_get_score(gs, failure_peer, NULL);
 				int negative_ok = (score_before < -1.0);
 				print_result("gossipsub_score_failure_penalty_negative_before", negative_ok);
 				if (!negative_ok)
 					failures++;
 
 				libp2p_err_t remove_rc =
-					libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &failure_peer);
+					libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, failure_peer);
 				int remove_ok = (remove_rc == LIBP2P_ERR_OK);
 				print_result("gossipsub_score_failure_penalty_remove", remove_ok);
 				if (!remove_ok)
 					failures++;
 
-				double score_after = libp2p_gossipsub__peer_get_score(gs, &failure_peer, NULL);
+				double score_after = libp2p_gossipsub__peer_get_score(gs, failure_peer, NULL);
 				int penalty_sticky = (score_after < score_before - 0.4);
 				print_result("gossipsub_score_failure_penalty_sticky", penalty_sticky);
 				if (!penalty_sticky)
 					failures++;
 			}
 
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &failure_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &failure_peer, 0);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, failure_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, failure_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -653,7 +652,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&failure_peer);
+			peer_id_free(failure_peer);
 	}
 
 	{
@@ -703,7 +702,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		const char *peer_str = "12D3KooWR4hrfaGHadzZmuywckcUPMfELzUhY4JiuYxazJJQdky3";
-		peer_id_t invalid_peer = {0};
+		peer_id_t *invalid_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &invalid_peer);
@@ -713,7 +712,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			(void)libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &invalid_peer, 1);
+			(void)libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, invalid_peer, 1);
 
 			const uint8_t payload[] = {0xDE, 0xAD, 0xBE, 0xEF};
 			const uint8_t seqno[] = {0x11, 0x22, 0x33, 0x44};
@@ -721,7 +720,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				.topic = {.struct_size = sizeof(invalid_msg.topic), .topic = topic_name},
 				.data = payload,
 				.data_len = sizeof(payload),
-				.from = &invalid_peer,
+				.from = invalid_peer,
 				.seqno = seqno,
 				.seqno_len = sizeof(seqno),
 				.raw_message = NULL,
@@ -738,7 +737,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (encode_ok)
 			{
 				libp2p_err_t inj_rc =
-					libp2p_gossipsub__inject_frame(gs, &invalid_peer, frame, frame_len);
+					libp2p_gossipsub__inject_frame(gs, invalid_peer, frame, frame_len);
 				int inject_ok = (inj_rc == LIBP2P_ERR_OK);
 				print_result("gossipsub_score_invalid_inject", inject_ok);
 				if (!inject_ok)
@@ -746,7 +745,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				else
 				{
 					usleep(10000);
-					double score = libp2p_gossipsub__peer_get_score(gs, &invalid_peer, NULL);
+					double score = libp2p_gossipsub__peer_get_score(gs, invalid_peer, NULL);
 					int score_ok = (score < 0.0);
 					print_result("gossipsub_score_invalid_negative", score_ok);
 					if (!score_ok)
@@ -757,9 +756,9 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (frame)
 				free(frame);
 
-			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &invalid_peer);
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &invalid_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &invalid_peer, 0);
+			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, invalid_peer);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, invalid_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, invalid_peer, 0);
 		}
 
 		if (validator_handle)
@@ -791,7 +790,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&invalid_peer);
+			peer_id_free(invalid_peer);
 	}
 
 	{
@@ -831,7 +830,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		if (!runtime_sub_ok)
 			failures++;
 
-		peer_id_t runtime_peer = {0};
+		peer_id_t *runtime_peer = NULL;
 		int runtime_peer_ok =
 			runtime_sub_ok && setup_gossip_peer(gs, runtime_topic, runtime_peer_str, &runtime_peer);
 		print_result("gossipsub_runtime_update_peer_setup", runtime_peer_ok);
@@ -843,7 +842,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		if (runtime_sub_ok && runtime_peer_ok)
 		{
 			libp2p_err_t mesh_rc =
-				libp2p_gossipsub__topic_mesh_add_peer(gs, runtime_topic, &runtime_peer, 1);
+				libp2p_gossipsub__topic_mesh_add_peer(gs, runtime_topic, runtime_peer, 1);
 			int mesh_ok = (mesh_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_runtime_update_mesh_join", mesh_ok);
 			if (!mesh_ok)
@@ -854,7 +853,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				(void)libp2p_gossipsub__heartbeat(gs);
 				usleep(20000);
 				(void)libp2p_gossipsub__heartbeat(gs);
-				double initial_score = libp2p_gossipsub__peer_get_score(gs, &runtime_peer, NULL);
+				double initial_score = libp2p_gossipsub__peer_get_score(gs, runtime_peer, NULL);
 				int initial_positive = (initial_score > 0.0);
 				print_result("gossipsub_runtime_update_initial_score", initial_positive);
 				if (!initial_positive)
@@ -874,7 +873,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				if (!boost_ok)
 					failures++;
 
-				double boosted_score = libp2p_gossipsub__peer_get_score(gs, &runtime_peer, NULL);
+				double boosted_score = libp2p_gossipsub__peer_get_score(gs, runtime_peer, NULL);
 				int boosted_higher = (boosted_score > initial_score * 1.5);
 				print_result("gossipsub_runtime_update_score_increased", boosted_higher);
 				if (!boosted_higher)
@@ -891,23 +890,23 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				if (!clear_ok)
 					failures++;
 
-				double cleared_score = libp2p_gossipsub__peer_get_score(gs, &runtime_peer, NULL);
+				double cleared_score = libp2p_gossipsub__peer_get_score(gs, runtime_peer, NULL);
 				int cleared_zero = (cleared_score > -1e-6 && cleared_score < 1e-6);
 				print_result("gossipsub_runtime_update_score_cleared", cleared_zero);
 				if (!cleared_zero)
 					failures++;
 
 				(void)libp2p_gossipsub__heartbeat(gs);
-				double cleared_post_tick = libp2p_gossipsub__peer_get_score(gs, &runtime_peer, NULL);
+				double cleared_post_tick = libp2p_gossipsub__peer_get_score(gs, runtime_peer, NULL);
 				int cleared_stable = (cleared_post_tick > -1e-6 && cleared_post_tick < 1e-6);
 				print_result("gossipsub_runtime_update_score_stable", cleared_stable);
 				if (!cleared_stable)
 					failures++;
 			}
 
-			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, runtime_topic, &runtime_peer);
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &runtime_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &runtime_peer, 0);
+			(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, runtime_topic, runtime_peer);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, runtime_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, runtime_peer, 0);
 		}
 
 		if (runtime_sub_ok)
@@ -925,7 +924,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (runtime_peer_ok)
-			peer_id_free(&runtime_peer);
+			peer_id_free(runtime_peer);
 	}
 
 	{
@@ -942,7 +941,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWJMCZpZGsGWpRieyU7gnaNmJKbnHiKK4xqSSdoRRt9P5r";
-		peer_id_t spam_peer = {0};
+		peer_id_t *spam_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &spam_peer);
@@ -954,32 +953,32 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 		if (subscribe_ok && peer_ok)
 		{
-			libp2p_err_t reset_app_rc = libp2p_gossipsub_set_peer_application_score(gs, &spam_peer, 0.0);
+			libp2p_err_t reset_app_rc = libp2p_gossipsub_set_peer_application_score(gs, spam_peer, 0.0);
 			int reset_app_ok = (reset_app_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_ihave_penalty_reset_app", reset_app_ok);
 			if (!reset_app_ok)
 				failures++;
 
-			libp2p_err_t reset_pen_rc = libp2p_gossipsub_set_peer_behaviour_penalty(gs, &spam_peer, 0.0);
+			libp2p_err_t reset_pen_rc = libp2p_gossipsub_set_peer_behaviour_penalty(gs, spam_peer, 0.0);
 			int reset_pen_ok = (reset_pen_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_ihave_penalty_reset_penalty", reset_pen_ok);
 			if (!reset_pen_ok)
 				failures++;
 
-			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, &spam_peer, 0.0);
+			libp2p_err_t override_rc = libp2p_gossipsub__peer_set_score(gs, spam_peer, 0.0);
 			int override_reset_ok = (override_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_ihave_penalty_override_reset", override_reset_ok);
 			if (!override_reset_ok)
 				failures++;
 
-			libp2p_err_t clear_override_rc = libp2p_gossipsub__peer_clear_score_override(gs, &spam_peer);
+			libp2p_err_t clear_override_rc = libp2p_gossipsub__peer_clear_score_override(gs, spam_peer);
 			int override_clear_ok = (clear_override_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_score_ihave_penalty_override_clear", override_clear_ok);
 			if (!override_clear_ok)
 				failures++;
 
 			double expected_penalty = env->cfg.ihave_spam_penalty;
-			double initial_score = libp2p_gossipsub__peer_get_score(gs, &spam_peer, NULL);
+			double initial_score = libp2p_gossipsub__peer_get_score(gs, spam_peer, NULL);
 			int initial_ok = (initial_score > -1e-6 && initial_score < 1e-6);
 			print_result("gossipsub_score_ihave_penalty_initial", initial_ok);
 			if (!initial_ok)
@@ -1009,7 +1008,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 					break;
 				}
 
-				libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, &spam_peer, frame, frame_len);
+				libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, spam_peer, frame, frame_len);
 				free(frame);
 				int inj_ok = (inj_rc == LIBP2P_ERR_OK);
 				char inj_name[64];
@@ -1023,7 +1022,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 				usleep(10000);
 
-				double score = libp2p_gossipsub__peer_get_score(gs, &spam_peer, NULL);
+				double score = libp2p_gossipsub__peer_get_score(gs, spam_peer, NULL);
 				if (i < 2)
 				{
 					int pre_penalty_ok = (score > -1e-6 && score < 1e-6);
@@ -1048,8 +1047,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				}
 			}
 
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &spam_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &spam_peer, 0);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, spam_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, spam_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -1067,7 +1066,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&spam_peer);
+			peer_id_free(spam_peer);
 	}
 
 	{
@@ -1084,7 +1083,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			failures++;
 
 		const char *peer_str = "12D3KooWDGnJ9cYVbS1oFNsM1PYTR1eA6AAquuZqPtSg1xMkFk3d";
-		peer_id_t promise_peer = {0};
+		peer_id_t *promise_peer = NULL;
 		int peer_ok = 0;
 		if (subscribe_ok)
 			peer_ok = setup_gossip_peer(gs, topic_name, peer_str, &promise_peer);
@@ -1109,7 +1108,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			else
 			{
 				libp2p_err_t inj_rc =
-					libp2p_gossipsub__inject_frame(gs, &promise_peer, ihave_frame, ihave_len);
+					libp2p_gossipsub__inject_frame(gs, promise_peer, ihave_frame, ihave_len);
 				int inj_ok = (inj_rc == LIBP2P_ERR_OK);
 				print_result("gossipsub_spam_promise_inject", inj_ok);
 				if (!inj_ok)
@@ -1117,7 +1116,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 				free(ihave_frame);
 			}
 
-			size_t queue_len = libp2p_gossipsub__peer_sendq_len(gs, &promise_peer);
+			size_t queue_len = libp2p_gossipsub__peer_sendq_len(gs, promise_peer);
 			int iwant_sent = (queue_len >= 1);
 			print_result("gossipsub_spam_promise_iwant_sent", iwant_sent);
 			if (!iwant_sent)
@@ -1126,7 +1125,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			uint8_t *send_frame = NULL;
 			size_t send_len = 0;
 			libp2p_err_t pop_rc =
-				libp2p_gossipsub__peer_pop_sendq(gs, &promise_peer, &send_frame, &send_len);
+				libp2p_gossipsub__peer_pop_sendq(gs, promise_peer, &send_frame, &send_len);
 			int pop_ok = (pop_rc == LIBP2P_ERR_OK);
 			print_result("gossipsub_spam_promise_pop", pop_ok);
 			if (!pop_ok)
@@ -1134,7 +1133,7 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (send_frame)
 				free(send_frame);
 
-			double initial_score = libp2p_gossipsub__peer_get_score(gs, &promise_peer, NULL);
+			double initial_score = libp2p_gossipsub__peer_get_score(gs, promise_peer, NULL);
 			int initial_ok = (initial_score > -1e-6 && initial_score < 1e-6);
 			print_result("gossipsub_spam_promise_initial_score", initial_ok);
 			if (!initial_ok)
@@ -1148,14 +1147,14 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			if (!hb_ok)
 				failures++;
 
-			double after_score = libp2p_gossipsub__peer_get_score(gs, &promise_peer, NULL);
+			double after_score = libp2p_gossipsub__peer_get_score(gs, promise_peer, NULL);
 			int penalty_applied = (after_score < -0.5);
 			print_result("gossipsub_spam_promise_penalty", penalty_applied);
 			if (!penalty_applied)
 				failures++;
 
-			(void)libp2p_gossipsub__peer_clear_sendq(gs, &promise_peer);
-			(void)libp2p_gossipsub__peer_set_connected(gs, &promise_peer, 0);
+			(void)libp2p_gossipsub__peer_clear_sendq(gs, promise_peer);
+			(void)libp2p_gossipsub__peer_set_connected(gs, promise_peer, 0);
 		}
 
 		if (subscribe_ok)
@@ -1173,15 +1172,15 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 		}
 
 		if (peer_ok)
-			peer_id_free(&promise_peer);
+			peer_id_free(promise_peer);
 	}
 
 	{
 		const char *explicit_peer_str = "12D3KooWL9qw9QdCsiPUQXGWxZhwivKar35CFYuU9B9kavHuV2XZ";
 		const char *mesh_peer_str = "12D3KooWL41axLhXgML3zbxTDkVxFvtz7ZzZWtH1yurVpbkWueMH";
 		const char *explicit_topic_name = "explicit/test/topic";
-		peer_id_t explicit_peer = {0};
-		peer_id_t mesh_peer = {0};
+		peer_id_t *explicit_peer = NULL;
+		peer_id_t *mesh_peer = NULL;
 		int explicit_peer_ok = (peer_id_new_from_text(explicit_peer_str, &explicit_peer) == PEER_ID_OK);
 		int mesh_peer_ok = (peer_id_new_from_text(mesh_peer_str, &mesh_peer) == PEER_ID_OK);
 	}

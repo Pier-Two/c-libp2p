@@ -12,8 +12,8 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 	const char *explicit_peer_str = "12D3KooWL9qw9QdCsiPUQXGWxZhwivKar35CFYuU9B9kavHuV2XZ";
 	const char *mesh_peer_str = "12D3KooWL41axLhXgML3zbxTDkVxFvtz7ZzZWtH1yurVpbkWueMH";
 	const char *explicit_topic_name = "explicit/test/topic";
-	peer_id_t explicit_peer = {0};
-	peer_id_t mesh_peer = {0};
+	peer_id_t *explicit_peer = NULL;
+	peer_id_t *mesh_peer = NULL;
 	int explicit_peer_ok = (peer_id_new_from_text(explicit_peer_str, &explicit_peer) == PEER_ID_OK);
 	int mesh_peer_ok = (peer_id_new_from_text(mesh_peer_str, &mesh_peer) == PEER_ID_OK);
 	print_result("gossipsub_explicit_peer_id", explicit_peer_ok);
@@ -35,7 +35,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 	if (explicit_peer_ok && mesh_peer_ok)
 	{
 		explicit_sub_rc = libp2p_gossipsub_subscribe(gs, &explicit_topic_cfg);
-		peering_rc = libp2p_gossipsub_peering_add(gs, &explicit_peer);
+		peering_rc = libp2p_gossipsub_peering_add(gs, explicit_peer);
 	}
 
 	explicit_sub_ok = (explicit_peer_ok && mesh_peer_ok && explicit_sub_rc == LIBP2P_ERR_OK);
@@ -50,24 +50,24 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 
 	if (explicit_sub_ok && peering_add_ok)
 	{
-		libp2p_err_t set_conn_rc = libp2p_gossipsub__peer_set_connected(gs, &explicit_peer, 1);
+		libp2p_err_t set_conn_rc = libp2p_gossipsub__peer_set_connected(gs, explicit_peer, 1);
 		int set_conn_ok = (set_conn_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_explicit_peer_mark_connected", set_conn_ok);
 		if (!set_conn_ok)
 			failures++;
 
 		libp2p_err_t mesh_add_rc =
-			libp2p_gossipsub__topic_mesh_add_peer(gs, explicit_topic_name, &mesh_peer, 1);
+			libp2p_gossipsub__topic_mesh_add_peer(gs, explicit_topic_name, mesh_peer, 1);
 		int mesh_add_ok = (mesh_add_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_explicit_mesh_peer_added", mesh_add_ok);
 		if (!mesh_add_ok)
 			failures++;
 
 		if (mesh_add_ok)
-			(void)libp2p_gossipsub__peer_set_connected(gs, &mesh_peer, 1);
+			(void)libp2p_gossipsub__peer_set_connected(gs, mesh_peer, 1);
 
 		int explicit_in_mesh =
-			libp2p_gossipsub__topic_mesh_contains(gs, explicit_topic_name, &explicit_peer, NULL, NULL);
+			libp2p_gossipsub__topic_mesh_contains(gs, explicit_topic_name, explicit_peer, NULL, NULL);
 		int explicit_not_mesh = (explicit_in_mesh == 0);
 		print_result("gossipsub_explicit_peer_not_in_mesh", explicit_not_mesh);
 		if (!explicit_not_mesh)
@@ -94,7 +94,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 			size_t explicit_queue = 0;
 			for (int i = 0; i < 200 && explicit_queue == 0; ++i)
 			{
-				explicit_queue = libp2p_gossipsub__peer_sendq_len(gs, &explicit_peer);
+				explicit_queue = libp2p_gossipsub__peer_sendq_len(gs, explicit_peer);
 				if (explicit_queue == 0)
 					usleep(1000);
 			}
@@ -107,7 +107,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 			{
 				uint8_t *queued_frame = NULL;
 				size_t queued_len = 0;
-				libp2p_err_t pop_rc = libp2p_gossipsub__peer_pop_sendq(gs, &explicit_peer,
+				libp2p_err_t pop_rc = libp2p_gossipsub__peer_pop_sendq(gs, explicit_peer,
 										       &queued_frame, &queued_len);
 				int pop_ok = (pop_rc == LIBP2P_ERR_OK && queued_frame && queued_len);
 				print_result("gossipsub_explicit_peer_pop_publish", pop_ok);
@@ -128,7 +128,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 
 		libp2p_err_t graft_inj_rc = LIBP2P_ERR_INTERNAL;
 		if (graft_enc_ok)
-			graft_inj_rc = libp2p_gossipsub__inject_frame(gs, &explicit_peer, graft_frame, graft_len);
+			graft_inj_rc = libp2p_gossipsub__inject_frame(gs, explicit_peer, graft_frame, graft_len);
 		int graft_inj_ok = (graft_enc_ok && graft_inj_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_explicit_graft_inject", graft_inj_ok);
 		if (!graft_inj_ok)
@@ -136,7 +136,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 		if (graft_frame)
 			free(graft_frame);
 
-		size_t queue_after_graft = libp2p_gossipsub__peer_sendq_len(gs, &explicit_peer);
+		size_t queue_after_graft = libp2p_gossipsub__peer_sendq_len(gs, explicit_peer);
 		int no_prune = (queue_after_graft == 0);
 		print_result("gossipsub_explicit_graft_does_not_enqueue", no_prune);
 		if (!no_prune)
@@ -146,30 +146,30 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 			{
 				uint8_t *tmp_buf = NULL;
 				size_t tmp_len = 0;
-				libp2p_gossipsub__peer_pop_sendq(gs, &explicit_peer, &tmp_buf, &tmp_len);
+				libp2p_gossipsub__peer_pop_sendq(gs, explicit_peer, &tmp_buf, &tmp_len);
 				if (tmp_buf)
 					free(tmp_buf);
-				queue_after_graft = libp2p_gossipsub__peer_sendq_len(gs, &explicit_peer);
+				queue_after_graft = libp2p_gossipsub__peer_sendq_len(gs, explicit_peer);
 			}
 		}
 
 		libp2p_event_t close_evt;
 		memset(&close_evt, 0, sizeof(close_evt));
 		close_evt.kind = LIBP2P_EVT_CONN_CLOSED;
-		close_evt.u.conn_closed.peer = &explicit_peer;
+		close_evt.u.conn_closed.peer = explicit_peer;
 		close_evt.u.conn_closed.reason = 0;
 		gossipsub_host_events_on_host_event(&close_evt, gs);
 
-		int timer_id = libp2p_gossipsub__peer_explicit_timer_id(gs, &explicit_peer);
+		int timer_id = libp2p_gossipsub__peer_explicit_timer_id(gs, explicit_peer);
 		int timer_scheduled = (timer_id > 0);
 		print_result("gossipsub_explicit_redial_scheduled", timer_scheduled);
 		if (!timer_scheduled)
 			failures++;
 
-		(void)libp2p_gossipsub_peering_remove(gs, &explicit_peer);
-		(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, explicit_topic_name, &mesh_peer);
-		(void)libp2p_gossipsub__peer_clear_sendq(gs, &explicit_peer);
-		(void)libp2p_gossipsub__peer_clear_sendq(gs, &mesh_peer);
+		(void)libp2p_gossipsub_peering_remove(gs, explicit_peer);
+		(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, explicit_topic_name, mesh_peer);
+		(void)libp2p_gossipsub__peer_clear_sendq(gs, explicit_peer);
+		(void)libp2p_gossipsub__peer_clear_sendq(gs, mesh_peer);
 		libp2p_err_t explicit_unsub_rc = libp2p_gossipsub_unsubscribe(gs, explicit_topic_name);
 		int explicit_unsub_ok = (explicit_unsub_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_explicit_unsubscribe", explicit_unsub_ok);
@@ -180,15 +180,15 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 	if (!(explicit_sub_ok && peering_add_ok))
 	{
 		if (peering_add_ok)
-			(void)libp2p_gossipsub_peering_remove(gs, &explicit_peer);
+			(void)libp2p_gossipsub_peering_remove(gs, explicit_peer);
 		if (explicit_sub_ok)
 			(void)libp2p_gossipsub_unsubscribe(gs, explicit_topic_name);
 	}
 
 	if (explicit_peer_ok)
-		peer_id_free(&explicit_peer);
+		peer_id_free(explicit_peer);
 	if (mesh_peer_ok)
-		peer_id_free(&mesh_peer);
+		peer_id_free(mesh_peer);
 
 	return failures;
 }

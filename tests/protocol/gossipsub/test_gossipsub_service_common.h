@@ -86,7 +86,7 @@ typedef struct gossipsub_service_test_env_s
 	int cfg_initialized;
 	const char *config_addrs[1];
 	libp2p_gossipsub_explicit_peer_t cfg_explicit_peer;
-	peer_id_t config_peer;
+	peer_id_t *config_peer;
 	int config_peer_ok;
 	int fatal_failure;
 	int score_update_count;
@@ -98,8 +98,8 @@ void print_result(const char *name, int ok);
 libp2p_err_t encode_subscription_rpc(const char *topic, int subscribe, uint8_t **out_buf, size_t *out_len);
 size_t compute_expected_gossip_targets(size_t eligible, int gossip_percent, int d_lazy);
 int decode_prune_px_count(const uint8_t *frame, size_t frame_len, const char *topic, size_t *out_px_count);
-int setup_gossip_peer(libp2p_gossipsub_t *gs, const char *topic, const char *peer_str, peer_id_t *out_peer);
-int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_id_t *peers, size_t count,
+int setup_gossip_peer(libp2p_gossipsub_t *gs, const char *topic, const char *peer_str, peer_id_t **out_peer);
+int run_gossip_factor_scenario(libp2p_gossipsub_t *gs, const char *topic, peer_id_t **peers, size_t count,
 			       const uint8_t *payload, size_t payload_len, size_t expected, size_t *out_selected,
 			       size_t *out_limit);
 libp2p_err_t encode_control_ihave_rpc(const char *topic, const uint8_t *msg_id, size_t msg_id_len, uint8_t **out_buf,
