@@ -43,6 +43,7 @@
 
 #define QUIC_STREAM_OUT_MAX_BYTES (1024u * 1024u)
 #define QUIC_STREAM_OUT_LOW_WATER (QUIC_STREAM_OUT_MAX_BYTES / 2u)
+#define QUIC_STREAM_ORPHAN_GRACE_MS (15u * 1000u)
 
 typedef struct quic_stream_chunk
 {
@@ -127,18 +128,30 @@ static void quic_muxer_ctx_release(quic_muxer_ctx_t *ctx);
 typedef struct quic_recent_free
 {
 	uint64_t stream_id;
+	picoquic_connection_id_t icid;
 	uint64_t ts_ms;
 	int initiator;
 	int fin_local;
 	int fin_remote;
 	int reset_remote;
 	int stop_sending;
+	int stop_sending_sent;
 	int handshake_done;
 	char proto[48];
 } quic_recent_free_t;
 
 static _Atomic uint32_t quic_recent_free_idx = 0;
 static quic_recent_free_t quic_recent_frees[QUIC_RECENT_FREE_SLOTS];
+static int quic_stream_is_local_or_unidir(picoquic_cnx_t *cnx, uint64_t stream_id);
+
+static int quic_connection_id_equal(const picoquic_connection_id_t *lhs, const picoquic_connection_id_t *rhs)
+{
+	if (!lhs || !rhs)
+		return 0;
+	if (lhs->id_len != rhs->id_len)
+		return 0;
+	return memcmp(lhs->id, rhs->id, lhs->id_len) == 0;
+}
 
 /* Add a stream ID to the pending STOP_SENDING list. Caller must hold mx->lock. */
 static void quic_muxer_add_pending_stop_sending(quic_muxer_ctx_t *mx, uint64_t stream_id)
@@ -255,19 +268,24 @@ static uint64_t quic_now_mono_us(void)
 	return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)(ts.tv_nsec / 1000ull);
 }
 
-static void quic_recent_free_record(quic_stream_ctx_t *st)
+static void quic_recent_free_record(quic_stream_ctx_t *st, picoquic_cnx_t *cnx)
 {
 	if (!st)
 		return;
 	uint32_t idx = atomic_fetch_add_explicit(&quic_recent_free_idx, 1, memory_order_relaxed);
 	quic_recent_free_t *slot = &quic_recent_frees[idx % QUIC_RECENT_FREE_SLOTS];
 	slot->stream_id = st->stream_id;
+	if (cnx)
+		slot->icid = picoquic_get_initial_cnxid(cnx);
+	else
+		memset(&slot->icid, 0, sizeof(slot->icid));
 	slot->ts_ms = quic_now_mono_ms();
 	slot->initiator = st->initiator;
 	slot->fin_local = st->fin_local;
 	slot->fin_remote = st->fin_remote;
 	slot->reset_remote = st->reset_remote;
 	slot->stop_sending = st->stop_sending_received;
+	slot->stop_sending_sent = st->stop_sending_sent;
 	slot->handshake_done = st->handshake_done;
 	const char *proto = st->stream ? libp2p_stream_protocol_id(st->stream) : NULL;
 	if (proto && proto[0] != '\0')
@@ -276,11 +294,15 @@ static void quic_recent_free_record(quic_stream_ctx_t *st)
 		slot->proto[0] = '\0';
 }
 
-static int quic_recent_free_lookup(uint64_t stream_id, quic_recent_free_t *out)
+static int quic_recent_free_lookup(picoquic_cnx_t *cnx, uint64_t stream_id, quic_recent_free_t *out)
 {
+	if (!cnx)
+		return 0;
+	picoquic_connection_id_t icid = picoquic_get_initial_cnxid(cnx);
 	for (size_t i = 0; i < QUIC_RECENT_FREE_SLOTS; i++)
 	{
-		if (quic_recent_frees[i].stream_id == stream_id)
+		if (quic_recent_frees[i].stream_id == stream_id &&
+		    quic_connection_id_equal(&quic_recent_frees[i].icid, &icid))
 		{
 			if (out)
 				*out = quic_recent_frees[i];
@@ -288,6 +310,20 @@ static int quic_recent_free_lookup(uint64_t stream_id, quic_recent_free_t *out)
 		}
 	}
 	return 0;
+}
+
+static int quic_recently_closed_local_stream(picoquic_cnx_t *cnx, uint64_t stream_id, quic_recent_free_t *out)
+{
+	quic_recent_free_t recent = {0};
+	if (!quic_stream_is_local_or_unidir(cnx, stream_id))
+		return 0;
+	if (!quic_recent_free_lookup(cnx, stream_id, &recent))
+		return 0;
+	if (!(recent.fin_local || recent.fin_remote || recent.reset_remote || recent.stop_sending_sent))
+		return 0;
+	if (out)
+		*out = recent;
+	return 1;
 }
 
 static void quic_muxer_append_stream(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st);
@@ -1653,12 +1689,15 @@ static void quic_stream_orphan_cleanup(quic_stream_ctx_t *st)
 		return;
 	uint64_t now_ms = quic_now_mono_ms();
 	int do_cleanup = 0;
+	uint64_t age_ms = 0;
 	pthread_mutex_lock(&st->lock);
 	if (st->orphaned)
 	{
-		uint64_t age_ms = st->orphaned_ms ? (now_ms - st->orphaned_ms) : 0;
-		if ((st->fin_local && (st->stop_sending_sent || st->fin_remote || st->reset_remote)) ||
-		    st->reset_remote || age_ms > 30000)
+		age_ms = st->orphaned_ms ? (now_ms - st->orphaned_ms) : 0;
+		if ((((st->fin_local && (st->stop_sending_sent || st->fin_remote || st->reset_remote)) ||
+		      st->reset_remote) &&
+		     age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS) ||
+		    age_ms > 30000)
 		{
 			st->orphaned = 0;
 			do_cleanup = 1;
@@ -2309,7 +2348,28 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 		{
 			if (quic_stream_is_local_or_unidir(cnx, stream_id))
 			{
-				quic_log_drop_unknown(cnx, "data", stream_id);
+				const char *kind = (event == picoquic_callback_stream_fin) ? "fin" : "data";
+				quic_recent_free_t recent;
+				if (quic_recently_closed_local_stream(cnx, stream_id, &recent))
+				{
+					LP_LOGD(
+						"QUIC",
+						"ignoring late %s for recently closed local stream %" PRIu64
+						" proto=%s len=%zu fin_local=%d fin_remote=%d reset_remote=%d stop_sent=%d",
+						kind,
+						stream_id,
+						recent.proto[0] ? recent.proto : "-",
+						length,
+						recent.fin_local,
+						recent.fin_remote,
+						recent.reset_remote,
+						recent.stop_sending_sent);
+				}
+				else
+				{
+					LP_LOGD("QUIC", "ignoring %s for unknown local/unidir stream %" PRIu64 " len=%zu", kind,
+						stream_id, length);
+				}
 				break;
 			}
 			LP_LOGI("QUIC", "accepting inbound stream stream_id=%llu", (unsigned long long)stream_id);
@@ -2423,7 +2483,22 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 		{
 			if (quic_stream_is_local_or_unidir(cnx, stream_id))
 			{
-				quic_log_drop_unknown(cnx, "stop_sending", stream_id);
+				quic_recent_free_t recent;
+				if (quic_recently_closed_local_stream(cnx, stream_id, &recent))
+				{
+					LP_LOGD(
+						"QUIC",
+						"ignoring late stop_sending for recently closed local stream %" PRIu64
+						" proto=%s fin_local=%d fin_remote=%d reset_remote=%d stop_sent=%d",
+						stream_id,
+						recent.proto[0] ? recent.proto : "-",
+						recent.fin_local,
+						recent.fin_remote,
+						recent.reset_remote,
+						recent.stop_sending_sent);
+					break;
+				}
+				LP_LOGD("QUIC", "ignoring stop_sending for unknown local/unidir stream %" PRIu64, stream_id);
 				break;
 			}
 			/* Stream doesn't exist yet - record this STOP_SENDING so we can apply it
@@ -2744,7 +2819,7 @@ static void quic_log_drop_unknown(picoquic_cnx_t *cnx, const char *kind, uint64_
 		}
 
 		quic_recent_free_t recent;
-		int have_recent = quic_recent_free_lookup(stream_id, &recent);
+		int have_recent = quic_recent_free_lookup(cnx, stream_id, &recent);
 		uint64_t now_ms = quic_now_mono_ms();
 		uint64_t age_ms = have_recent && recent.ts_ms ? (now_ms - recent.ts_ms) : 0;
 
@@ -3019,9 +3094,10 @@ static void quic_stream_backend_free(void *io_ctx)
 	quic_stream_ctx_t *st = (quic_stream_ctx_t *)io_ctx;
 	if (!st)
 		return;
-	quic_recent_free_record(st);
 	quic_muxer_ctx_t *mx = atomic_load_explicit(&st->mx, memory_order_acquire);
 	libp2p_quic_session_t *session = quic_muxer_retain_session(mx);
+	picoquic_cnx_t *cnx = session ? atomic_load_explicit(&session->cnx, memory_order_acquire) : NULL;
+	quic_recent_free_record(st, cnx);
 	LP_LOGD("QUIC", "backend_free ctx=%p stream_id=%" PRIu64 " mx=%p session=%p", (void *)st, st->stream_id,
 		(void *)mx, (void *)session);
 	if (session)
