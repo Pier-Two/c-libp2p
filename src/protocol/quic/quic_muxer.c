@@ -2352,22 +2352,18 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				quic_recent_free_t recent;
 				if (quic_recently_closed_local_stream(cnx, stream_id, &recent))
 				{
-					LP_LOGD(
-						"QUIC",
+					LP_LOGD("QUIC",
 						"ignoring late %s for recently closed local stream %" PRIu64
-						" proto=%s len=%zu fin_local=%d fin_remote=%d reset_remote=%d stop_sent=%d",
-						kind,
-						stream_id,
-						recent.proto[0] ? recent.proto : "-",
-						length,
-						recent.fin_local,
-						recent.fin_remote,
-						recent.reset_remote,
+						" proto=%s len=%zu fin_local=%d fin_remote=%d reset_remote=%d "
+						"stop_sent=%d",
+						kind, stream_id, recent.proto[0] ? recent.proto : "-", length,
+						recent.fin_local, recent.fin_remote, recent.reset_remote,
 						recent.stop_sending_sent);
 				}
 				else
 				{
-					LP_LOGD("QUIC", "ignoring %s for unknown local/unidir stream %" PRIu64 " len=%zu", kind,
+					LP_LOGD("QUIC",
+						"ignoring %s for unknown local/unidir stream %" PRIu64 " len=%zu", kind,
 						stream_id, length);
 				}
 				break;
@@ -2486,19 +2482,15 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				quic_recent_free_t recent;
 				if (quic_recently_closed_local_stream(cnx, stream_id, &recent))
 				{
-					LP_LOGD(
-						"QUIC",
+					LP_LOGD("QUIC",
 						"ignoring late stop_sending for recently closed local stream %" PRIu64
 						" proto=%s fin_local=%d fin_remote=%d reset_remote=%d stop_sent=%d",
-						stream_id,
-						recent.proto[0] ? recent.proto : "-",
-						recent.fin_local,
-						recent.fin_remote,
-						recent.reset_remote,
-						recent.stop_sending_sent);
+						stream_id, recent.proto[0] ? recent.proto : "-", recent.fin_local,
+						recent.fin_remote, recent.reset_remote, recent.stop_sending_sent);
 					break;
 				}
-				LP_LOGD("QUIC", "ignoring stop_sending for unknown local/unidir stream %" PRIu64, stream_id);
+				LP_LOGD("QUIC", "ignoring stop_sending for unknown local/unidir stream %" PRIu64,
+					stream_id);
 				break;
 			}
 			/* Stream doesn't exist yet - record this STOP_SENDING so we can apply it
