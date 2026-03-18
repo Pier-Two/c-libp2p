@@ -1430,6 +1430,7 @@ set_target_properties(test_gossipsub_proto PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
 )
 target_include_directories(test_gossipsub_proto PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/core
     ${PROJECT_SOURCE_DIR}/src/protocol/gossipsub/proto
     ${GOSSIPSUB_PROTO_GEN_DIR}
 )

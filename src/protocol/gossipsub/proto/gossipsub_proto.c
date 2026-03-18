@@ -452,6 +452,12 @@ static libp2p_err_t gossipsub_decoder_emit(libp2p_gossipsub_rpc_decoder_t *dec, 
 	return rc;
 }
 
+static libp2p_err_t gossipsub_decoder_fail(libp2p_gossipsub_rpc_decoder_t *dec, libp2p_err_t rc)
+{
+	libp2p_gossipsub_rpc_decoder_reset(dec);
+	return rc;
+}
+
 libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *dec, const uint8_t *data, size_t len,
 					       libp2p_gossipsub_rpc_decoder_cb cb, void *user_data)
 {
@@ -464,7 +470,7 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
 		if (!dec->have_length)
 		{
 			if (dec->header_used >= sizeof(dec->header))
-				return LIBP2P_ERR_INTERNAL;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
 
 			dec->header[dec->header_used++] = data[idx++];
 			uint64_t frame_len64 = 0;
@@ -475,18 +481,18 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
 			{
 				if (dec->header_used < sizeof(dec->header))
 					continue;
-				return LIBP2P_ERR_INTERNAL;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
 			}
 			if (var_rc != UNSIGNED_VARINT_OK)
-				return LIBP2P_ERR_INTERNAL;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
 			if (!varint_is_minimal(frame_len64, consumed))
-				return LIBP2P_ERR_INTERNAL;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
 			if (frame_len64 > dec->max_frame_len || frame_len64 > SIZE_MAX)
 			{
 				LP_LOGW(GOSSIPSUB_PROTO_MODULE,
 					"decoder frame too large (len=%" PRIu64 " max=%zu header_used=%zu)",
 					frame_len64, dec->max_frame_len, dec->header_used);
-				return LIBP2P_ERR_MSG_TOO_LARGE;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_MSG_TOO_LARGE);
 			}
 
 			dec->frame_len = (size_t)frame_len64;
@@ -500,7 +506,7 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
 				{
 					uint8_t *new_buf = (uint8_t *)realloc(dec->frame_buf, dec->frame_len);
 					if (!new_buf)
-						return LIBP2P_ERR_INTERNAL;
+						return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
 					dec->frame_buf = new_buf;
 					dec->frame_cap = dec->frame_len;
 				}
