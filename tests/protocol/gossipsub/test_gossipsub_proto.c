@@ -221,13 +221,14 @@ static int decoder_recovers_after_error(const uint8_t *bad_frame, size_t bad_len
 		libp2p_gossipsub_rpc_decoder_set_max_frame(&decoder, max_frame_len);
 
 	decoder_recovery_ctx_t ctx = {0};
-	libp2p_err_t rc =
-		libp2p_gossipsub_rpc_decoder_feed(&decoder, bad_frame, bad_len, decoder_recovery_cb, &ctx);
+	libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&decoder, bad_frame, bad_len, decoder_recovery_cb, &ctx);
 	int ok = rc == expected_rc && decoder_is_reset(&decoder);
 	if (ok)
 	{
-		rc = libp2p_gossipsub_rpc_decoder_feed(&decoder, good_frame, sizeof(good_frame), decoder_recovery_cb, &ctx);
-		ok = rc == LIBP2P_ERR_OK && ctx.frames_seen == 1 && ctx.last_frame_len == 0 && decoder_is_reset(&decoder);
+		rc = libp2p_gossipsub_rpc_decoder_feed(&decoder, good_frame, sizeof(good_frame), decoder_recovery_cb,
+						       &ctx);
+		ok = rc == LIBP2P_ERR_OK && ctx.frames_seen == 1 && ctx.last_frame_len == 0 &&
+		     decoder_is_reset(&decoder);
 	}
 
 	libp2p_gossipsub_rpc_decoder_free(&decoder);
@@ -302,11 +303,10 @@ static int test_on_stream_data_resets_decoder_on_non_primary_error(void)
 	gossipsub_on_stream_data(secondary, bad_frame, sizeof(bad_frame), &gs);
 
 	decoder_recovery_ctx_t ctx = {0};
-	libp2p_err_t rc =
-		libp2p_gossipsub_rpc_decoder_feed(&entry.decoder, good_frame, sizeof(good_frame), decoder_recovery_cb, &ctx);
+	libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&entry.decoder, good_frame, sizeof(good_frame),
+							    decoder_recovery_cb, &ctx);
 	int ok = decoder_is_reset(&entry.decoder) && rc == LIBP2P_ERR_OK && ctx.frames_seen == 1 &&
-		 ctx.last_frame_len == 0 && entry.stream == primary &&
-		 libp2p_stream_get_user_data(primary) == &entry &&
+		 ctx.last_frame_len == 0 && entry.stream == primary && libp2p_stream_get_user_data(primary) == &entry &&
 		 libp2p_stream_get_user_data(secondary) == &entry;
 
 	libp2p_stream_free(primary);
