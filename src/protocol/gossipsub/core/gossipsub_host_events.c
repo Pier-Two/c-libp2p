@@ -4,7 +4,6 @@
 
 #include "gossipsub_host_events.h"
 
-#include <stdio.h>  /* for printf, fflush */
 #include <stdlib.h> /* for malloc, calloc, free */
 #include <string.h> /* for memcpy */
 
@@ -196,6 +195,7 @@ void gossipsub_on_stream_data(struct libp2p_stream *s, const uint8_t *data, size
 	if (rc != LIBP2P_ERR_OK)
 	{
 		LP_LOGW(GOSSIPSUB_MODULE, "rpc decode error from peer (rc=%d)", rc);
+		libp2p_gossipsub_rpc_decoder_reset(&entry->decoder);
 		pthread_mutex_lock(&gs->lock);
 		gossipsub_peer_detach_stream_locked(gs, entry, s);
 		pthread_mutex_unlock(&gs->lock);

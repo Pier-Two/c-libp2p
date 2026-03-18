@@ -195,7 +195,6 @@ int main(void)
 	if (!protocols_update_waiter_start(&proto_waiter, hb, pidA, "[TEST_PUB]"))
 	{
 		peer_id_free(pidA);
-		free(pidA);
 		return 1;
 	}
 
@@ -264,10 +263,7 @@ int main(void)
 		libp2p_host_free_peer_protocols(peerstore_protocols, peerstore_count);
 	protocols_update_waiter_stop(&proto_waiter, hb);
 	if (pidA)
-	{
 		peer_id_free(pidA);
-		free(pidA);
-	}
 	fprintf(stderr, "[TEST_PUB] stopping hosts\n");
 	if (ping_srv)
 	{

@@ -1,10 +1,13 @@
 #include "gossipsub_proto.h"
+#include "gossipsub_host_events.h"
+#include "gossipsub_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "libp2p/stream_internal.h"
 #include "gossipsub_rpc.pb.h"
 #include "noise/protobufs.h"
 #include "multiformats/unsigned_varint/unsigned_varint.h"
@@ -183,6 +186,134 @@ static libp2p_err_t decoder_capture_cb(const uint8_t *frame, size_t frame_len, v
 		return LIBP2P_ERR_INTERNAL;
 	}
 	return LIBP2P_ERR_OK;
+}
+
+typedef struct
+{
+	int frames_seen;
+	size_t last_frame_len;
+} decoder_recovery_ctx_t;
+
+static libp2p_err_t decoder_recovery_cb(const uint8_t *frame, size_t frame_len, void *user_data)
+{
+	decoder_recovery_ctx_t *ctx = (decoder_recovery_ctx_t *)user_data;
+	(void)frame;
+	if (!ctx)
+		return LIBP2P_ERR_NULL_PTR;
+	ctx->frames_seen++;
+	ctx->last_frame_len = frame_len;
+	return LIBP2P_ERR_OK;
+}
+
+static int decoder_is_reset(const libp2p_gossipsub_rpc_decoder_t *decoder)
+{
+	return decoder && decoder->header_used == 0 && decoder->have_length == 0 && decoder->frame_len == 0 &&
+	       decoder->frame_used == 0;
+}
+
+static int decoder_recovers_after_error(const uint8_t *bad_frame, size_t bad_len, libp2p_err_t expected_rc,
+					size_t max_frame_len)
+{
+	static const uint8_t good_frame[] = {0x00};
+	libp2p_gossipsub_rpc_decoder_t decoder;
+	libp2p_gossipsub_rpc_decoder_init(&decoder);
+	if (max_frame_len > 0)
+		libp2p_gossipsub_rpc_decoder_set_max_frame(&decoder, max_frame_len);
+
+	decoder_recovery_ctx_t ctx = {0};
+	libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&decoder, bad_frame, bad_len, decoder_recovery_cb, &ctx);
+	int ok = rc == expected_rc && decoder_is_reset(&decoder);
+	if (ok)
+	{
+		rc = libp2p_gossipsub_rpc_decoder_feed(&decoder, good_frame, sizeof(good_frame), decoder_recovery_cb,
+						       &ctx);
+		ok = rc == LIBP2P_ERR_OK && ctx.frames_seen == 1 && ctx.last_frame_len == 0 &&
+		     decoder_is_reset(&decoder);
+	}
+
+	libp2p_gossipsub_rpc_decoder_free(&decoder);
+	return ok;
+}
+
+static int test_decoder_recovers_after_non_minimal_varint_error(void)
+{
+	static const uint8_t bad_frame[] = {0x81, 0x00};
+	return decoder_recovers_after_error(bad_frame, sizeof(bad_frame), LIBP2P_ERR_INTERNAL, 0);
+}
+
+static int test_decoder_recovers_after_too_long_varint_error(void)
+{
+	static const uint8_t bad_frame[] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80};
+	return decoder_recovers_after_error(bad_frame, sizeof(bad_frame), LIBP2P_ERR_INTERNAL, 0);
+}
+
+static int test_decoder_recovers_after_frame_too_large_error(void)
+{
+	static const uint8_t bad_frame[] = {0x02};
+	return decoder_recovers_after_error(bad_frame, sizeof(bad_frame), LIBP2P_ERR_MSG_TOO_LARGE, 1);
+}
+
+static int noop_stream_close(void *io_ctx)
+{
+	(void)io_ctx;
+	return 0;
+}
+
+static int noop_stream_reset(void *io_ctx)
+{
+	(void)io_ctx;
+	return 0;
+}
+
+static int test_on_stream_data_resets_decoder_on_non_primary_error(void)
+{
+	static const uint8_t bad_frame[] = {0x81, 0x00};
+	static const uint8_t good_frame[] = {0x00};
+	static const libp2p_stream_backend_ops_t stream_ops = {
+		.close = noop_stream_close,
+		.reset = noop_stream_reset,
+	};
+
+	libp2p_gossipsub_t gs;
+	memset(&gs, 0, sizeof(gs));
+	if (pthread_mutex_init(&gs.lock, NULL) != 0)
+		return 0;
+
+	gossipsub_peer_entry_t entry;
+	memset(&entry, 0, sizeof(entry));
+	libp2p_gossipsub_rpc_decoder_init(&entry.decoder);
+
+	libp2p_stream_t *primary = libp2p_stream_from_ops(NULL, NULL, &stream_ops, "/meshsub/1.1.0", 1, NULL);
+	libp2p_stream_t *secondary = libp2p_stream_from_ops(NULL, NULL, &stream_ops, "/meshsub/1.1.0", 0, NULL);
+	if (!primary || !secondary)
+	{
+		if (primary)
+			libp2p_stream_free(primary);
+		if (secondary)
+			libp2p_stream_free(secondary);
+		libp2p_gossipsub_rpc_decoder_free(&entry.decoder);
+		pthread_mutex_destroy(&gs.lock);
+		return 0;
+	}
+
+	entry.stream = primary;
+	libp2p_stream_set_user_data(primary, &entry);
+	libp2p_stream_set_user_data(secondary, &entry);
+
+	gossipsub_on_stream_data(secondary, bad_frame, sizeof(bad_frame), &gs);
+
+	decoder_recovery_ctx_t ctx = {0};
+	libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&entry.decoder, good_frame, sizeof(good_frame),
+							    decoder_recovery_cb, &ctx);
+	int ok = decoder_is_reset(&entry.decoder) && rc == LIBP2P_ERR_OK && ctx.frames_seen == 1 &&
+		 ctx.last_frame_len == 0 && entry.stream == primary && libp2p_stream_get_user_data(primary) == &entry &&
+		 libp2p_stream_get_user_data(secondary) == &entry;
+
+	libp2p_stream_free(primary);
+	libp2p_stream_free(secondary);
+	libp2p_gossipsub_rpc_decoder_free(&entry.decoder);
+	pthread_mutex_destroy(&gs.lock);
+	return ok;
 }
 
 static int test_decoder_handles_chunked_frames(void)
@@ -395,6 +526,26 @@ int main(void)
 
 	ok = test_decoder_handles_chunked_frames();
 	print_result("gossipsub_proto_decoder_chunked_frames", ok);
+	if (!ok)
+		failures++;
+
+	ok = test_decoder_recovers_after_non_minimal_varint_error();
+	print_result("gossipsub_proto_decoder_recovers_non_minimal_varint", ok);
+	if (!ok)
+		failures++;
+
+	ok = test_decoder_recovers_after_too_long_varint_error();
+	print_result("gossipsub_proto_decoder_recovers_too_long_varint", ok);
+	if (!ok)
+		failures++;
+
+	ok = test_decoder_recovers_after_frame_too_large_error();
+	print_result("gossipsub_proto_decoder_recovers_frame_too_large", ok);
+	if (!ok)
+		failures++;
+
+	ok = test_on_stream_data_resets_decoder_on_non_primary_error();
+	print_result("gossipsub_proto_non_primary_stream_error_resets_decoder", ok);
 	if (!ok)
 		failures++;
 

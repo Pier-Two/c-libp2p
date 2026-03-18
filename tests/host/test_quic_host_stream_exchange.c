@@ -314,12 +314,10 @@ cleanup:
 	if (client_peer)
 	{
 		peer_id_free(client_peer);
-		free(client_peer);
 	}
 	if (server_peer)
 	{
 		peer_id_free(server_peer);
-		free(server_peer);
 	}
 	if (client)
 		libp2p_host_free(client);
