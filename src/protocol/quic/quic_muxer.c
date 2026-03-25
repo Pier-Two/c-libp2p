@@ -491,6 +491,13 @@ static void quic_push_on_readable(libp2p_stream_t *s, void *ud)
 			libp2p_stream_on_readable(s, quic_push_on_readable, ctx);
 			return;
 		}
+		if (n == LIBP2P_ERR_CLOSED)
+		{
+			/* Late readable callbacks can outlive a local close during teardown.
+			 * Treat reads on an already-closed stream as a silent no-op instead
+			 * of surfacing a protocol-level error for a stream we closed. */
+			return;
+		}
 		if (ctx->def.on_error)
 			ctx->def.on_error(s, (int)n, ctx->def.user_data);
 		return;
