@@ -60,6 +60,17 @@ static void gossipsub_write_peer_string(const peer_id_t *peer, char *buffer, siz
 		buffer[0] = '\0';
 }
 
+static int gossipsub_is_running(libp2p_gossipsub_t *gs)
+{
+	int started = 0;
+	if (!gs)
+		return 0;
+	pthread_mutex_lock(&gs->lock);
+	started = gs->started;
+	pthread_mutex_unlock(&gs->lock);
+	return started;
+}
+
 void gossipsub_host_events_populate_protocol_defs(libp2p_gossipsub_t *gs)
 {
 	if (!gs)
@@ -123,7 +134,7 @@ void *gossipsub_host_events_runtime_thread(void *arg)
 void gossipsub_on_stream_open(struct libp2p_stream *s, void *user_data)
 {
 	libp2p_gossipsub_t *gs = (libp2p_gossipsub_t *)user_data;
-	if (!gs || !s)
+	if (!gs || !s || !gossipsub_is_running(gs))
 		return;
 
 	const char *protocol_id = libp2p_stream_protocol_id(s);
@@ -158,7 +169,7 @@ void gossipsub_on_stream_open(struct libp2p_stream *s, void *user_data)
 void gossipsub_on_stream_data(struct libp2p_stream *s, const uint8_t *data, size_t len, void *user_data)
 {
 	libp2p_gossipsub_t *gs = (libp2p_gossipsub_t *)user_data;
-	if (!gs || !s || !data || len == 0)
+	if (!gs || !s || !data || len == 0 || !gossipsub_is_running(gs))
 		return;
 
 	gossipsub_peer_entry_t *entry = NULL;
@@ -205,6 +216,8 @@ void gossipsub_on_stream_data(struct libp2p_stream *s, const uint8_t *data, size
 void gossipsub_on_stream_eof(struct libp2p_stream *s, void *user_data)
 {
 	libp2p_gossipsub_t *gs = (libp2p_gossipsub_t *)user_data;
+	if (!gs || !s || !gossipsub_is_running(gs))
+		return;
 	if (gs && s)
 	{
 		pthread_mutex_lock(&gs->lock);
@@ -219,6 +232,8 @@ void gossipsub_on_stream_eof(struct libp2p_stream *s, void *user_data)
 void gossipsub_on_stream_close(struct libp2p_stream *s, void *user_data)
 {
 	libp2p_gossipsub_t *gs = (libp2p_gossipsub_t *)user_data;
+	if (!gs || !s || !gossipsub_is_running(gs))
+		return;
 	if (gs && s)
 	{
 		pthread_mutex_lock(&gs->lock);
@@ -233,6 +248,8 @@ void gossipsub_on_stream_close(struct libp2p_stream *s, void *user_data)
 void gossipsub_on_stream_error(struct libp2p_stream *s, int err, void *user_data)
 {
 	libp2p_gossipsub_t *gs = (libp2p_gossipsub_t *)user_data;
+	if (!gs || !s || !gossipsub_is_running(gs))
+		return;
 	if (gs && s)
 	{
 		pthread_mutex_lock(&gs->lock);
