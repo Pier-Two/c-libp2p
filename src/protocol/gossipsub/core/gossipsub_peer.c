@@ -40,6 +40,67 @@ static libp2p_err_t gossipsub_peer_flush_locked(libp2p_gossipsub_t *gs, gossipsu
 static void gossipsub_peer_schedule_flush_locked(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry);
 void gossipsub_propagation_try_connect_peer(libp2p_gossipsub_t *gs, const peer_id_t *peer);
 static void gossipsub_peer_send_current_subscriptions_locked(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry);
+static const char *gossipsub_peer_to_string(const peer_id_t *peer, char *buffer, size_t length);
+
+static size_t gossipsub_peer_sendq_len(const gossipsub_peer_entry_t *entry)
+{
+	size_t count = 0;
+	if (!entry)
+		return 0;
+	for (const gossipsub_sendq_item_t *it = entry->sendq_head; it; it = it->next)
+		count++;
+	return count;
+}
+
+static int gossipsub_peer_extract_first_publish_topic(const uint8_t *frame,
+						      size_t frame_len,
+						      char *out_topic,
+						      size_t out_topic_len,
+						      size_t *out_data_len)
+{
+	if (out_topic && out_topic_len > 0)
+		out_topic[0] = '\0';
+	if (out_data_len)
+		*out_data_len = 0;
+	if (!frame || frame_len == 0 || !out_topic || out_topic_len == 0)
+		return 0;
+
+	libp2p_gossipsub_RPC *decoded = NULL;
+	libp2p_err_t decode_rc = libp2p_gossipsub_rpc_decode_frame(frame, frame_len, &decoded);
+	if (decode_rc != LIBP2P_ERR_OK || !decoded)
+		return 0;
+
+	int found = 0;
+	if (libp2p_gossipsub_RPC_count_publish(decoded) > 0)
+	{
+		libp2p_gossipsub_Message *first = libp2p_gossipsub_RPC_get_at_publish(decoded, 0);
+		if (first)
+		{
+			const char *topic_raw =
+				libp2p_gossipsub_Message_has_topic(first) ? libp2p_gossipsub_Message_get_topic(first) : NULL;
+			size_t topic_len =
+				libp2p_gossipsub_Message_has_topic(first) ? libp2p_gossipsub_Message_get_size_topic(first) : 0;
+			if ((!topic_raw || topic_len == 0) && libp2p_gossipsub_Message_count_topic_ids(first) > 0)
+			{
+				topic_raw = libp2p_gossipsub_Message_get_at_topic_ids(first, 0);
+				topic_len = libp2p_gossipsub_Message_get_size_at_topic_ids(first, 0);
+			}
+			if (topic_raw && topic_len > 0)
+			{
+				size_t copy_len =
+					topic_len < (out_topic_len - 1) ? topic_len : (out_topic_len - 1);
+				memcpy(out_topic, topic_raw, copy_len);
+				out_topic[copy_len] = '\0';
+				found = 1;
+			}
+			if (out_data_len)
+				*out_data_len = libp2p_gossipsub_Message_get_size_data(first);
+		}
+	}
+
+	libp2p_gossipsub_RPC_free(decoded);
+	return found;
+}
 
 static char *gossipsub_peer_extract_remote_ip(libp2p_stream_t *s)
 {
@@ -279,10 +340,15 @@ void gossipsub_peer_detach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
 	if (!entry)
 		return;
 
+	char peer_buf[128];
+	const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+	const char *stream_proto = s ? libp2p_stream_protocol_id(s) : NULL;
+	const char *stream_addr = s ? libp2p_stream_remote_addr_str(s) : NULL;
+	int stream_initiator = s ? (libp2p_stream_is_initiator(s) ? 1 : 0) : -1;
+	size_t queued = gossipsub_peer_sendq_len(entry);
+
 	if (entry->stream && (!s || entry->stream == s))
 	{
-		char peer_buf[128];
-		const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
 		LP_LOGD(GOSSIPSUB_MODULE, "peer_detach_stream peer=%s outbound=%d", peer_repr, entry->outbound_stream);
 		libp2p_stream_on_writable(entry->stream, NULL, NULL);
 		libp2p_stream_set_user_data(entry->stream, NULL);
@@ -313,6 +379,18 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
 {
 	if (!entry)
 		return;
+
+	if (s && entry->stream == s && libp2p_stream_get_user_data(s) == entry)
+	{
+		char peer_buf[128];
+		const char *peer_repr = gossipsub_peer_to_string(entry->peer, peer_buf, sizeof(peer_buf));
+		LP_LOGD(GOSSIPSUB_MODULE,
+			"peer_attach_stream duplicate callback ignored peer=%s stream=%p initiator=%d",
+			peer_repr,
+			(void *)s,
+			libp2p_stream_is_initiator(s) ? 1 : 0);
+		return;
+	}
 
 	/* IMPORTANT: Do NOT detach the old stream when attaching a new one!
 	 *
@@ -389,6 +467,7 @@ void gossipsub_peer_attach_stream_locked(libp2p_gossipsub_t *gs, gossipsub_peer_
 	if (s)
 	{
 		entry->outbound_stream = libp2p_stream_is_initiator(s) ? 1 : 0;
+		entry->outbound_dial_in_progress = 0;
 		entry->last_stream_dir_update_ms = gossipsub_now_ms();
 		libp2p_stream_set_user_data(s, entry);
 		char *ip = gossipsub_peer_extract_remote_ip(s);
@@ -957,6 +1036,33 @@ libp2p_err_t gossipsub_peer_enqueue_frame_locked(libp2p_gossipsub_t *gs, gossips
 
 		if (decoded)
 			libp2p_gossipsub_RPC_free(decoded);
+	}
+
+	char first_publish_topic[256];
+	size_t first_publish_data_len = 0;
+	if (gossipsub_peer_extract_first_publish_topic(
+		    frame,
+		    frame_len,
+		    first_publish_topic,
+		    sizeof(first_publish_topic),
+		    &first_publish_data_len)
+	    && !gossipsub_peer_topic_find(entry->topics, first_publish_topic))
+	{
+		/*
+		 * Peers can legitimately open the connection before they have sent their
+		 * topic subscriptions. Avoid sending publish RPCs until we have observed
+		 * that subscription set locally; some peers close the pubsub stream when
+		 * they receive unsolicited startup publishes.
+		 */
+		LP_LOGD(GOSSIPSUB_MODULE,
+			"drop publish for unsubscribed peer=%s topic=%s frame_len=%zu data_len=%zu topics_count=%zu stream=%p",
+			peer_repr_enq,
+			first_publish_topic[0] ? first_publish_topic : "(none)",
+			frame_len,
+			first_publish_data_len,
+			entry->topics_count,
+			(void *)entry->stream);
+		return LIBP2P_ERR_OK;
 	}
 
 	gossipsub_sendq_item_t *item = gossipsub_sendq_item_new(frame, frame_len);

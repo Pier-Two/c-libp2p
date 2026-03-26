@@ -298,6 +298,14 @@ static void gossipsub_outbound_dial_cb(libp2p_stream_t *s, void *user_data, int 
 	char peer_buf[128] = {0};
 	if (ctx->peer)
 		gossipsub_write_peer_string(ctx->peer, peer_buf, sizeof(peer_buf));
+	if (ctx->peer)
+	{
+		pthread_mutex_lock(&gs->lock);
+		gossipsub_peer_entry_t *entry = gossipsub_peer_find(gs->peers, ctx->peer);
+		if (entry)
+			entry->outbound_dial_in_progress = 0;
+		pthread_mutex_unlock(&gs->lock);
+	}
 
 	if (err == LIBP2P_ERR_OK && s)
 	{
@@ -363,6 +371,7 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
 	int skip_dial = 0;
 	int has_stream = 0;
 	int is_initiator = 0;
+	int dial_in_progress = 0;
 	if (entry && entry->stream)
 	{
 		has_stream = 1;
@@ -371,10 +380,18 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
 		if (is_initiator)
 			skip_dial = 1;
 	}
+	if (entry && entry->outbound_dial_in_progress)
+	{
+		dial_in_progress = 1;
+		skip_dial = 1;
+	}
+	if (entry && !skip_dial)
+		entry->outbound_dial_in_progress = 1;
 	pthread_mutex_unlock(&gs->lock);
 
-	LP_LOGI(GOSSIPSUB_MODULE, "try_open_outbound peer=%s has_stream=%d is_initiator=%d skip_dial=%d",
-		peer_buf[0] ? peer_buf : "(unknown)", has_stream, is_initiator, skip_dial);
+	LP_LOGI(GOSSIPSUB_MODULE,
+		"try_open_outbound peer=%s has_stream=%d is_initiator=%d dial_in_progress=%d skip_dial=%d",
+		peer_buf[0] ? peer_buf : "(unknown)", has_stream, is_initiator, dial_in_progress, skip_dial);
 
 	if (skip_dial)
 	{
@@ -409,6 +426,11 @@ static void gossipsub_try_open_outbound_stream(libp2p_gossipsub_t *gs, const pee
 	int rc = libp2p_host_open_stream_async(gs->host, peer, protocol, gossipsub_outbound_dial_cb, ctx);
 	if (rc != LIBP2P_ERR_OK)
 	{
+		pthread_mutex_lock(&gs->lock);
+		entry = gossipsub_peer_find(gs->peers, peer);
+		if (entry)
+			entry->outbound_dial_in_progress = 0;
+		pthread_mutex_unlock(&gs->lock);
 		LP_LOGW(GOSSIPSUB_MODULE, "failed to open outbound gossipsub stream (rc=%d)", rc);
 		if (ctx->peer)
 			peer_id_free(ctx->peer);
@@ -449,6 +471,9 @@ void gossipsub_host_events_on_host_event(const libp2p_event_t *evt, void *user_d
 		break;
 	}
 	case LIBP2P_EVT_CONN_CLOSED: {
+		char peer_buf[128] = {0};
+		if (evt->u.conn_closed.peer)
+			gossipsub_write_peer_string(evt->u.conn_closed.peer, peer_buf, sizeof(peer_buf));
 		if (evt->u.conn_closed.peer)
 		{
 			pthread_mutex_lock(&gs->lock);

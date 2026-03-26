@@ -378,6 +378,9 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic, int subscribe,
 	noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic(sub, topic, topic_len);
 	if (noise_rc != NOISE_ERROR_NONE)
 		goto cleanup;
+	noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic_id(sub, topic, topic_len);
+	if (noise_rc != NOISE_ERROR_NONE)
+		goto cleanup;
 
 	noise_rc = libp2p_gossipsub_RPC_SubOpts_set_subscribe(sub, subscribe ? 1 : 0);
 	if (noise_rc != NOISE_ERROR_NONE)

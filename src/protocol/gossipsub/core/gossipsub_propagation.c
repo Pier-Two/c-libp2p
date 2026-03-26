@@ -1017,8 +1017,13 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
 		msg.seqno_len = libp2p_gossipsub_Message_get_size_seqno(proto_msg);
 	}
 	msg.from = entry->peer;
-	msg.raw_message = frame;
-	msg.raw_message_len = frame_len;
+	/* Do not propagate the raw inbound RPC frame. A single inbound RPC can carry
+	 * control sections and multiple publishes; forwarding that raw frame would
+	 * resend unrelated control traffic instead of a clean one-message publish. */
+	(void)frame;
+	(void)frame_len;
+	msg.raw_message = NULL;
+	msg.raw_message_len = 0;
 	if (topic_str)
 	{
 		char peer_buf[128];

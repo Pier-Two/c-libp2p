@@ -597,6 +597,26 @@ static void gossipsub_validation_finalize(gossipsub_validation_ctx_t *ctx)
 		}
 	}
 
+	/* Anonymous mode requires propagated messages to omit source and seqno.
+	 * Inbound publishes may arrive with these fields populated on ctx->message,
+	 * so clear them before encoding the outbound publish frame. */
+	if (gs->cfg.anonymous_mode)
+	{
+		if (ctx->from_copy)
+		{
+			gossipsub_peer_free(ctx->from_copy);
+			ctx->from_copy = NULL;
+		}
+		ctx->message.from = NULL;
+		if (ctx->seqno_buf)
+		{
+			free(ctx->seqno_buf);
+			ctx->seqno_buf = NULL;
+		}
+		ctx->message.seqno = NULL;
+		ctx->message.seqno_len = 0;
+	}
+
 	uint8_t *message_id = NULL;
 	size_t message_id_len = 0;
 	libp2p_err_t id_rc = gossipsub_message_compute_id(&ctx->message, ctx->topic, &message_id, &message_id_len);

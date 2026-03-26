@@ -106,6 +106,7 @@ typedef struct gossipsub_peer_entry
     libp2p_stream_t *stream;
     libp2p_stream_t *last_detached_stream; /* Used to detect stale stream callbacks */
     int outbound_stream;
+    int outbound_dial_in_progress;
     uint64_t last_stream_dir_update_ms;
     gossipsub_sendq_item_t *sendq_head;
     gossipsub_sendq_item_t *sendq_tail;
