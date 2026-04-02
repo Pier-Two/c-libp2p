@@ -1727,7 +1727,8 @@ static void quic_stream_orphan_cleanup(quic_stream_ctx_t *st)
 	if (st->orphaned)
 	{
 		age_ms = st->orphaned_ms ? (now_ms - st->orphaned_ms) : 0;
-		if (((st->stream == NULL && st->head == NULL && st->out_head == NULL && age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS)) ||
+		if (((st->stream == NULL && st->head == NULL && st->out_head == NULL &&
+		      age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS)) ||
 		    (((st->fin_local && (st->stop_sending_sent || st->fin_remote || st->reset_remote)) ||
 		      st->reset_remote) &&
 		     age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS) ||
@@ -2406,7 +2407,8 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 			}
 			if (quic_recently_closed_stream(cnx, stream_id, NULL))
 			{
-				LP_LOGD("QUIC", "ignoring late inbound event for recently closed stream %" PRIu64, stream_id);
+				LP_LOGD("QUIC", "ignoring late inbound event for recently closed stream %" PRIu64,
+					stream_id);
 				break;
 			}
 			LP_LOGI("QUIC", "accepting inbound stream stream_id=%llu", (unsigned long long)stream_id);
@@ -2423,21 +2425,21 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				quic_stream_orphan_cleanup(st);
 				break;
 			}
-				int schedule_handshake = 0;
-				int handshake_done_now = 0;
-				int already_fin = 0;
-					libp2p_stream_t *stream_for_readable = NULL;
-					libp2p_stream_t *stream_for_handshake = NULL;
-					pthread_mutex_lock(&st->lock);
-					/* Check if FIN was already received - if so, a duplicate FIN event
-					 * with no data is a late-arriving notification that should be ignored
-					 * to avoid spurious EOF returns to higher layers. */
-					already_fin = st->fin_remote;
-					if (length && bytes)
-						(void)quic_stream_push_bytes(st, bytes, length);
-				if (event == picoquic_callback_stream_fin && !already_fin)
-					quic_stream_mark_fin(st);
-				handshake_done_now = st->handshake_done;
+			int schedule_handshake = 0;
+			int handshake_done_now = 0;
+			int already_fin = 0;
+			libp2p_stream_t *stream_for_readable = NULL;
+			libp2p_stream_t *stream_for_handshake = NULL;
+			pthread_mutex_lock(&st->lock);
+			/* Check if FIN was already received - if so, a duplicate FIN event
+			 * with no data is a late-arriving notification that should be ignored
+			 * to avoid spurious EOF returns to higher layers. */
+			already_fin = st->fin_remote;
+			if (length && bytes)
+				(void)quic_stream_push_bytes(st, bytes, length);
+			if (event == picoquic_callback_stream_fin && !already_fin)
+				quic_stream_mark_fin(st);
+			handshake_done_now = st->handshake_done;
 			if (!st->handshake_done && !st->handshake_running)
 			{
 				st->handshake_started = 1;
@@ -2445,12 +2447,12 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				schedule_handshake = 1;
 			}
 			/* Capture stream pointer while holding lock to avoid race condition */
-				stream_for_readable = st->stream;
-				stream_for_handshake = st->stream;
-				pthread_mutex_unlock(&st->lock);
+			stream_for_readable = st->stream;
+			stream_for_handshake = st->stream;
+			pthread_mutex_unlock(&st->lock);
 
-				if (schedule_handshake)
-					quic_stream_start_handshake(mx, st, stream_for_handshake);
+			if (schedule_handshake)
+				quic_stream_start_handshake(mx, st, stream_for_handshake);
 
 			/* Only schedule readable if there's new data or this is the first FIN.
 			 * A duplicate FIN with no data should not trigger a spurious readable event. */
