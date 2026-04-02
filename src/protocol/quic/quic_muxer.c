@@ -70,6 +70,7 @@ typedef struct quic_stream_ctx
 	quic_stream_chunk_t *tail;
 	quic_stream_out_chunk_t *out_head;
 	quic_stream_out_chunk_t *out_tail;
+	size_t in_bytes;
 	size_t out_bytes;
 	struct quic_stream_ctx *next;
 	int fin_remote;
@@ -122,6 +123,12 @@ typedef struct quic_muxer_ctx
 
 static void quic_muxer_ctx_retain(quic_muxer_ctx_t *ctx);
 static void quic_muxer_ctx_release(quic_muxer_ctx_t *ctx);
+
+enum
+{
+	QUIC_STREAM_PUSH_OK = 0,
+	QUIC_STREAM_PUSH_ERR_ALLOC = -1,
+};
 
 #define QUIC_RECENT_FREE_SLOTS 64
 
@@ -326,6 +333,18 @@ static int quic_recently_closed_local_stream(picoquic_cnx_t *cnx, uint64_t strea
 	return 1;
 }
 
+static int quic_recently_closed_stream(picoquic_cnx_t *cnx, uint64_t stream_id, quic_recent_free_t *out)
+{
+	quic_recent_free_t recent = {0};
+	if (!quic_recent_free_lookup(cnx, stream_id, &recent))
+		return 0;
+	if (!(recent.fin_local || recent.fin_remote || recent.reset_remote || recent.stop_sending_sent))
+		return 0;
+	if (out)
+		*out = recent;
+	return 1;
+}
+
 static void quic_muxer_append_stream(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st);
 static void quic_muxer_remove_stream(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st);
 static ssize_t quic_stream_backend_read(void *io_ctx, void *buf, size_t len);
@@ -335,6 +354,8 @@ static int quic_stream_backend_reset(void *io_ctx);
 static int quic_stream_backend_set_deadline(void *io_ctx, uint64_t ms);
 static const multiaddr_t *quic_stream_backend_local(void *io_ctx);
 static const multiaddr_t *quic_stream_backend_remote(void *io_ctx);
+static void quic_stream_orphan_cleanup(quic_stream_ctx_t *st);
+static void quic_stream_schedule_readable(quic_stream_ctx_t *ctx, quic_muxer_ctx_t *mx, libp2p_stream_t *stream);
 static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint64_t stream_id);
 static int quic_run_inbound_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t *st);
 static void quic_session_clear_pending(libp2p_quic_session_t *session);
@@ -1608,6 +1629,10 @@ static void quic_chunk_consume(quic_stream_ctx_t *ctx, quic_stream_chunk_t *chun
 {
 	if (!ctx || !chunk)
 		return;
+	if (consumed > ctx->in_bytes)
+		ctx->in_bytes = 0;
+	else
+		ctx->in_bytes -= consumed;
 	chunk->offset += consumed;
 	chunk->len -= consumed;
 	if (chunk->len == 0)
@@ -1648,6 +1673,7 @@ static void quic_stream_free_chunks(quic_stream_ctx_t *ctx)
 		cur = next;
 	}
 	ctx->head = ctx->tail = NULL;
+	ctx->in_bytes = 0;
 }
 
 static void quic_stream_ctx_destroy(quic_stream_ctx_t *ctx)
@@ -1701,7 +1727,8 @@ static void quic_stream_orphan_cleanup(quic_stream_ctx_t *st)
 	if (st->orphaned)
 	{
 		age_ms = st->orphaned_ms ? (now_ms - st->orphaned_ms) : 0;
-		if ((((st->fin_local && (st->stop_sending_sent || st->fin_remote || st->reset_remote)) ||
+		if (((st->stream == NULL && st->head == NULL && st->out_head == NULL && age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS)) ||
+		    (((st->fin_local && (st->stop_sending_sent || st->fin_remote || st->reset_remote)) ||
 		      st->reset_remote) &&
 		     age_ms >= QUIC_STREAM_ORPHAN_GRACE_MS) ||
 		    age_ms > 30000)
@@ -2288,15 +2315,15 @@ static void quic_stream_start_handshake(quic_muxer_ctx_t *mx, quic_stream_ctx_t 
 	libp2p__exec_on_cb_thread(host, quic_stream_handshake_exec, task);
 }
 
-static void quic_stream_push_bytes(quic_stream_ctx_t *ctx, const uint8_t *data, size_t len)
+static int quic_stream_push_bytes(quic_stream_ctx_t *ctx, const uint8_t *data, size_t len)
 {
 	if (!ctx || !len)
-		return;
+		return QUIC_STREAM_PUSH_OK;
 	quic_stream_chunk_t *chunk = quic_chunk_new(data, len);
 	if (!chunk)
 	{
 		LP_LOGE("QUIC", "stream %" PRIu64 " failed to allocate chunk (%zu bytes)", ctx->stream_id, len);
-		return;
+		return QUIC_STREAM_PUSH_ERR_ALLOC;
 	}
 	if (!ctx->head)
 		ctx->head = ctx->tail = chunk;
@@ -2305,6 +2332,8 @@ static void quic_stream_push_bytes(quic_stream_ctx_t *ctx, const uint8_t *data, 
 		ctx->tail->next = chunk;
 		ctx->tail = chunk;
 	}
+	ctx->in_bytes += len;
+	return QUIC_STREAM_PUSH_OK;
 }
 
 static void quic_stream_mark_fin(quic_stream_ctx_t *ctx)
@@ -2375,6 +2404,11 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				}
 				break;
 			}
+			if (quic_recently_closed_stream(cnx, stream_id, NULL))
+			{
+				LP_LOGD("QUIC", "ignoring late inbound event for recently closed stream %" PRIu64, stream_id);
+				break;
+			}
 			LP_LOGI("QUIC", "accepting inbound stream stream_id=%llu", (unsigned long long)stream_id);
 			st = quic_accept_inbound_stream(mx, stream_id);
 		}
@@ -2389,21 +2423,21 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				quic_stream_orphan_cleanup(st);
 				break;
 			}
-			int schedule_handshake = 0;
-			int handshake_done_now = 0;
-			int already_fin = 0;
-			libp2p_stream_t *stream_for_readable = NULL;
-			libp2p_stream_t *stream_for_handshake = NULL;
-			pthread_mutex_lock(&st->lock);
-			/* Check if FIN was already received - if so, a duplicate FIN event
-			 * with no data is a late-arriving notification that should be ignored
-			 * to avoid spurious EOF returns to higher layers. */
-			already_fin = st->fin_remote;
-			if (length && bytes)
-				quic_stream_push_bytes(st, bytes, length);
-			if (event == picoquic_callback_stream_fin && !already_fin)
-				quic_stream_mark_fin(st);
-			handshake_done_now = st->handshake_done;
+				int schedule_handshake = 0;
+				int handshake_done_now = 0;
+				int already_fin = 0;
+					libp2p_stream_t *stream_for_readable = NULL;
+					libp2p_stream_t *stream_for_handshake = NULL;
+					pthread_mutex_lock(&st->lock);
+					/* Check if FIN was already received - if so, a duplicate FIN event
+					 * with no data is a late-arriving notification that should be ignored
+					 * to avoid spurious EOF returns to higher layers. */
+					already_fin = st->fin_remote;
+					if (length && bytes)
+						(void)quic_stream_push_bytes(st, bytes, length);
+				if (event == picoquic_callback_stream_fin && !already_fin)
+					quic_stream_mark_fin(st);
+				handshake_done_now = st->handshake_done;
 			if (!st->handshake_done && !st->handshake_running)
 			{
 				st->handshake_started = 1;
@@ -2411,12 +2445,12 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 				schedule_handshake = 1;
 			}
 			/* Capture stream pointer while holding lock to avoid race condition */
-			stream_for_readable = st->stream;
-			stream_for_handshake = st->stream;
-			pthread_mutex_unlock(&st->lock);
+				stream_for_readable = st->stream;
+				stream_for_handshake = st->stream;
+				pthread_mutex_unlock(&st->lock);
 
-			if (schedule_handshake)
-				quic_stream_start_handshake(mx, st, stream_for_handshake);
+				if (schedule_handshake)
+					quic_stream_start_handshake(mx, st, stream_for_handshake);
 
 			/* Only schedule readable if there's new data or this is the first FIN.
 			 * A duplicate FIN with no data should not trigger a spurious readable event. */
@@ -2434,6 +2468,11 @@ static int quic_session_dispatch(libp2p_quic_session_t *session, quic_muxer_ctx_
 			if (quic_stream_is_local_or_unidir(cnx, stream_id))
 			{
 				quic_log_drop_unknown(cnx, "reset", stream_id);
+				break;
+			}
+			if (quic_recently_closed_stream(cnx, stream_id, NULL))
+			{
+				LP_LOGD("QUIC", "ignoring late reset for recently closed stream %" PRIu64, stream_id);
 				break;
 			}
 			st = quic_accept_inbound_stream(mx, stream_id);
@@ -2869,12 +2908,14 @@ static ssize_t quic_stream_backend_read(void *io_ctx, void *buf, size_t len)
 		if (st->fin_remote)
 		{
 			pthread_mutex_unlock(&st->lock);
+			quic_stream_orphan_cleanup(st);
 			return 0;
 		}
 		pthread_mutex_unlock(&st->lock);
 		return LIBP2P_ERR_AGAIN;
 	}
 	pthread_mutex_unlock(&st->lock);
+	quic_stream_orphan_cleanup(st);
 	return copied;
 }
 
@@ -2964,6 +3005,7 @@ static int quic_stream_backend_close(void *io_ctx)
 		return LIBP2P_ERR_CLOSED;
 	}
 	pthread_mutex_lock(&st->lock);
+	st->closed = 1;
 	if (!st->fin_local)
 		st->fin_pending = 1;
 	st->stop_sending_pending = 1;
@@ -3026,6 +3068,7 @@ static int quic_stream_backend_reset(void *io_ctx)
 		return LIBP2P_ERR_CLOSED;
 	}
 	pthread_mutex_lock(&st->lock);
+	st->closed = 1;
 	st->reset_pending = 1;
 	st->reset_remote = 1;
 	st->fin_pending = 0;
@@ -3111,6 +3154,9 @@ static void quic_stream_backend_free(void *io_ctx)
 	}
 	pthread_mutex_lock(&st->lock);
 	st->stream = NULL;
+	st->closed = 1;
+	quic_stream_free_chunks(st);
+	quic_stream_out_free_locked(st);
 	st->orphaned = 1;
 	st->orphaned_ms = quic_now_mono_ms();
 	st->stop_sending_pending = 1;
@@ -3154,6 +3200,7 @@ static quic_stream_ctx_t *quic_accept_inbound_stream(quic_muxer_ctx_t *mx, uint6
 	st->stream_id = stream_id;
 	st->head = st->tail = NULL;
 	st->out_head = st->out_tail = NULL;
+	st->in_bytes = 0;
 	st->out_bytes = 0;
 	st->next = NULL;
 	st->fin_remote = 0;
@@ -3293,6 +3340,7 @@ static libp2p_muxer_err_t quic_muxer_open_stream(libp2p_muxer_t *mx, const uint8
 	st->stream_id = stream_id;
 	st->head = st->tail = NULL;
 	st->out_head = st->out_tail = NULL;
+	st->in_bytes = 0;
 	st->out_bytes = 0;
 	st->next = NULL;
 	st->fin_remote = 0;

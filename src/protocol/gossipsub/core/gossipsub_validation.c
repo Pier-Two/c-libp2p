@@ -750,6 +750,16 @@ static void gossipsub_validation_begin_exec(void *user_data)
 	}
 }
 
+static void *gossipsub_validation_begin_thread(void *user_data)
+{
+	gossipsub_validation_ctx_t *ctx = (gossipsub_validation_ctx_t *)user_data;
+	libp2p_host_t *host = (ctx && ctx->gs) ? ctx->gs->host : NULL;
+	gossipsub_validation_begin_exec(user_data);
+	if (host)
+		libp2p__worker_dec(host);
+	return NULL;
+}
+
 libp2p_err_t gossipsub_validation_collect(libp2p_gossipsub_t *gs, const char *topic_name,
 					  gossipsub_topic_state_t **out_topic,
 					  libp2p_gossipsub_validator_handle_t ***out_handles, size_t *out_len)
@@ -844,7 +854,20 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs, gossipsub_top
 	LP_LOGD(GOSSIPSUB_MODULE, "queueing %s message on topic %s (%zu bytes)",
 		propagate_on_accept ? "publish" : "inbound", topic_label, msg->data_len);
 	if (gs->host)
-		libp2p__exec_on_cb_thread(gs->host, gossipsub_validation_begin_exec, ctx);
+	{
+		pthread_t th;
+		libp2p__worker_inc(gs->host);
+		if (pthread_create(&th, NULL, gossipsub_validation_begin_thread, ctx) == 0)
+		{
+			pthread_detach(th);
+		}
+		else
+		{
+			libp2p__worker_dec(gs->host);
+			/* Fallback to the legacy callback executor path if thread creation fails. */
+			libp2p__exec_on_cb_thread(gs->host, gossipsub_validation_begin_exec, ctx);
+		}
+	}
 	else
 		gossipsub_validation_ctx_release(ctx);
 	return LIBP2P_ERR_OK;
