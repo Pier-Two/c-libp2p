@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "libp2p/errors.h"
+#include "peer_id/peer_id.h"
 
 typedef struct gossipsub_seen_entry
 {
@@ -22,6 +23,22 @@ typedef struct gossipsub_seen_cache
 } gossipsub_seen_cache_t;
 
 typedef struct gossipsub_cache_entry
+gossipsub_cache_entry_t;
+
+typedef struct gossipsub_cache_source
+{
+    peer_id_t *peer;
+    struct gossipsub_cache_source *next;
+} gossipsub_cache_source_t;
+
+typedef enum
+{
+    GOSSIPSUB_CACHE_ENTRY_VALIDATED = 0,
+    GOSSIPSUB_CACHE_ENTRY_PENDING,
+    GOSSIPSUB_CACHE_ENTRY_FINALIZING
+} gossipsub_cache_entry_state_t;
+
+struct gossipsub_cache_entry
 {
     uint8_t *id;
     size_t id_len;
@@ -29,10 +46,13 @@ typedef struct gossipsub_cache_entry
     uint8_t *frame;
     size_t frame_len;
     uint64_t last_gossip_round;
+    gossipsub_cache_entry_state_t state;
+    peer_id_t *propagation_source;
+    gossipsub_cache_source_t *duplicate_sources;
     struct gossipsub_cache_entry *window_next;
     struct gossipsub_cache_entry *all_prev;
     struct gossipsub_cache_entry *all_next;
-} gossipsub_cache_entry_t;
+};
 
 typedef struct gossipsub_message_cache
 {
@@ -61,6 +81,22 @@ libp2p_err_t gossipsub_message_cache_put(gossipsub_message_cache_t *cache,
                                          const char *topic,
                                          const uint8_t *frame,
                                          size_t frame_len);
+libp2p_err_t gossipsub_message_cache_put_pending(gossipsub_message_cache_t *cache,
+                                                 const uint8_t *id,
+                                                 size_t id_len,
+                                                 const char *topic,
+                                                 const uint8_t *frame,
+                                                 size_t frame_len,
+                                                 const peer_id_t *propagation_source);
+libp2p_err_t gossipsub_message_cache_remove(gossipsub_message_cache_t *cache,
+                                            const uint8_t *id,
+                                            size_t id_len);
+void gossipsub_message_cache_mark_validated(gossipsub_cache_entry_t *entry);
+void gossipsub_message_cache_mark_finalizing(gossipsub_cache_entry_t *entry);
+int gossipsub_message_cache_is_validated(const gossipsub_cache_entry_t *entry);
+int gossipsub_message_cache_is_pending(const gossipsub_cache_entry_t *entry);
+void gossipsub_message_cache_note_duplicate_source(gossipsub_cache_entry_t *entry,
+                                                   const peer_id_t *propagation_source);
 libp2p_err_t gossipsub_message_cache_shift(gossipsub_message_cache_t *cache);
 libp2p_err_t gossipsub_message_cache_collect_ids(gossipsub_message_cache_t *cache,
                                                  const char *topic,

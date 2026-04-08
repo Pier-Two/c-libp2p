@@ -172,6 +172,8 @@ struct libp2p_gossipsub
     gossipsub_seen_cache_t seen_cache;
     gossipsub_message_cache_t message_cache;
     gossipsub_promises_t promises;
+    libp2p_gossipsub_message_delivery_cb message_delivery_cb;
+    void *message_delivery_user_data;
     atomic_uint_fast64_t seqno_counter;
     uint64_t gossip_round;
     uint64_t last_opportunistic_graft_ms;

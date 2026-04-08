@@ -4,6 +4,35 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void gossipsub_cache_source_free_list(gossipsub_cache_source_t *head)
+{
+    while (head)
+    {
+        gossipsub_cache_source_t *next = head->next;
+        if (head->peer)
+            peer_id_free(head->peer);
+        free(head);
+        head = next;
+    }
+}
+
+static int gossipsub_cache_peer_equals(const peer_id_t *a, const peer_id_t *b)
+{
+    const uint8_t *a_bytes = NULL;
+    const uint8_t *b_bytes = NULL;
+    size_t a_len = 0;
+    size_t b_len = 0;
+
+    if (!a || !b)
+        return 0;
+    if (peer_id_multihash_view(a, &a_bytes, &a_len) != PEER_ID_OK || !a_bytes || a_len == 0)
+        return 0;
+    if (peer_id_multihash_view(b, &b_bytes, &b_len) != PEER_ID_OK || !b_bytes || b_len == 0)
+        return 0;
+
+    return a_len == b_len && memcmp(a_bytes, b_bytes, a_len) == 0;
+}
+
 static void gossipsub_cache_entry_detach(gossipsub_message_cache_t *cache, gossipsub_cache_entry_t *entry)
 {
     if (!cache || !entry)
@@ -29,6 +58,10 @@ static void gossipsub_cache_entry_free(gossipsub_message_cache_t *cache, gossips
         free(entry->topic);
     if (entry->frame)
         free(entry->frame);
+    if (entry->propagation_source)
+        peer_id_free(entry->propagation_source);
+    if (entry->duplicate_sources)
+        gossipsub_cache_source_free_list(entry->duplicate_sources);
     free(entry);
 }
 
@@ -320,6 +353,7 @@ libp2p_err_t gossipsub_message_cache_put(gossipsub_message_cache_t *cache,
     }
     memcpy(entry->frame, frame, frame_len);
     entry->frame_len = frame_len;
+    entry->state = GOSSIPSUB_CACHE_ENTRY_VALIDATED;
 
     entry->window_next = cache->windows[0];
     cache->windows[0] = entry;
@@ -330,6 +364,163 @@ libp2p_err_t gossipsub_message_cache_put(gossipsub_message_cache_t *cache,
         cache->all_head->all_prev = entry;
     cache->all_head = entry;
     return LIBP2P_ERR_OK;
+}
+
+libp2p_err_t gossipsub_message_cache_put_pending(gossipsub_message_cache_t *cache,
+                                                 const uint8_t *id,
+                                                 size_t id_len,
+                                                 const char *topic,
+                                                 const uint8_t *frame,
+                                                 size_t frame_len,
+                                                 const peer_id_t *propagation_source)
+{
+    if (!cache || !id || id_len == 0 || !frame || frame_len == 0)
+        return LIBP2P_ERR_NULL_PTR;
+    if (!cache->windows || cache->windows_len == 0)
+        return LIBP2P_ERR_INTERNAL;
+
+    if (gossipsub_message_cache_find(cache, id, id_len))
+        return LIBP2P_ERR_OK;
+
+    gossipsub_cache_entry_t *entry = (gossipsub_cache_entry_t *)calloc(1, sizeof(*entry));
+    if (!entry)
+        return LIBP2P_ERR_INTERNAL;
+
+    entry->id = (uint8_t *)malloc(id_len);
+    if (!entry->id)
+    {
+        free(entry);
+        return LIBP2P_ERR_INTERNAL;
+    }
+    memcpy(entry->id, id, id_len);
+    entry->id_len = id_len;
+
+    if (topic)
+    {
+        entry->topic = strdup(topic);
+        if (!entry->topic)
+        {
+            free(entry->id);
+            free(entry);
+            return LIBP2P_ERR_INTERNAL;
+        }
+    }
+
+    entry->frame = (uint8_t *)malloc(frame_len);
+    if (!entry->frame)
+    {
+        if (entry->topic)
+            free(entry->topic);
+        free(entry->id);
+        free(entry);
+        return LIBP2P_ERR_INTERNAL;
+    }
+    memcpy(entry->frame, frame, frame_len);
+    entry->frame_len = frame_len;
+
+    entry->state = GOSSIPSUB_CACHE_ENTRY_PENDING;
+    if (propagation_source)
+    {
+        if (peer_id_clone(propagation_source, &entry->propagation_source) != PEER_ID_OK)
+        {
+            if (entry->frame)
+                free(entry->frame);
+            if (entry->topic)
+                free(entry->topic);
+            free(entry->id);
+            free(entry);
+            return LIBP2P_ERR_INTERNAL;
+        }
+    }
+
+    entry->window_next = cache->windows[0];
+    cache->windows[0] = entry;
+
+    entry->all_prev = NULL;
+    entry->all_next = cache->all_head;
+    if (cache->all_head)
+        cache->all_head->all_prev = entry;
+    cache->all_head = entry;
+    return LIBP2P_ERR_OK;
+}
+
+libp2p_err_t gossipsub_message_cache_remove(gossipsub_message_cache_t *cache,
+                                            const uint8_t *id,
+                                            size_t id_len)
+{
+    gossipsub_cache_entry_t *entry = gossipsub_message_cache_find(cache, id, id_len);
+    if (!entry)
+        return LIBP2P_ERR_AGAIN;
+
+    if (cache->windows && cache->windows_len > 0)
+    {
+        for (size_t i = 0; i < cache->windows_len; ++i)
+        {
+            gossipsub_cache_entry_t **pp = &cache->windows[i];
+            while (*pp)
+            {
+                if (*pp == entry)
+                {
+                    *pp = entry->window_next;
+                    gossipsub_cache_entry_free(cache, entry);
+                    return LIBP2P_ERR_OK;
+                }
+                pp = &(*pp)->window_next;
+            }
+        }
+    }
+
+    return LIBP2P_ERR_AGAIN;
+}
+
+void gossipsub_message_cache_mark_validated(gossipsub_cache_entry_t *entry)
+{
+    if (!entry)
+        return;
+    entry->state = GOSSIPSUB_CACHE_ENTRY_VALIDATED;
+}
+
+void gossipsub_message_cache_mark_finalizing(gossipsub_cache_entry_t *entry)
+{
+    if (!entry)
+        return;
+    entry->state = GOSSIPSUB_CACHE_ENTRY_FINALIZING;
+}
+
+int gossipsub_message_cache_is_validated(const gossipsub_cache_entry_t *entry)
+{
+    return entry && entry->state == GOSSIPSUB_CACHE_ENTRY_VALIDATED;
+}
+
+int gossipsub_message_cache_is_pending(const gossipsub_cache_entry_t *entry)
+{
+    return entry && (entry->state == GOSSIPSUB_CACHE_ENTRY_PENDING || entry->state == GOSSIPSUB_CACHE_ENTRY_FINALIZING);
+}
+
+void gossipsub_message_cache_note_duplicate_source(gossipsub_cache_entry_t *entry,
+                                                   const peer_id_t *propagation_source)
+{
+    if (!entry || !propagation_source)
+        return;
+    if (entry->propagation_source && gossipsub_cache_peer_equals(entry->propagation_source, propagation_source))
+        return;
+
+    for (gossipsub_cache_source_t *it = entry->duplicate_sources; it; it = it->next)
+    {
+        if (it->peer && gossipsub_cache_peer_equals(it->peer, propagation_source))
+            return;
+    }
+
+    gossipsub_cache_source_t *node = (gossipsub_cache_source_t *)calloc(1, sizeof(*node));
+    if (!node)
+        return;
+    if (peer_id_clone(propagation_source, &node->peer) != PEER_ID_OK || !node->peer)
+    {
+        free(node);
+        return;
+    }
+    node->next = entry->duplicate_sources;
+    entry->duplicate_sources = node;
 }
 
 libp2p_err_t gossipsub_message_cache_shift(gossipsub_message_cache_t *cache)
@@ -381,6 +572,8 @@ libp2p_err_t gossipsub_message_cache_collect_ids(gossipsub_message_cache_t *cach
     {
         for (gossipsub_cache_entry_t *it = cache->windows[w]; it; it = it->window_next)
         {
+            if (!gossipsub_message_cache_is_validated(it))
+                continue;
             if (topic && it->topic && strcmp(it->topic, topic) != 0)
                 continue;
             if (current_round != 0 && it->last_gossip_round == current_round)

@@ -1037,9 +1037,32 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
 	}
 
 	gossipsub_topic_state_t *topic = NULL;
+	libp2p_err_t rc = LIBP2P_ERR_OK;
+	pthread_mutex_lock(&gs->lock);
+	topic = gossipsub_topic_find(gs->topics, topic_str);
+	int use_external_delivery = (topic && topic->subscribed && gs->message_delivery_cb != NULL) ? 1 : 0;
+	pthread_mutex_unlock(&gs->lock);
+	if (!topic || !topic->subscribed)
+	{
+		char peer_buf[128];
+		const char *peer_repr =
+			gossipsub_peer_to_string(entry ? entry->peer : NULL, peer_buf, sizeof(peer_buf));
+		LP_LOGW(GOSSIPSUB_MODULE, "validation_collect failed peer=%s topic=%s rc=%d (topic not subscribed?)",
+			peer_repr, topic_str, LIBP2P_ERR_UNSUPPORTED);
+		free(topic_str);
+		return LIBP2P_ERR_UNSUPPORTED;
+	}
+
+	if (use_external_delivery)
+	{
+		rc = gossipsub_validation_deliver_externally(gs, topic, &msg, entry->peer);
+		free(topic_str);
+		return rc;
+	}
+
 	libp2p_gossipsub_validator_handle_t **validators = NULL;
 	size_t validator_count = 0;
-	libp2p_err_t rc = gossipsub_validation_collect(gs, topic_str, &topic, &validators, &validator_count);
+	rc = gossipsub_validation_collect(gs, topic_str, &topic, &validators, &validator_count);
 	if (rc != LIBP2P_ERR_OK)
 	{
 		char peer_buf[128];
@@ -1054,7 +1077,7 @@ libp2p_err_t gossipsub_propagation_handle_inbound_publish(libp2p_gossipsub_t *gs
 	LP_LOGD(GOSSIPSUB_MODULE, "scheduling validation topic=%s validators=%zu has_msg_id_fn=%d data_len=%zu",
 		topic_str, validator_count, topic && topic->message_id_fn ? 1 : 0, msg.data_len);
 
-	rc = gossipsub_validation_schedule(gs, topic, validators, validator_count, &msg, 0);
+	rc = gossipsub_validation_schedule(gs, topic, validators, validator_count, &msg, 0, entry->peer);
 	free(topic_str);
 	return rc;
 }
@@ -1133,7 +1156,7 @@ libp2p_err_t gossipsub_propagation_handle_control_iwant(libp2p_gossipsub_t *gs, 
 
 			pthread_mutex_lock(&gs->lock);
 			gossipsub_cache_entry_t *cached = gossipsub_message_cache_find(&gs->message_cache, id, id_len);
-			if (cached && cached->frame && cached->frame_len)
+			if (cached && gossipsub_message_cache_is_validated(cached) && cached->frame && cached->frame_len)
 			{
 				libp2p_err_t send_rc = gossipsub_peer_enqueue_frame_locked(gs, entry, cached->frame,
 											   cached->frame_len);

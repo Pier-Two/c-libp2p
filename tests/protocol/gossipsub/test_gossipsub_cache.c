@@ -118,6 +118,41 @@ static void test_message_cache_collect_ids_round_gate(void)
     gossipsub_message_cache_free(&cache);
 }
 
+static void test_message_cache_pending_entries_are_not_gossiped(void)
+{
+    gossipsub_message_cache_t cache = {0};
+    assert(gossipsub_message_cache_init(&cache, 3, 3) == LIBP2P_ERR_OK);
+
+    const uint8_t msg_id[] = {0x61};
+    const uint8_t frame[] = {0xEE};
+    assert(gossipsub_message_cache_put_pending(&cache, msg_id, sizeof(msg_id), "topic-p", frame, sizeof(frame), NULL)
+           == LIBP2P_ERR_OK);
+
+    uint8_t **ids = NULL;
+    size_t *lengths = NULL;
+    size_t count = 0;
+    assert(gossipsub_message_cache_collect_ids(&cache, "topic-p", &ids, &lengths, &count, 1) == LIBP2P_ERR_OK);
+    assert(count == 0);
+    assert(ids == NULL);
+    assert(lengths == NULL);
+
+    gossipsub_cache_entry_t *entry = gossipsub_message_cache_find(&cache, msg_id, sizeof(msg_id));
+    assert(entry != NULL);
+    assert(gossipsub_message_cache_is_pending(entry));
+    gossipsub_message_cache_mark_validated(entry);
+    assert(gossipsub_message_cache_is_validated(entry));
+
+    assert(gossipsub_message_cache_collect_ids(&cache, "topic-p", &ids, &lengths, &count, 2) == LIBP2P_ERR_OK);
+    assert(count == 1);
+    assert(lengths != NULL);
+    assert(lengths[0] == sizeof(msg_id));
+    assert(memcmp(ids[0], msg_id, sizeof(msg_id)) == 0);
+
+    gossipsub_message_cache_free_ids(ids, count);
+    free(lengths);
+    gossipsub_message_cache_free(&cache);
+}
+
 static void test_seen_cache_ttl_and_capacity(void)
 {
     gossipsub_seen_cache_t cache = {0};
@@ -164,6 +199,7 @@ int main(void)
     test_message_cache_shift_eviction();
     test_message_cache_collect_ids_filter();
     test_message_cache_collect_ids_round_gate();
+    test_message_cache_pending_entries_are_not_gossiped();
     test_seen_cache_ttl_and_capacity();
     return 0;
 }

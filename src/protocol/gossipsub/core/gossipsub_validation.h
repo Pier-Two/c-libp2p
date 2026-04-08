@@ -18,7 +18,12 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs,
                                            libp2p_gossipsub_validator_handle_t **validators,
                                            size_t validator_count,
                                            const libp2p_gossipsub_message_t *msg,
-                                           int propagate_on_accept);
+                                           int propagate_on_accept,
+                                           const peer_id_t *propagation_source);
+libp2p_err_t gossipsub_validation_deliver_externally(libp2p_gossipsub_t *gs,
+                                                     gossipsub_topic_state_t *topic,
+                                                     const libp2p_gossipsub_message_t *msg,
+                                                     const peer_id_t *propagation_source);
 
 #ifdef __cplusplus
 }

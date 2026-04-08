@@ -18,6 +18,13 @@ extern "C"
 typedef struct libp2p_gossipsub libp2p_gossipsub_t;
 typedef struct libp2p_gossipsub_validator_handle libp2p_gossipsub_validator_handle_t;
 
+typedef void (*libp2p_gossipsub_message_delivery_cb)(libp2p_gossipsub_t *gs,
+                                                     const libp2p_gossipsub_message_t *msg,
+                                                     const uint8_t *message_id,
+                                                     size_t message_id_len,
+                                                     const peer_id_t *propagation_source,
+                                                     void *user_data);
+
 typedef enum
 {
     LIBP2P_GOSSIPSUB_VALIDATOR_SYNC,
@@ -147,6 +154,15 @@ libp2p_err_t libp2p_gossipsub_update_topic(libp2p_gossipsub_t *gs,
                                            const libp2p_gossipsub_topic_config_t *topic_cfg);
 
 libp2p_err_t libp2p_gossipsub_publish(libp2p_gossipsub_t *gs, const libp2p_gossipsub_message_t *msg);
+
+libp2p_err_t libp2p_gossipsub_set_message_delivery_callback(libp2p_gossipsub_t *gs,
+                                                            libp2p_gossipsub_message_delivery_cb cb,
+                                                            void *user_data);
+libp2p_err_t libp2p_gossipsub_report_message_validation_result(
+    libp2p_gossipsub_t *gs,
+    const uint8_t *message_id,
+    size_t message_id_len,
+    libp2p_gossipsub_validation_result_t result);
 
 libp2p_err_t libp2p_gossipsub_add_validator(libp2p_gossipsub_t *gs,
                                             const char *topic,
