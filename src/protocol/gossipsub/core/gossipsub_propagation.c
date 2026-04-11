@@ -1156,7 +1156,8 @@ libp2p_err_t gossipsub_propagation_handle_control_iwant(libp2p_gossipsub_t *gs, 
 
 			pthread_mutex_lock(&gs->lock);
 			gossipsub_cache_entry_t *cached = gossipsub_message_cache_find(&gs->message_cache, id, id_len);
-			if (cached && gossipsub_message_cache_is_validated(cached) && cached->frame && cached->frame_len)
+			if (cached && gossipsub_message_cache_is_validated(cached) && cached->frame &&
+			    cached->frame_len)
 			{
 				libp2p_err_t send_rc = gossipsub_peer_enqueue_frame_locked(gs, entry, cached->frame,
 											   cached->frame_len);

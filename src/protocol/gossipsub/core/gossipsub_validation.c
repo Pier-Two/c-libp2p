@@ -552,10 +552,8 @@ payload_fallback:
 	return LIBP2P_ERR_OK;
 }
 
-static libp2p_err_t gossipsub_encode_external_frame(libp2p_gossipsub_t *gs,
-						    const libp2p_gossipsub_message_t *msg,
-						    uint8_t **out_frame,
-						    size_t *out_frame_len)
+static libp2p_err_t gossipsub_encode_external_frame(libp2p_gossipsub_t *gs, const libp2p_gossipsub_message_t *msg,
+						    uint8_t **out_frame, size_t *out_frame_len)
 {
 	if (!gs || !msg || !out_frame || !out_frame_len)
 		return LIBP2P_ERR_NULL_PTR;
@@ -840,7 +838,8 @@ static void gossipsub_validation_report_exec(void *user_data)
 	if (!entry || entry->state != GOSSIPSUB_CACHE_ENTRY_FINALIZING)
 	{
 		pthread_mutex_unlock(&gs->lock);
-		LP_LOGD(GOSSIPSUB_MODULE, "late validation result for unknown message_id_len=%zu", task->message_id_len);
+		LP_LOGD(GOSSIPSUB_MODULE, "late validation result for unknown message_id_len=%zu",
+			task->message_id_len);
 		gossipsub_validation_report_task_free(task);
 		return;
 	}
@@ -852,12 +851,11 @@ static void gossipsub_validation_report_exec(void *user_data)
 	if (task->result == LIBP2P_GOSSIPSUB_VALIDATION_ACCEPT)
 	{
 		int was_present = 0;
-		libp2p_err_t seen_rc =
-			gossipsub_seen_cache_check_and_add(&gs->seen_cache, task->message_id, task->message_id_len, now_ms,
-							 &was_present);
+		libp2p_err_t seen_rc = gossipsub_seen_cache_check_and_add(&gs->seen_cache, task->message_id,
+									  task->message_id_len, now_ms, &was_present);
 		if (seen_rc != LIBP2P_ERR_OK)
-			LP_LOGW(GOSSIPSUB_MODULE, "failed to update seen cache for externally validated message (rc=%d)",
-				seen_rc);
+			LP_LOGW(GOSSIPSUB_MODULE,
+				"failed to update seen cache for externally validated message (rc=%d)", seen_rc);
 
 		gossipsub_message_cache_mark_validated(entry);
 		gossipsub_promises_message_delivered(&gs->promises, task->message_id, task->message_id_len);
@@ -869,8 +867,8 @@ static void gossipsub_validation_report_exec(void *user_data)
 			{
 				gossipsub_mesh_member_t *member =
 					gossipsub_mesh_member_find(topic->mesh, entry->propagation_source);
-				gossipsub_score_on_first_delivery_locked(
-					gs, topic, peer_entry, member != NULL ? 1 : 0, now_ms);
+				gossipsub_score_on_first_delivery_locked(gs, topic, peer_entry, member != NULL ? 1 : 0,
+									 now_ms);
 			}
 		}
 
@@ -898,7 +896,8 @@ static void gossipsub_validation_report_exec(void *user_data)
 			gossipsub_promises_message_delivered(&gs->promises, task->message_id, task->message_id_len);
 			if (topic && entry->propagation_source)
 			{
-				gossipsub_peer_entry_t *peer_entry = gossipsub_peer_find(gs->peers, entry->propagation_source);
+				gossipsub_peer_entry_t *peer_entry =
+					gossipsub_peer_find(gs->peers, entry->propagation_source);
 				if (peer_entry)
 					gossipsub_score_on_invalid_message_locked(gs, topic, peer_entry, now_ms);
 			}
@@ -910,7 +909,8 @@ static void gossipsub_validation_report_exec(void *user_data)
 						continue;
 					gossipsub_peer_entry_t *peer_entry = gossipsub_peer_find(gs->peers, it->peer);
 					if (peer_entry)
-						gossipsub_score_on_invalid_message_locked(gs, topic, peer_entry, now_ms);
+						gossipsub_score_on_invalid_message_locked(gs, topic, peer_entry,
+											  now_ms);
 				}
 			}
 		}
@@ -1052,8 +1052,7 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs, gossipsub_top
 	return LIBP2P_ERR_OK;
 }
 
-libp2p_err_t gossipsub_validation_deliver_externally(libp2p_gossipsub_t *gs,
-						     gossipsub_topic_state_t *topic,
+libp2p_err_t gossipsub_validation_deliver_externally(libp2p_gossipsub_t *gs, gossipsub_topic_state_t *topic,
 						     const libp2p_gossipsub_message_t *msg,
 						     const peer_id_t *propagation_source)
 {
@@ -1142,8 +1141,7 @@ libp2p_err_t gossipsub_validation_deliver_externally(libp2p_gossipsub_t *gs,
 }
 
 libp2p_err_t libp2p_gossipsub_set_message_delivery_callback(libp2p_gossipsub_t *gs,
-							    libp2p_gossipsub_message_delivery_cb cb,
-							    void *user_data)
+							    libp2p_gossipsub_message_delivery_cb cb, void *user_data)
 {
 	if (!gs)
 		return LIBP2P_ERR_NULL_PTR;
@@ -1155,9 +1153,9 @@ libp2p_err_t libp2p_gossipsub_set_message_delivery_callback(libp2p_gossipsub_t *
 	return LIBP2P_ERR_OK;
 }
 
-libp2p_err_t libp2p_gossipsub_report_message_validation_result(
-	libp2p_gossipsub_t *gs, const uint8_t *message_id, size_t message_id_len,
-	libp2p_gossipsub_validation_result_t result)
+libp2p_err_t libp2p_gossipsub_report_message_validation_result(libp2p_gossipsub_t *gs, const uint8_t *message_id,
+							       size_t message_id_len,
+							       libp2p_gossipsub_validation_result_t result)
 {
 	if (!gs || !gs->host || !message_id || message_id_len == 0)
 		return LIBP2P_ERR_NULL_PTR;
@@ -1177,8 +1175,7 @@ libp2p_err_t libp2p_gossipsub_report_message_validation_result(
 	gossipsub_message_cache_mark_finalizing(entry);
 	pthread_mutex_unlock(&gs->lock);
 
-	gossipsub_validation_report_task_t *task =
-		(gossipsub_validation_report_task_t *)calloc(1, sizeof(*task));
+	gossipsub_validation_report_task_t *task = (gossipsub_validation_report_task_t *)calloc(1, sizeof(*task));
 	if (!task)
 	{
 		pthread_mutex_lock(&gs->lock);
