@@ -1050,7 +1050,7 @@ libp2p_err_t libp2p_gossipsub_publish(libp2p_gossipsub_t *gs, const libp2p_gossi
 	if (rc != LIBP2P_ERR_OK)
 		return (rc == LIBP2P_ERR_UNSUPPORTED) ? LIBP2P_ERR_INTERNAL : rc;
 
-	return gossipsub_validation_schedule(gs, topic, validators, validator_count, msg, 1);
+	return gossipsub_validation_schedule(gs, topic, validators, validator_count, msg, 1, NULL);
 }
 
 libp2p_err_t libp2p_gossipsub_peering_add(libp2p_gossipsub_t *gs, const peer_id_t *peer)
