@@ -7,17 +7,14 @@
 #include "libp2p/events.h"
 #include "peer_id/peer_id.h"
 
-static peer_id_t make_dummy_peer(void)
+static peer_id_t *make_dummy_peer(void)
 {
-    peer_id_t pid = {0};
-    pid.size = 3;
-    pid.bytes = (uint8_t *)malloc(pid.size);
-    if (pid.bytes)
-    {
-        pid.bytes[0] = 1;
-        pid.bytes[1] = 2;
-        pid.bytes[2] = 3;
-    }
+    static const char *peer_text = "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E";
+    peer_id_t *pid = NULL;
+
+    if (peer_id_new_from_text(peer_text, &pid) != PEER_ID_OK)
+        return NULL;
+
     return pid;
 }
 
@@ -54,7 +51,9 @@ int main(void)
     }
 
     /* Prepare a dummy peer for events that include peer IDs */
-    peer_id_t pid = make_dummy_peer();
+    peer_id_t *pid = make_dummy_peer();
+    if (!pid)
+        goto fail;
 
     /* 1) LISTEN_ADDR_ADDED */
     {
@@ -99,7 +98,7 @@ int main(void)
         const char *addr = "/ip4/127.0.0.1/tcp/4001";
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_DIALING;
-        e.u.dialing.peer = &pid;
+        e.u.dialing.peer = pid;
         e.u.dialing.addr = addr;
         libp2p_event_publish(h, &e);
 
@@ -108,7 +107,7 @@ int main(void)
             goto fail;
         if (!got.u.dialing.peer || !got.u.dialing.addr)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.dialing.peer == &pid || got.u.dialing.addr == addr)
+        if (got.u.dialing.peer == pid || got.u.dialing.addr == addr)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.dialing.peer || got.u.dialing.addr)
@@ -120,7 +119,7 @@ int main(void)
         const char *msg = "connect failed";
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
-        e.u.outgoing_conn_error.peer = &pid;
+        e.u.outgoing_conn_error.peer = pid;
         e.u.outgoing_conn_error.code = -1;
         e.u.outgoing_conn_error.msg = msg;
         libp2p_event_publish(h, &e);
@@ -130,7 +129,7 @@ int main(void)
             goto fail;
         if (!got.u.outgoing_conn_error.peer || !got.u.outgoing_conn_error.msg)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.outgoing_conn_error.peer == &pid || got.u.outgoing_conn_error.msg == msg)
+        if (got.u.outgoing_conn_error.peer == pid || got.u.outgoing_conn_error.msg == msg)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.outgoing_conn_error.peer || got.u.outgoing_conn_error.msg)
@@ -160,7 +159,7 @@ int main(void)
         const char *addr = "/ip4/203.0.113.1/tcp/4001";
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_NEW_EXTERNAL_ADDR_OF_PEER;
-        e.u.new_external_addr_of_peer.peer = &pid;
+        e.u.new_external_addr_of_peer.peer = pid;
         e.u.new_external_addr_of_peer.addr = addr;
         libp2p_event_publish(h, &e);
 
@@ -169,7 +168,7 @@ int main(void)
             goto fail;
         if (!got.u.new_external_addr_of_peer.peer || !got.u.new_external_addr_of_peer.addr)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.new_external_addr_of_peer.peer == &pid || got.u.new_external_addr_of_peer.addr == addr)
+        if (got.u.new_external_addr_of_peer.peer == pid || got.u.new_external_addr_of_peer.addr == addr)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.new_external_addr_of_peer.peer || got.u.new_external_addr_of_peer.addr)
@@ -181,7 +180,7 @@ int main(void)
         const char *addr = "/ip4/127.0.0.1/tcp/4002";
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_CONN_OPENED;
-        e.u.conn_opened.peer = &pid;
+        e.u.conn_opened.peer = pid;
         e.u.conn_opened.addr = addr;
         e.u.conn_opened.inbound = 0;
         libp2p_event_publish(h, &e);
@@ -191,7 +190,7 @@ int main(void)
             goto fail;
         if (!got.u.conn_opened.peer || !got.u.conn_opened.addr)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.conn_opened.peer == &pid || got.u.conn_opened.addr == addr)
+        if (got.u.conn_opened.peer == pid || got.u.conn_opened.addr == addr)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.conn_opened.peer || got.u.conn_opened.addr)
@@ -202,7 +201,7 @@ int main(void)
     {
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_CONN_CLOSED;
-        e.u.conn_closed.peer = &pid;
+        e.u.conn_closed.peer = pid;
         e.u.conn_closed.reason = 0;
         libp2p_event_publish(h, &e);
 
@@ -211,7 +210,7 @@ int main(void)
             goto fail;
         if (!got.u.conn_closed.peer)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.conn_closed.peer == &pid)
+        if (got.u.conn_closed.peer == pid)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.conn_closed.peer)
@@ -242,7 +241,7 @@ int main(void)
         libp2p_event_t e = {0};
         e.kind = LIBP2P_EVT_STREAM_OPENED;
         e.u.stream_opened.protocol_id = pid_str;
-        e.u.stream_opened.peer = &pid;
+        e.u.stream_opened.peer = pid;
         e.u.stream_opened.initiator = 1;
         libp2p_event_publish(h, &e);
 
@@ -251,7 +250,7 @@ int main(void)
             goto fail;
         if (!got.u.stream_opened.peer || !got.u.stream_opened.protocol_id)
         { libp2p_event_free(&got); goto fail; }
-        if (got.u.stream_opened.peer == &pid || got.u.stream_opened.protocol_id == pid_str)
+        if (got.u.stream_opened.peer == pid || got.u.stream_opened.protocol_id == pid_str)
         { libp2p_event_free(&got); goto fail; }
         libp2p_event_free(&got);
         if (got.u.stream_opened.peer || got.u.stream_opened.protocol_id)
@@ -278,15 +277,13 @@ int main(void)
     }
 
     /* cleanup */
-    if (pid.bytes)
-        free(pid.bytes);
+    peer_id_free(pid);
     libp2p_host_free(h);
     libp2p_host_builder_free(b);
     return 0;
 
 fail:
-    if (pid.bytes)
-        free(pid.bytes);
+    peer_id_free(pid);
     libp2p_host_free(h);
     libp2p_host_builder_free(b);
     return 1;
