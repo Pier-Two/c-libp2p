@@ -465,7 +465,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				}
 				else
 				{
-					libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
+					libp2p_err_t inj_rc =
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						subscriptions_ok = 0;
 				}
@@ -615,7 +616,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				}
 				else
 				{
-					libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
+					libp2p_err_t inj_rc =
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						setup_ok = 0;
 				}
@@ -676,8 +678,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 						{
 							uint8_t *frame = NULL;
 							size_t frame_len = 0;
-							libp2p_err_t pop_rc =
-								libp2p_gossipsub__peer_pop_sendq(gs, peers[i], &frame, &frame_len);
+							libp2p_err_t pop_rc = libp2p_gossipsub__peer_pop_sendq(
+								gs, peers[i], &frame, &frame_len);
 							if (pop_rc != LIBP2P_ERR_OK || !frame || frame_len == 0)
 							{
 								if (frame)
@@ -804,7 +806,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				}
 				else
 				{
-					libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
+					libp2p_err_t inj_rc =
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						setup_ok = 0;
 				}
@@ -823,8 +826,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					setup_ok = 0;
 					break;
 				}
-				if (libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, peers[i], outbound_flags[i]) !=
-				    LIBP2P_ERR_OK)
+				if (libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, peers[i],
+									  outbound_flags[i]) != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
 					break;

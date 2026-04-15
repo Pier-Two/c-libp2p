@@ -30,8 +30,8 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
 				sub_inj_err = libp2p_gossipsub__inject_frame(gs, subscription_peer, frame, frame_len);
 			if (frame)
 				free(frame);
-			subscription_recorded = libp2p_gossipsub__peer_has_subscription(gs, subscription_peer,
-												 subscription_topic);
+			subscription_recorded =
+				libp2p_gossipsub__peer_has_subscription(gs, subscription_peer, subscription_topic);
 		}
 
 		print_result("gossipsub_subscription_rpc_encoded", sub_enc_err == LIBP2P_ERR_OK);
@@ -71,8 +71,8 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
 				unsub_inj_err = libp2p_gossipsub__inject_frame(gs, subscription_peer, frame, frame_len);
 			if (frame)
 				free(frame);
-			subscription_cleared = libp2p_gossipsub__peer_has_subscription(gs, subscription_peer,
-										       subscription_topic) == 0;
+			subscription_cleared =
+				libp2p_gossipsub__peer_has_subscription(gs, subscription_peer, subscription_topic) == 0;
 			mesh_after_unsub = libp2p_gossipsub__topic_mesh_size(gs, subscription_topic);
 		}
 

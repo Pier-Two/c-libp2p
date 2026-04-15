@@ -56,8 +56,7 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 		if (!set_conn_ok)
 			failures++;
 
-		libp2p_err_t mesh_add_rc =
-			libp2p_gossipsub__topic_mesh_add_peer(gs, explicit_topic_name, mesh_peer, 1);
+		libp2p_err_t mesh_add_rc = libp2p_gossipsub__topic_mesh_add_peer(gs, explicit_topic_name, mesh_peer, 1);
 		int mesh_add_ok = (mesh_add_rc == LIBP2P_ERR_OK);
 		print_result("gossipsub_explicit_mesh_peer_added", mesh_add_ok);
 		if (!mesh_add_ok)
@@ -107,8 +106,8 @@ int gossipsub_service_run_explicit_peer_tests(gossipsub_service_test_env_t *env)
 			{
 				uint8_t *queued_frame = NULL;
 				size_t queued_len = 0;
-				libp2p_err_t pop_rc = libp2p_gossipsub__peer_pop_sendq(gs, explicit_peer,
-										       &queued_frame, &queued_len);
+				libp2p_err_t pop_rc =
+					libp2p_gossipsub__peer_pop_sendq(gs, explicit_peer, &queued_frame, &queued_len);
 				int pop_ok = (pop_rc == LIBP2P_ERR_OK && queued_frame && queued_len);
 				print_result("gossipsub_explicit_peer_pop_publish", pop_ok);
 				if (!pop_ok)

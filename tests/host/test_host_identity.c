@@ -81,8 +81,7 @@ int main(void)
 	rc = libp2p_host_get_peer_id(host, &got);
 	const uint8_t *got_bytes = NULL;
 	size_t got_len = 0;
-	int ok = (rc == 0 && got &&
-		  peer_id_multihash_view(got, &got_bytes, &got_len) == PEER_ID_OK &&
+	int ok = (rc == 0 && got && peer_id_multihash_view(got, &got_bytes, &got_len) == PEER_ID_OK &&
 		  got_bytes != NULL && got_len > 0);
 	print_result("host_get_peer_id", ok);
 	if (!ok)

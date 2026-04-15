@@ -439,7 +439,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 				if (encode_ok)
 				{
-					libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, first_peer, frame, frame_len);
+					libp2p_err_t inj_rc =
+						libp2p_gossipsub__inject_frame(gs, first_peer, frame, frame_len);
 					int inject_ok = (inj_rc == LIBP2P_ERR_OK);
 					print_result("gossipsub_score_first_delivery_inject", inject_ok);
 					if (!inject_ok)
@@ -735,7 +736,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 
 			if (encode_ok)
 			{
-				libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, invalid_peer, frame, frame_len);
+				libp2p_err_t inj_rc =
+					libp2p_gossipsub__inject_frame(gs, invalid_peer, frame, frame_len);
 				int inject_ok = (inj_rc == LIBP2P_ERR_OK);
 				print_result("gossipsub_score_invalid_inject", inject_ok);
 				if (!inject_ok)
@@ -1105,7 +1107,8 @@ int gossipsub_service_run_scoring_tests(gossipsub_service_test_env_t *env)
 			}
 			else
 			{
-				libp2p_err_t inj_rc = libp2p_gossipsub__inject_frame(gs, promise_peer, ihave_frame, ihave_len);
+				libp2p_err_t inj_rc =
+					libp2p_gossipsub__inject_frame(gs, promise_peer, ihave_frame, ihave_len);
 				int inj_ok = (inj_rc == LIBP2P_ERR_OK);
 				print_result("gossipsub_spam_promise_inject", inj_ok);
 				if (!inj_ok)
