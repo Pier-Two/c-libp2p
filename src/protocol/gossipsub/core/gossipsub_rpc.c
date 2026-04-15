@@ -11,7 +11,7 @@
 
 #define GOSSIPSUB_MODULE "gossipsub"
 
-static libp2p_err_t gossipsub_rpc_encode_finalize(libp2p_gossipsub_RPC *rpc, gossipsub_rpc_out_t *out)
+libp2p_err_t gossipsub_rpc_encode(const libp2p_gossipsub_RPC *rpc, gossipsub_rpc_out_t *out)
 {
 	if (!rpc || !out)
 		return LIBP2P_ERR_NULL_PTR;
@@ -30,8 +30,14 @@ static libp2p_err_t gossipsub_rpc_encode_finalize(libp2p_gossipsub_RPC *rpc, gos
 
 	size_t encoded_size = 0;
 	noise_rc = noise_protobuf_finish_measure(&measure, &encoded_size);
-	if (noise_rc != NOISE_ERROR_NONE || encoded_size == 0)
+	if (noise_rc != NOISE_ERROR_NONE)
 		return LIBP2P_ERR_INTERNAL;
+	if (encoded_size == 0)
+	{
+		out->frame = NULL;
+		out->frame_len = 0;
+		return LIBP2P_ERR_OK;
+	}
 
 	uint8_t *buffer = (uint8_t *)malloc(encoded_size);
 	if (!buffer)
@@ -206,7 +212,7 @@ libp2p_err_t gossipsub_rpc_encode_control_iwant(uint8_t **ids, const size_t *id_
 			goto cleanup;
 	}
 
-	result = gossipsub_rpc_encode_finalize(rpc, out);
+	result = gossipsub_rpc_encode(rpc, out);
 
 cleanup:
 	if (rpc)
@@ -287,7 +293,7 @@ libp2p_err_t gossipsub_rpc_encode_control_prune(const gossipsub_prune_target_t *
 		}
 	}
 
-	result = gossipsub_rpc_encode_finalize(rpc, out);
+	result = gossipsub_rpc_encode(rpc, out);
 
 cleanup:
 	if (rpc)
@@ -339,7 +345,7 @@ libp2p_err_t gossipsub_rpc_encode_control_graft(const char *const *topics, size_
 			goto cleanup;
 	}
 
-	result = gossipsub_rpc_encode_finalize(rpc, out);
+	result = gossipsub_rpc_encode(rpc, out);
 
 cleanup:
 	if (rpc)
@@ -386,7 +392,7 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic, int subscribe,
 	if (noise_rc != NOISE_ERROR_NONE)
 		goto cleanup;
 
-	result = gossipsub_rpc_encode_finalize(rpc, out);
+	result = gossipsub_rpc_encode(rpc, out);
 
 	/* Log the encoded subscription frame for debugging */
 	if (result == LIBP2P_ERR_OK && out->frame && out->frame_len > 0)
@@ -458,7 +464,7 @@ libp2p_err_t gossipsub_rpc_encode_control_ihave(const char *topic, uint8_t **ids
 			goto cleanup;
 	}
 
-	result = gossipsub_rpc_encode_finalize(rpc, out);
+	result = gossipsub_rpc_encode(rpc, out);
 
 cleanup:
 	if (rpc)
