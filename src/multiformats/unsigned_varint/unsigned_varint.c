@@ -136,17 +136,20 @@ unsigned_varint_err_t unsigned_varint_decode(const uint8_t *in, size_t in_size, 
 						}
 						else
 						{
-							decoded_value |= (((uint64_t)byte) & (uint64_t)UNSIGNED_VARINT_ONE_U8) << 63U;
+							decoded_value |=
+								(((uint64_t)byte) & (uint64_t)UNSIGNED_VARINT_ONE_U8)
+								<< 63U;
 						}
 					}
 					else
 					{
-						decoded_value |= (((uint64_t)byte) & ((uint64_t)UNSIGNED_VARINT_DATA_MASK))
-							 << (unsigned int)(index * (size_t)7U);
+						decoded_value |=
+							(((uint64_t)byte) & ((uint64_t)UNSIGNED_VARINT_DATA_MASK))
+							<< (unsigned int)(index * (size_t)7U);
 					}
 
-					if (((byte & UNSIGNED_VARINT_CONT_MASK) == UNSIGNED_VARINT_ZERO_U8)
-						&& (terminate_loop == UNSIGNED_VARINT_ZERO_U8))
+					if (((byte & UNSIGNED_VARINT_CONT_MASK) == UNSIGNED_VARINT_ZERO_U8) &&
+					    (terminate_loop == UNSIGNED_VARINT_ZERO_U8))
 					{
 						encoded_size = index + (size_t)1U;
 						if (unsigned_varint_size_internal(decoded_value) != encoded_size)
