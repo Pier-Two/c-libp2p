@@ -78,6 +78,7 @@ typedef struct gossipsub_rpc_parsed
 
 void gossipsub_rpc_out_init(gossipsub_rpc_out_t *out);
 void gossipsub_rpc_out_clear(gossipsub_rpc_out_t *out);
+libp2p_err_t gossipsub_rpc_encode(const libp2p_gossipsub_RPC *rpc, gossipsub_rpc_out_t *out);
 
 libp2p_err_t gossipsub_rpc_encode_control_iwant(uint8_t **ids,
                                                 const size_t *id_lengths,

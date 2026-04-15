@@ -14,6 +14,7 @@ struct _libp2p_gossipsub_RPC {
 
 struct _libp2p_gossipsub_RPC_SubOpts {
     int subscribe;
+    int subscribe_is_set;
     char *topic;
     size_t topic_size_;
     char *topic_id;
@@ -389,7 +390,7 @@ int libp2p_gossipsub_RPC_SubOpts_write(NoiseProtobuf *pbuf, int tag, const libp2
         noise_protobuf_write_string(pbuf, 3, obj->topic_id, obj->topic_id_size_);
     if (obj->topic)
         noise_protobuf_write_string(pbuf, 2, obj->topic, obj->topic_size_);
-    if (obj->subscribe)
+    if (obj->subscribe_is_set)
         noise_protobuf_write_bool(pbuf, 1, obj->subscribe);
     return noise_protobuf_write_start_element(pbuf, tag, end_posn);
 }
@@ -411,6 +412,7 @@ int libp2p_gossipsub_RPC_SubOpts_read(NoiseProtobuf *pbuf, int tag, libp2p_gossi
         switch (noise_protobuf_peek_tag(pbuf)) {
             case 1: {
                 noise_protobuf_read_bool(pbuf, 1, &((*obj)->subscribe));
+                (*obj)->subscribe_is_set = 1;
             } break;
             case 2: {
                 noise_protobuf_free_memory((*obj)->topic, (*obj)->topic_size_);
@@ -441,6 +443,7 @@ int libp2p_gossipsub_RPC_SubOpts_clear_subscribe(libp2p_gossipsub_RPC_SubOpts *o
 {
     if (obj) {
         obj->subscribe = 0;
+        obj->subscribe_is_set = 0;
         return NOISE_ERROR_NONE;
     }
     return NOISE_ERROR_INVALID_PARAM;
@@ -448,7 +451,7 @@ int libp2p_gossipsub_RPC_SubOpts_clear_subscribe(libp2p_gossipsub_RPC_SubOpts *o
 
 int libp2p_gossipsub_RPC_SubOpts_has_subscribe(const libp2p_gossipsub_RPC_SubOpts *obj)
 {
-    return obj ? (obj->subscribe != 0) : 0;
+    return obj ? obj->subscribe_is_set : 0;
 }
 
 int libp2p_gossipsub_RPC_SubOpts_get_subscribe(const libp2p_gossipsub_RPC_SubOpts *obj)
@@ -459,7 +462,8 @@ int libp2p_gossipsub_RPC_SubOpts_get_subscribe(const libp2p_gossipsub_RPC_SubOpt
 int libp2p_gossipsub_RPC_SubOpts_set_subscribe(libp2p_gossipsub_RPC_SubOpts *obj, int value)
 {
     if (obj) {
-        obj->subscribe = value;
+        obj->subscribe = value ? 1 : 0;
+        obj->subscribe_is_set = 1;
         return NOISE_ERROR_NONE;
     }
     return NOISE_ERROR_INVALID_PARAM;
@@ -2586,4 +2590,3 @@ int libp2p_gossipsub_PeerInfo_set_signed_peer_record(libp2p_gossipsub_PeerInfo *
     }
     return NOISE_ERROR_INVALID_PARAM;
 }
-
