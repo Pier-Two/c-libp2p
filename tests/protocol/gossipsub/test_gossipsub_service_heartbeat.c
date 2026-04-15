@@ -84,7 +84,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		/* Regression: if a peer's stream write reports CLOSED/RESET/EOF, mark the peer as
 		 * disconnected so we don't keep enqueueing frames for it and leak memory / spam logs. */
 		const char *peer_str = "12D3KooWQvF8fCqVQk4CwPZ1NqK9h9kqg3jWm1e7j6r2pVw7JYxR";
-		peer_id_t peer = {0};
+		peer_id_t *peer = NULL;
 		int peer_ok = (peer_id_new_from_text(peer_str, &peer) == PEER_ID_OK);
 		print_result("gossipsub_stream_write_closed_peer_id", peer_ok);
 		if (!peer_ok)
@@ -94,8 +94,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		if (peer_ok)
 		{
 			/* libp2p_stream_from_ops takes ownership of remote_peer */
-			peer_id_t *remote = (peer_id_t *)calloc(1, sizeof(*remote));
-			int remote_ok = (remote && peer_id_new_from_text(peer_str, remote) == PEER_ID_OK);
+			peer_id_t *remote = NULL;
+			int remote_ok = (peer_id_new_from_text(peer_str, &remote) == PEER_ID_OK);
 			print_result("gossipsub_stream_write_closed_remote_peer_alloc", remote_ok);
 			if (!remote_ok)
 				failures++;
@@ -129,7 +129,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					gossipsub_on_stream_open(s, gs);
 
 					/* Ensure the peer is a propagation target for test/topic. */
-					err = libp2p_gossipsub__topic_mesh_add_peer(gs, "test/topic", &peer, 1);
+					err = libp2p_gossipsub__topic_mesh_add_peer(gs, "test/topic", peer, 1);
 					int mesh_add_ok = (err == LIBP2P_ERR_OK);
 					print_result("gossipsub_stream_write_closed_mesh_add", mesh_add_ok);
 					if (!mesh_add_ok)
@@ -137,7 +137,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 					/* Wait until any queued subscription frames are drained/cleared. */
 					size_t qlen = 0;
-					int idle_ok = gossipsub_wait_for_peer_idle(gs, &peer, 200, &qlen);
+					int idle_ok = gossipsub_wait_for_peer_idle(gs, peer, 200, &qlen);
 					print_result("gossipsub_stream_write_closed_idle_after_subscribe", idle_ok);
 					if (!idle_ok)
 						failures++;
@@ -168,7 +168,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 					/* Give the callback thread a moment, then verify no enqueue occurred. */
 					usleep(2000);
-					qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+					qlen = libp2p_gossipsub__peer_sendq_len(gs, peer);
 					int no_enqueue_ok = (qlen == 0);
 					print_result("gossipsub_stream_write_closed_no_enqueue", no_enqueue_ok);
 					if (!no_enqueue_ok)
@@ -186,24 +186,19 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 			{
 				if (ctx)
 					free(ctx);
-				if (remote)
-				{
-					if (remote->bytes)
-						peer_id_free(remote);
-					free(remote);
-				}
+				peer_id_free(remote);
 			}
 		}
 
 		if (peer_ok)
-			peer_id_free(&peer);
+			peer_id_free(peer);
 	}
 
 	{
 		/* Regression: when a peer's current writing stream closes, drop queued
 		 * frames and mark disconnected so we don't keep retrying writes. */
 		const char *peer_str = "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E";
-		peer_id_t peer = {0};
+		peer_id_t *peer = NULL;
 		int peer_ok = (peer_id_new_from_text(peer_str, &peer) == PEER_ID_OK);
 		print_result("gossipsub_stream_close_peer_id", peer_ok);
 		if (!peer_ok)
@@ -212,8 +207,8 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		libp2p_stream_t *s = NULL;
 		if (peer_ok)
 		{
-			peer_id_t *remote = (peer_id_t *)calloc(1, sizeof(*remote));
-			int remote_ok = (remote && peer_id_new_from_text(peer_str, remote) == PEER_ID_OK);
+			peer_id_t *remote = NULL;
+			int remote_ok = (peer_id_new_from_text(peer_str, &remote) == PEER_ID_OK);
 			print_result("gossipsub_stream_close_remote_peer_alloc", remote_ok);
 			if (!remote_ok)
 				failures++;
@@ -244,14 +239,14 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				if (stream_ok)
 				{
 					gossipsub_on_stream_open(s, gs);
-					err = libp2p_gossipsub__topic_mesh_add_peer(gs, "test/topic", &peer, 1);
+					err = libp2p_gossipsub__topic_mesh_add_peer(gs, "test/topic", peer, 1);
 					int mesh_add_ok = (err == LIBP2P_ERR_OK);
 					print_result("gossipsub_stream_close_mesh_add", mesh_add_ok);
 					if (!mesh_add_ok)
 						failures++;
 
 					/* Clear any subscription frames queued during open. */
-					(void)libp2p_gossipsub__peer_clear_sendq(gs, &peer);
+					(void)libp2p_gossipsub__peer_clear_sendq(gs, peer);
 					usleep(2000);
 
 					const uint8_t payload = 0x43;
@@ -277,7 +272,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 						failures++;
 
 					usleep(2000);
-					size_t qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+					size_t qlen = libp2p_gossipsub__peer_sendq_len(gs, peer);
 					int queued_ok = (qlen > 0);
 					print_result("gossipsub_stream_close_has_queue_before_close", queued_ok);
 					if (!queued_ok)
@@ -287,7 +282,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					gossipsub_on_stream_close(s, gs);
 
 					usleep(2000);
-					qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+					qlen = libp2p_gossipsub__peer_sendq_len(gs, peer);
 					int cleared_ok = (qlen == 0);
 					print_result("gossipsub_stream_close_queue_cleared", cleared_ok);
 					if (!cleared_ok)
@@ -301,7 +296,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 						failures++;
 
 					usleep(2000);
-					qlen = libp2p_gossipsub__peer_sendq_len(gs, &peer);
+					qlen = libp2p_gossipsub__peer_sendq_len(gs, peer);
 					int no_enqueue_ok = (qlen == 0);
 					print_result("gossipsub_stream_close_no_enqueue_after_close", no_enqueue_ok);
 					if (!no_enqueue_ok)
@@ -318,23 +313,18 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 			{
 				if (ctx)
 					free(ctx);
-				if (remote)
-				{
-					if (remote->bytes)
-						peer_id_free(remote);
-					free(remote);
-				}
+				peer_id_free(remote);
 			}
 		}
 
 		if (peer_ok)
-			peer_id_free(&peer);
+			peer_id_free(peer);
 	}
 
 	{
 		const char *fanout_topic = "fanout/heartbeat";
 		const char *fanout_peer_str = "12D3KooWNsGu1ca6QiN29GTRxK6j22BYrhM1Y5AkwB68x5y61xwn";
-		peer_id_t fanout_peer = {0};
+		peer_id_t *fanout_peer = NULL;
 		int fanout_peer_ok = (peer_id_new_from_text(fanout_peer_str, &fanout_peer) == PEER_ID_OK);
 		print_result("gossipsub_heartbeat_fanout_peer_created", fanout_peer_ok);
 		if (!fanout_peer_ok)
@@ -342,7 +332,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 		if (fanout_peer_ok)
 		{
-			err = libp2p_gossipsub__topic_fanout_add_peer(gs, fanout_topic, &fanout_peer, -1, 1);
+			err = libp2p_gossipsub__topic_fanout_add_peer(gs, fanout_topic, fanout_peer, -1, 1);
 			int fanout_add_ok = (err == LIBP2P_ERR_OK);
 			print_result("gossipsub_heartbeat_fanout_add", fanout_add_ok);
 			if (!fanout_add_ok)
@@ -372,13 +362,13 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		}
 
 		if (fanout_peer_ok)
-			peer_id_free(&fanout_peer);
+			peer_id_free(fanout_peer);
 	}
 
 	{
 		const char *mesh_topic = "mesh/heartbeat";
 		const char *mesh_peer_str = "12D3KooWHZjVdysJ8V5Y2Tyshzw31wY1M2fjTw83YVHC6rU1ttzv";
-		peer_id_t mesh_peer = {0};
+		peer_id_t *mesh_peer = NULL;
 		int mesh_peer_ok = (peer_id_new_from_text(mesh_peer_str, &mesh_peer) == PEER_ID_OK);
 		print_result("gossipsub_heartbeat_mesh_peer_created", mesh_peer_ok);
 		if (!mesh_peer_ok)
@@ -386,7 +376,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 		if (mesh_peer_ok)
 		{
-			err = libp2p_gossipsub__topic_mesh_add_peer(gs, mesh_topic, &mesh_peer, 1);
+			err = libp2p_gossipsub__topic_mesh_add_peer(gs, mesh_topic, mesh_peer, 1);
 			int mesh_add_ok = (err == LIBP2P_ERR_OK);
 			print_result("gossipsub_heartbeat_mesh_add", mesh_add_ok);
 			if (!mesh_add_ok)
@@ -394,7 +384,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 			if (mesh_add_ok)
 			{
-				err = libp2p_gossipsub__peer_set_connected(gs, &mesh_peer, 1);
+				err = libp2p_gossipsub__peer_set_connected(gs, mesh_peer, 1);
 				int mesh_connected_ok = (err == LIBP2P_ERR_OK);
 				print_result("gossipsub_heartbeat_mesh_connected_initial", mesh_connected_ok);
 				if (!mesh_connected_ok)
@@ -406,7 +396,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				if (!mesh_sz_ok)
 					failures++;
 
-				err = libp2p_gossipsub__peer_set_connected(gs, &mesh_peer, 0);
+				err = libp2p_gossipsub__peer_set_connected(gs, mesh_peer, 0);
 				int mesh_disconnected_ok = (err == LIBP2P_ERR_OK);
 				print_result("gossipsub_heartbeat_mesh_mark_disconnected", mesh_disconnected_ok);
 				if (!mesh_disconnected_ok)
@@ -427,7 +417,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		}
 
 		if (mesh_peer_ok)
-			peer_id_free(&mesh_peer);
+			peer_id_free(mesh_peer);
 	}
 
 	{
@@ -446,7 +436,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					   "12D3KooWFjecZx2YM5mAZ1bn46vCeWkQS9KpVwhM2r36EJt2vqCr",
 					   "12D3KooWDH8u1o1YiA1HXSwSReT7PwtZDs7JhdYKbnvSYnUrWhp2"};
 		const size_t peer_count = sizeof(peer_strs) / sizeof(peer_strs[0]);
-		peer_id_t peers[sizeof(peer_strs) / sizeof(peer_strs[0])];
+		peer_id_t *peers[sizeof(peer_strs) / sizeof(peer_strs[0])];
 		memset(peers, 0, sizeof(peers));
 		int peers_created = 1;
 		for (size_t i = 0; i < peer_count; ++i)
@@ -476,7 +466,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				else
 				{
 					libp2p_err_t inj_rc =
-						libp2p_gossipsub__inject_frame(gs, &peers[i], frame, frame_len);
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						subscriptions_ok = 0;
 				}
@@ -484,7 +474,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					free(frame);
 				if (!subscriptions_ok)
 					break;
-				(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
+				(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
 			}
 			print_result("gossipsub_heartbeat_mesh_fill_subscriptions", subscriptions_ok);
 			if (!subscriptions_ok)
@@ -506,7 +496,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 				for (size_t i = 0; i < peer_count; ++i)
 				{
-					int contains = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, &peers[i],
+					int contains = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, peers[i],
 											     NULL, NULL);
 					print_result("gossipsub_heartbeat_mesh_fill_contains", contains);
 					if (!contains)
@@ -515,7 +505,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					uint8_t *frame = NULL;
 					size_t frame_len = 0;
 					libp2p_err_t pop_rc =
-						libp2p_gossipsub__peer_pop_sendq(gs, &peers[i], &frame, &frame_len);
+						libp2p_gossipsub__peer_pop_sendq(gs, peers[i], &frame, &frame_len);
 					int graft_seen = 0;
 					if (pop_rc == LIBP2P_ERR_OK && frame && frame_len)
 					{
@@ -567,11 +557,11 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 		for (size_t i = 0; i < peer_count; ++i)
 		{
-			if (peers[i].bytes)
+			if (peers[i])
 			{
-				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &peers[i]);
-				(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
-				peer_id_free(&peers[i]);
+				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, peers[i]);
+				(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
+				peer_id_free(peers[i]);
 			}
 		}
 		libp2p_gossipsub_unsubscribe(gs, topic_name);
@@ -597,7 +587,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 					   "12D3KooWLMEFQv1YCGxHNNVPiNzYfs2E31L6m1g9A3PXCAYpZrVQ",
 					   "12D3KooWJMCZpZGsGWpRieyU7gnaNmJKbnHiKK4xqSSdoRRt9P5r"};
 		const size_t peer_count = sizeof(peer_strs) / sizeof(peer_strs[0]);
-		peer_id_t peers[sizeof(peer_strs) / sizeof(peer_strs[0])];
+		peer_id_t *peers[sizeof(peer_strs) / sizeof(peer_strs[0])];
 		memset(peers, 0, sizeof(peers));
 		int peers_created = 1;
 		for (size_t i = 0; i < peer_count; ++i)
@@ -627,7 +617,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				else
 				{
 					libp2p_err_t inj_rc =
-						libp2p_gossipsub__inject_frame(gs, &peers[i], frame, frame_len);
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						setup_ok = 0;
 				}
@@ -636,20 +626,20 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				if (!setup_ok)
 					break;
 
-				libp2p_err_t conn_rc = libp2p_gossipsub__peer_set_connected(gs, &peers[i], 1);
+				libp2p_err_t conn_rc = libp2p_gossipsub__peer_set_connected(gs, peers[i], 1);
 				if (conn_rc != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
 					break;
 				}
 				libp2p_err_t mesh_rc =
-					libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &peers[i], (int)(i % 2));
+					libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, peers[i], (int)(i % 2));
 				if (mesh_rc != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
 					break;
 				}
-				(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
+				(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
 			}
 			print_result("gossipsub_heartbeat_prune_setup", setup_ok);
 			if (!setup_ok)
@@ -678,7 +668,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				size_t pruned_count = 0;
 				for (size_t i = 0; i < peer_count; ++i)
 				{
-					int in_mesh = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, &peers[i],
+					int in_mesh = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, peers[i],
 											    NULL, NULL);
 					if (!in_mesh)
 					{
@@ -689,7 +679,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 							uint8_t *frame = NULL;
 							size_t frame_len = 0;
 							libp2p_err_t pop_rc = libp2p_gossipsub__peer_pop_sendq(
-								gs, &peers[i], &frame, &frame_len);
+								gs, peers[i], &frame, &frame_len);
 							if (pop_rc != LIBP2P_ERR_OK || !frame || frame_len == 0)
 							{
 								if (frame)
@@ -754,12 +744,12 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 		for (size_t i = 0; i < peer_count; ++i)
 		{
-			if (peers[i].bytes)
+			if (peers[i])
 			{
-				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &peers[i]);
-				(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
-				(void)libp2p_gossipsub__peer_set_connected(gs, &peers[i], 0);
-				peer_id_free(&peers[i]);
+				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, peers[i]);
+				(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
+				(void)libp2p_gossipsub__peer_set_connected(gs, peers[i], 0);
+				peer_id_free(peers[i]);
 			}
 		}
 		libp2p_gossipsub_unsubscribe(gs, topic_name);
@@ -787,7 +777,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 		const int outbound_flags[] = {1, 1, 0, 0, 0, 0, 0};
 		const double scores[] = {1.2, 0.1, 0.2, 1.0, 0.3, -0.2, 0.05};
 		const size_t peer_count = sizeof(peer_strs) / sizeof(peer_strs[0]);
-		peer_id_t peers[peer_count];
+		peer_id_t *peers[peer_count];
 		memset(peers, 0, sizeof(peers));
 		int peers_created = 1;
 		for (size_t i = 0; i < peer_count; ++i)
@@ -817,7 +807,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				else
 				{
 					libp2p_err_t inj_rc =
-						libp2p_gossipsub__inject_frame(gs, &peers[i], frame, frame_len);
+						libp2p_gossipsub__inject_frame(gs, peers[i], frame, frame_len);
 					if (inj_rc != LIBP2P_ERR_OK)
 						setup_ok = 0;
 				}
@@ -826,17 +816,17 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				if (!setup_ok)
 					break;
 
-				if (libp2p_gossipsub__peer_set_connected(gs, &peers[i], 1) != LIBP2P_ERR_OK)
+				if (libp2p_gossipsub__peer_set_connected(gs, peers[i], 1) != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
 					break;
 				}
-				if (libp2p_gossipsub__peer_set_score(gs, &peers[i], scores[i]) != LIBP2P_ERR_OK)
+				if (libp2p_gossipsub__peer_set_score(gs, peers[i], scores[i]) != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
 					break;
 				}
-				if (libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, &peers[i],
+				if (libp2p_gossipsub__topic_mesh_add_peer(gs, topic_name, peers[i],
 									  outbound_flags[i]) != LIBP2P_ERR_OK)
 				{
 					setup_ok = 0;
@@ -873,7 +863,7 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 				for (size_t i = 0; i < peer_count; ++i)
 				{
 					int outbound = 0;
-					int in_mesh = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, &peers[i],
+					int in_mesh = libp2p_gossipsub__topic_mesh_contains(gs, topic_name, peers[i],
 											    &outbound, NULL);
 					if (outbound_flags[i])
 					{
@@ -907,12 +897,12 @@ int gossipsub_service_run_heartbeat_and_gossip_tests(gossipsub_service_test_env_
 
 		for (size_t i = 0; i < peer_count; ++i)
 		{
-			if (peers[i].bytes)
+			if (peers[i])
 			{
-				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, &peers[i]);
-				(void)libp2p_gossipsub__peer_clear_sendq(gs, &peers[i]);
-				(void)libp2p_gossipsub__peer_set_connected(gs, &peers[i], 0);
-				peer_id_free(&peers[i]);
+				(void)libp2p_gossipsub__topic_mesh_remove_peer(gs, topic_name, peers[i]);
+				(void)libp2p_gossipsub__peer_clear_sendq(gs, peers[i]);
+				(void)libp2p_gossipsub__peer_set_connected(gs, peers[i], 0);
+				peer_id_free(peers[i]);
 			}
 		}
 		libp2p_gossipsub_unsubscribe(gs, topic_name);
