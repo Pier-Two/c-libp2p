@@ -8,7 +8,7 @@ package libp2p.gossipsub;
 
 message RPC {
   message SubOpts {
-    bool subscribe = 1;
+    optional bool subscribe = 1;
     string topic = 2;
     string topic_id = 3;
   }
