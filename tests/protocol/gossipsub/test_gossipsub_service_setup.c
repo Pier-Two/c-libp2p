@@ -47,24 +47,22 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 	env->host = host;
 
 	const char *config_peer_str = "12D3KooWL9qw9QdCsiPUQXGWxZhwivKar35CFYuU9B9kavHuV2XZ";
-	peer_id_t config_peer = {0};
+	peer_id_t *config_peer = NULL;
 	int config_peer_ok = (peer_id_new_from_text(config_peer_str, &config_peer) == PEER_ID_OK);
 	print_result("gossipsub_explicit_config_peer_id", config_peer_ok);
 	if (!config_peer_ok)
 	{
 		failures++;
-		memset(&env->config_peer, 0, sizeof(env->config_peer));
+		env->config_peer = NULL;
 		env->config_peer_ok = 0;
 	}
 	else
 	{
 		env->config_peer = config_peer;
-		config_peer.bytes = NULL;
-		config_peer.size = 0;
 		env->config_peer_ok = 1;
 		env->config_addrs[0] = "/ip4/127.0.0.1/tcp/7001";
 		env->cfg_explicit_peer.struct_size = sizeof(env->cfg_explicit_peer);
-		env->cfg_explicit_peer.peer = &env->config_peer;
+		env->cfg_explicit_peer.peer = env->config_peer;
 		env->cfg_explicit_peer.addresses = env->config_addrs;
 		env->cfg_explicit_peer.address_count = 1;
 	}
@@ -182,7 +180,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 		size_t seeded_len = 0;
 		int peerstore_ok = (host->peerstore != NULL);
 		if (peerstore_ok)
-			peerstore_ok = (libp2p_peerstore_get_addrs(host->peerstore, &env->config_peer, &seeded,
+			peerstore_ok = (libp2p_peerstore_get_addrs(host->peerstore, env->config_peer, &seeded,
 								   &seeded_len) == 0);
 		int seeded_available = (peerstore_ok && seeded_len >= 1);
 		print_result("gossipsub_explicit_config_seeded_peerstore", seeded_available);
@@ -279,7 +277,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 		atomic_store(&g_async_called, 0);
 
 		const char *test_peer_str = "12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E";
-		peer_id_t self_peer = {0};
+		peer_id_t *self_peer = NULL;
 		int peer_ok = (peer_id_new_from_text(test_peer_str, &self_peer) == PEER_ID_OK);
 		libp2p_err_t enc_err = LIBP2P_ERR_INTERNAL;
 		libp2p_err_t inj_err = LIBP2P_ERR_INTERNAL;
@@ -292,7 +290,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 				.topic = {.struct_size = sizeof(inbound_msg.topic), .topic = "test/topic"},
 				.data = inbound_payload,
 				.data_len = sizeof(inbound_payload),
-				.from = &self_peer,
+				.from = self_peer,
 				.seqno = inbound_seqno,
 				.seqno_len = sizeof(inbound_seqno),
 				.raw_message = NULL,
@@ -303,7 +301,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 			enc_err = libp2p_gossipsub_rpc_encode_publish(&inbound_msg, &encoded, &encoded_len);
 			if (enc_err == LIBP2P_ERR_OK && encoded && encoded_len)
 			{
-				inj_err = libp2p_gossipsub__inject_frame(gs, &self_peer, encoded, encoded_len);
+				inj_err = libp2p_gossipsub__inject_frame(gs, self_peer, encoded, encoded_len);
 				if (inj_err == LIBP2P_ERR_OK)
 				{
 					for (int i = 0; i < 200 && atomic_load_explicit(&g_async_called,
@@ -339,7 +337,7 @@ int gossipsub_service_run_setup(gossipsub_service_test_env_t *env)
 			failures++;
 
 		if (peer_ok)
-			peer_id_free(&self_peer);
+			peer_id_free(self_peer);
 	}
 	else
 	{

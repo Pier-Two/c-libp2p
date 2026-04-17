@@ -68,7 +68,7 @@ int main(void)
 		return 1;
 	}
 
-	peer_id_t expected = {0};
+	peer_id_t *expected = NULL;
 	if (peer_id_new_from_private_key_pb(sk, sk_len, &expected) != PEER_ID_OK)
 	{
 		fprintf(stderr, "peer_id_new_from_private_key_pb failed\n");
@@ -79,25 +79,24 @@ int main(void)
 
 	peer_id_t *got = NULL;
 	rc = libp2p_host_get_peer_id(host, &got);
-	int ok = (rc == 0 && got && got->bytes && got->size > 0);
+	const uint8_t *got_bytes = NULL;
+	size_t got_len = 0;
+	int ok = (rc == 0 && got && peer_id_multihash_view(got, &got_bytes, &got_len) == PEER_ID_OK &&
+		  got_bytes != NULL && got_len > 0);
 	print_result("host_get_peer_id", ok);
 	if (!ok)
 		failures++;
 
 	if (ok)
 	{
-		int eq = peer_id_equal(&expected, got);
+		int eq = peer_id_equal(expected, got);
 		print_result("host_peer_id_matches_expected", eq == 1);
 		if (eq != 1)
 			failures++;
 	}
 
-	if (got)
-	{
-		peer_id_free(got);
-		free(got);
-	}
-	peer_id_free(&expected);
+	peer_id_free(got);
+	peer_id_free(expected);
 	free(sk);
 	libp2p_host_free(host);
 	return failures ? 1 : 0;

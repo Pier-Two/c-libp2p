@@ -39,68 +39,71 @@ int main(void)
 	(void)libp2p_rsrc_set_limits_for_protocol(rm, &pl);
 	(void)libp2p_host_set_resource_manager(host, rm);
 
-	/* Two fake peers */
-	peer_id_t p1 = {0}, p2 = {0};
-	p1.bytes = (uint8_t *)malloc(4);
-	p1.size = 4;
-	memcpy(p1.bytes, "P1__", 4);
-	p2.bytes = (uint8_t *)malloc(4);
-	p2.size = 4;
-	memcpy(p2.bytes, "P2__", 4);
+	/* Two distinct peers */
+	peer_id_t *p1 = NULL;
+	peer_id_t *p2 = NULL;
+	if (peer_id_new_from_text("12D3KooWQ7W3zfBDSSY5YTbSsfXCMVvjJAnYXhYzu3PV6PvJkU8E", &p1) != PEER_ID_OK ||
+	    peer_id_new_from_text("12D3KooWSgVg7Ha9r8wB6L6scR8Db1wUwYUyJYEdpjXD2qH5A5X9", &p2) != PEER_ID_OK)
+	{
+		peer_id_free(p1);
+		peer_id_free(p2);
+		libp2p_host_free(host);
+		return 1;
+	}
 
 	/* First admit should pass */
-	int rc1 = libp2p_rsrc_admit_stream(host, &p1, TEST_PROTO_ID, 0);
+	int rc1 = libp2p_rsrc_admit_stream(host, p1, TEST_PROTO_ID, 0);
 	print_case("admit first inbound", rc1 == 0);
 	if (rc1 != 0)
 	{
-		peer_id_free(&p1);
-		peer_id_free(&p2);
+		peer_id_free(p1);
+		peer_id_free(p2);
 		libp2p_host_free(host);
 		return 1;
 	}
 
 	/* Second admit for same peer should fail (per-peer limit = 1) */
-	int rc2 = libp2p_rsrc_admit_stream(host, &p1, TEST_PROTO_ID, 0);
+	int rc2 = libp2p_rsrc_admit_stream(host, p1, TEST_PROTO_ID, 0);
 	print_case("deny second inbound same peer", rc2 != 0);
 	if (rc2 == 0)
 	{
-		libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0);
-		libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0);
-		peer_id_free(&p1);
-		peer_id_free(&p2);
+		libp2p_rsrc_release_stream(host, p1, TEST_PROTO_ID, 0);
+		libp2p_rsrc_release_stream(host, p1, TEST_PROTO_ID, 0);
+		peer_id_free(p1);
+		peer_id_free(p2);
 		libp2p_host_free(host);
 		return 1;
 	}
 
 	/* Second admit from different peer should fail (total cap = 1) */
-	int rc3 = libp2p_rsrc_admit_stream(host, &p2, TEST_PROTO_ID, 0);
+	int rc3 = libp2p_rsrc_admit_stream(host, p2, TEST_PROTO_ID, 0);
 	print_case("deny second inbound different peer due to total cap", rc3 != 0);
 	if (rc3 == 0)
 	{
-		libp2p_rsrc_release_stream(host, &p2, TEST_PROTO_ID, 0);
-		libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0);
-		peer_id_free(&p1);
-		peer_id_free(&p2);
+		libp2p_rsrc_release_stream(host, p2, TEST_PROTO_ID, 0);
+		libp2p_rsrc_release_stream(host, p1, TEST_PROTO_ID, 0);
+		peer_id_free(p1);
+		peer_id_free(p2);
 		libp2p_host_free(host);
 		return 1;
 	}
 
 	/* Release first, then admit from peer2 should succeed */
-	libp2p_rsrc_release_stream(host, &p1, TEST_PROTO_ID, 0);
-	int rc4 = libp2p_rsrc_admit_stream(host, &p2, TEST_PROTO_ID, 0);
+	libp2p_rsrc_release_stream(host, p1, TEST_PROTO_ID, 0);
+	int rc4 = libp2p_rsrc_admit_stream(host, p2, TEST_PROTO_ID, 0);
 	print_case("admit after release from another peer", rc4 == 0);
 	if (rc4 != 0)
 	{
-		peer_id_free(&p1);
-		peer_id_free(&p2);
+		peer_id_free(p1);
+		peer_id_free(p2);
 		libp2p_host_free(host);
 		return 1;
 	}
 
 	/* Cleanup */
-	libp2p_rsrc_release_stream(host, &p2, TEST_PROTO_ID, 0);
-	peer_id_free(&p1);
-	peer_id_free(&p2);
+	libp2p_rsrc_release_stream(host, p2, TEST_PROTO_ID, 0);
+	peer_id_free(p1);
+	peer_id_free(p2);
 	libp2p_host_free(host);
 	return 0;
 }
