@@ -1,6 +1,7 @@
 #include "gossipsub_proto.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -310,6 +311,22 @@ static libp2p_err_t convert_noise_err(int noise_err)
 	return LIBP2P_ERR_INTERNAL;
 }
 
+static void dbg_dump_rpc_frame(const char *stage, const uint8_t *frame, size_t frame_len, int noise_rc,
+			       libp2p_err_t mapped)
+{
+	char hex[3 * 32 + 1];
+	size_t off = 0;
+	const size_t n = frame_len < 32 ? frame_len : 32;
+	for (size_t i = 0; i < n && off + 3 < sizeof(hex); ++i)
+		off += (size_t)snprintf(&hex[off], sizeof(hex) - off, "%02x ", frame ? frame[i] : 0);
+	if (off > 0 && hex[off - 1] == ' ')
+		hex[off - 1] = '\0';
+	else
+		hex[off] = '\0';
+	fprintf(stderr, "[DBG rpc_decode] stage=%s frame_len=%zu noise_rc=%d mapped=%d first%zu=[%s]\n",
+		stage, frame_len, noise_rc, (int)mapped, n, hex);
+}
+
 libp2p_err_t libp2p_gossipsub_rpc_decode_frame(const uint8_t *frame, size_t frame_len, libp2p_gossipsub_RPC **out_rpc)
 {
 	if (!out_rpc)
@@ -322,21 +339,29 @@ libp2p_err_t libp2p_gossipsub_rpc_decode_frame(const uint8_t *frame, size_t fram
 	NoiseProtobuf in_pb;
 	int noise_rc = noise_protobuf_prepare_input(&in_pb, (uint8_t *)frame, frame_len);
 	if (noise_rc != NOISE_ERROR_NONE)
-		return convert_noise_err(noise_rc);
+	{
+		libp2p_err_t mapped = convert_noise_err(noise_rc);
+		dbg_dump_rpc_frame("prepare_input", frame, frame_len, noise_rc, mapped);
+		return mapped;
+	}
 
 	libp2p_gossipsub_RPC *rpc = NULL;
 	noise_rc = libp2p_gossipsub_RPC_read(&in_pb, 0, &rpc);
 	if (noise_rc != NOISE_ERROR_NONE || !rpc)
 	{
 		noise_protobuf_finish_input(&in_pb);
-		return convert_noise_err(noise_rc);
+		libp2p_err_t mapped = convert_noise_err(noise_rc);
+		dbg_dump_rpc_frame("RPC_read", frame, frame_len, noise_rc, mapped);
+		return mapped;
 	}
 
 	noise_rc = noise_protobuf_finish_input(&in_pb);
 	if (noise_rc != NOISE_ERROR_NONE)
 	{
 		libp2p_gossipsub_RPC_free(rpc);
-		return convert_noise_err(noise_rc);
+		libp2p_err_t mapped = convert_noise_err(noise_rc);
+		dbg_dump_rpc_frame("finish_input", frame, frame_len, noise_rc, mapped);
+		return mapped;
 	}
 
 	*out_rpc = rpc;

@@ -828,6 +828,8 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         LP_LOGT("MULTISELECT", "dial: received header=\"%s\"", msg ? msg : "(null)");
     if (strcmp(msg, LIBP2P_MULTISELECT_PROTO_ID) != 0)
     {
+        fprintf(stderr, "[DBG ms_dial] header mismatch io=%p got=\"%s\" expected=\"%s\" -> PROTO_MAL\n",
+                (void *)io, msg ? msg : "(null)", LIBP2P_MULTISELECT_PROTO_ID);
         free(msg);
         rc = LIBP2P_MULTISELECT_ERR_PROTO_MAL;
         goto done;
@@ -836,6 +838,7 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
     size_t idx = 0;
     if (!have_proto0)
     {
+        fprintf(stderr, "[DBG ms_dial] no proposals io=%p -> UNAVAIL\n", (void *)io);
         rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
         goto done;
     }
@@ -907,10 +910,14 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
         {
             if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
                 LP_LOGT("MULTISELECT", "dial: peer returned NA for proposal[%zu]=%s", idx, proposals[idx]);
+            fprintf(stderr, "[DBG ms_dial] peer returned na io=%p proposal[%zu]=%s\n",
+                    (void *)io, idx, proposals[idx] ? proposals[idx] : "(null)");
             free(msg);
             ++idx;
             if (!proposals[idx])
             {
+                fprintf(stderr, "[DBG ms_dial] all proposals exhausted io=%p last_idx=%zu -> UNAVAIL\n",
+                        (void *)io, idx - 1);
                 rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
                 goto done;
             }
@@ -942,12 +949,49 @@ libp2p_multiselect_err_t libp2p_multiselect_dial_io(libp2p_io_t *io, const char 
             rc = LIBP2P_MULTISELECT_OK;
             goto done;
         }
+        fprintf(stderr,
+                "[DBG ms_dial] unexpected response io=%p proposal[%zu]=%s got=\"%s\" -> PROTO_MAL\n",
+                (void *)io, idx, proposals[idx] ? proposals[idx] : "(null)", msg ? msg : "(null)");
         free(msg);
         rc = LIBP2P_MULTISELECT_ERR_PROTO_MAL;
         goto done;
     }
+    fprintf(stderr, "[DBG ms_dial] loop fell through io=%p -> UNAVAIL\n", (void *)io);
     rc = LIBP2P_MULTISELECT_ERR_UNAVAIL;
 done:
+    if (rc != LIBP2P_MULTISELECT_OK)
+    {
+        char dbg_props[512];
+        size_t dbg_off = 0;
+        dbg_props[0] = '\0';
+        for (size_t i = 0; proposals && proposals[i] && dbg_off + 4 < sizeof(dbg_props); ++i)
+        {
+            size_t len = strlen(proposals[i]);
+            if (dbg_off > 0)
+            {
+                if (dbg_off + 2 < sizeof(dbg_props))
+                {
+                    dbg_props[dbg_off++] = ',';
+                    dbg_props[dbg_off++] = ' ';
+                }
+            }
+            if (dbg_off + len >= sizeof(dbg_props))
+            {
+                size_t avail = sizeof(dbg_props) - dbg_off - 1;
+                memcpy(&dbg_props[dbg_off], proposals[i], avail);
+                dbg_off += avail;
+                if (dbg_off < sizeof(dbg_props))
+                    dbg_props[dbg_off++] = '+';
+                break;
+            }
+            memcpy(&dbg_props[dbg_off], proposals[i], len);
+            dbg_off += len;
+        }
+        dbg_props[dbg_off < sizeof(dbg_props) ? dbg_off : sizeof(dbg_props) - 1] = '\0';
+        fprintf(stderr,
+                "[DBG ms_dial] DONE FAIL io=%p rc=%d timeout_ms=%" PRIu64 " proposals=[%s]\n",
+                (void *)io, (int)rc, (unsigned long long)timeout_ms, dbg_props);
+    }
     if (timeout_ms)
         libp2p_io_set_deadline(io, 0);
     return rc;
