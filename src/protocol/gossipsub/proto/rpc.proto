@@ -10,7 +10,8 @@ message RPC {
   message SubOpts {
     optional bool subscribe = 1;
     string topic = 2;
-    string topic_id = 3;
+    optional bool requests_partial = 3;
+    optional bool supports_sending_partial = 4;
   }
 
   repeated SubOpts subscriptions = 1;

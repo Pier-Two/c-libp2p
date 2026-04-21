@@ -53,11 +53,14 @@ int libp2p_gossipsub_RPC_SubOpts_has_topic(const libp2p_gossipsub_RPC_SubOpts *o
 const char *libp2p_gossipsub_RPC_SubOpts_get_topic(const libp2p_gossipsub_RPC_SubOpts *obj);
 size_t libp2p_gossipsub_RPC_SubOpts_get_size_topic(const libp2p_gossipsub_RPC_SubOpts *obj);
 int libp2p_gossipsub_RPC_SubOpts_set_topic(libp2p_gossipsub_RPC_SubOpts *obj, const char *value, size_t size);
-int libp2p_gossipsub_RPC_SubOpts_clear_topic_id(libp2p_gossipsub_RPC_SubOpts *obj);
-int libp2p_gossipsub_RPC_SubOpts_has_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
-const char *libp2p_gossipsub_RPC_SubOpts_get_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
-size_t libp2p_gossipsub_RPC_SubOpts_get_size_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj);
-int libp2p_gossipsub_RPC_SubOpts_set_topic_id(libp2p_gossipsub_RPC_SubOpts *obj, const char *value, size_t size);
+int libp2p_gossipsub_RPC_SubOpts_clear_requests_partial(libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_has_requests_partial(const libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_get_requests_partial(const libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_set_requests_partial(libp2p_gossipsub_RPC_SubOpts *obj, int value);
+int libp2p_gossipsub_RPC_SubOpts_clear_supports_sending_partial(libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_has_supports_sending_partial(const libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_get_supports_sending_partial(const libp2p_gossipsub_RPC_SubOpts *obj);
+int libp2p_gossipsub_RPC_SubOpts_set_supports_sending_partial(libp2p_gossipsub_RPC_SubOpts *obj, int value);
 
 int libp2p_gossipsub_Message_new(libp2p_gossipsub_Message **obj);
 int libp2p_gossipsub_Message_free(libp2p_gossipsub_Message *obj);
