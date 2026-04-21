@@ -314,16 +314,16 @@ static libp2p_err_t convert_noise_err(int noise_err)
 static void dbg_dump_rpc_frame(const char *stage, const uint8_t *frame, size_t frame_len, int noise_rc,
 			       libp2p_err_t mapped)
 {
-	char hex[3 * 32 + 1];
+	char hex[3 * 1024 + 1];
 	size_t off = 0;
-	const size_t n = frame_len < 32 ? frame_len : 32;
+	const size_t n = frame_len < 1024 ? frame_len : 1024;
 	for (size_t i = 0; i < n && off + 3 < sizeof(hex); ++i)
 		off += (size_t)snprintf(&hex[off], sizeof(hex) - off, "%02x ", frame ? frame[i] : 0);
 	if (off > 0 && hex[off - 1] == ' ')
 		hex[off - 1] = '\0';
 	else
 		hex[off] = '\0';
-	fprintf(stderr, "[DBG rpc_decode] stage=%s frame_len=%zu noise_rc=%d mapped=%d first%zu=[%s]\n",
+	fprintf(stderr, "[DBG rpc_decode] stage=%s frame_len=%zu noise_rc=%d mapped=%d bytes(%zu)=[%s]\n",
 		stage, frame_len, noise_rc, (int)mapped, n, hex);
 }
 
