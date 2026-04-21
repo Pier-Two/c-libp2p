@@ -74,3 +74,4 @@ internal-docs*
 
 # Ignore interop cache
 interop-cache*
+default.profraw

@@ -379,12 +379,9 @@ libp2p_err_t gossipsub_rpc_encode_subscription(const char *topic, int subscribe,
 	if (noise_rc != NOISE_ERROR_NONE || !sub)
 		goto cleanup;
 
-	/* rust-libp2p gossipsub uses 'topicid' at proto tag 2, which maps to our 'topic' field.
-	 * Setting both topic (tag 2) and topic_id (tag 3) for maximum compatibility. */
+	/* Spec-compliant gossipsub subscriptions use tag 2 for the topic string.
+	 * Tags 3 and 4 are reserved for partial-message capability booleans. */
 	noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic(sub, topic, topic_len);
-	if (noise_rc != NOISE_ERROR_NONE)
-		goto cleanup;
-	noise_rc = libp2p_gossipsub_RPC_SubOpts_set_topic_id(sub, topic, topic_len);
 	if (noise_rc != NOISE_ERROR_NONE)
 		goto cleanup;
 
@@ -553,26 +550,16 @@ static libp2p_err_t gossipsub_rpc_parse_subscriptions(const libp2p_gossipsub_RPC
 		int has_topic = sub ? libp2p_gossipsub_RPC_SubOpts_has_topic(sub) : 0;
 		size_t topic_len = has_topic ? libp2p_gossipsub_RPC_SubOpts_get_size_topic(sub) : 0;
 		const char *topic_raw = has_topic ? libp2p_gossipsub_RPC_SubOpts_get_topic(sub) : NULL;
-		int has_topic_id = sub ? libp2p_gossipsub_RPC_SubOpts_has_topic_id(sub) : 0;
-		size_t topic_id_len = has_topic_id ? libp2p_gossipsub_RPC_SubOpts_get_size_topic_id(sub) : 0;
-		const char *topic_id_raw = has_topic_id ? libp2p_gossipsub_RPC_SubOpts_get_topic_id(sub) : NULL;
 		int has_subscribe = sub ? libp2p_gossipsub_RPC_SubOpts_has_subscribe(sub) : 0;
 		int subscribe_value = has_subscribe ? (libp2p_gossipsub_RPC_SubOpts_get_subscribe(sub) ? 1 : 0) : -1;
 		LP_LOGT(GOSSIPSUB_MODULE,
-			"parse_sub raw index=%zu has_topic=%d topic_len=%zu has_topic_id=%d topic_id_len=%zu "
-			"subscribe_present=%d subscribe_value=%d",
-			i, has_topic ? 1 : 0, topic_len, has_topic_id ? 1 : 0, topic_id_len, has_subscribe ? 1 : 0,
-			subscribe_value);
+			"parse_sub raw index=%zu has_topic=%d topic_len=%zu subscribe_present=%d subscribe_value=%d", i,
+			has_topic ? 1 : 0, topic_len, has_subscribe ? 1 : 0, subscribe_value);
 		if (!sub)
 			continue;
 
 		const char *selected_topic = topic_raw;
 		size_t selected_len = topic_len;
-		if ((!selected_topic || selected_len == 0) && topic_id_raw && topic_id_len > 0)
-		{
-			selected_topic = topic_id_raw;
-			selected_len = topic_id_len;
-		}
 		if (!selected_topic || selected_len == 0)
 			continue;
 
@@ -585,31 +572,15 @@ static libp2p_err_t gossipsub_rpc_parse_subscriptions(const libp2p_gossipsub_RPC
 		memcpy(topic, selected_topic, selected_len);
 		topic[selected_len] = '\0';
 
-		char *topic_id = NULL;
-		if (topic_id_raw && topic_id_len > 0)
+		size_t fallback_len = strlen(topic);
+		char *topic_id = (char *)malloc(fallback_len + 1);
+		if (!topic_id)
 		{
-			topic_id = (char *)malloc(topic_id_len + 1);
-			if (!topic_id)
-			{
-				free(topic);
-				gossipsub_rpc_free_subscription_array(subs, used);
-				return LIBP2P_ERR_INTERNAL;
-			}
-			memcpy(topic_id, topic_id_raw, topic_id_len);
-			topic_id[topic_id_len] = '\0';
+			free(topic);
+			gossipsub_rpc_free_subscription_array(subs, used);
+			return LIBP2P_ERR_INTERNAL;
 		}
-		else
-		{
-			size_t fallback_len = strlen(topic);
-			topic_id = (char *)malloc(fallback_len + 1);
-			if (!topic_id)
-			{
-				free(topic);
-				gossipsub_rpc_free_subscription_array(subs, used);
-				return LIBP2P_ERR_INTERNAL;
-			}
-			memcpy(topic_id, topic, fallback_len + 1);
-		}
+		memcpy(topic_id, topic, fallback_len + 1);
 
 		subs[used].topic = topic;
 		subs[used].topic_id = topic_id;

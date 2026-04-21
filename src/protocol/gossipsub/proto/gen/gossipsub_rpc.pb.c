@@ -19,8 +19,10 @@ struct _libp2p_gossipsub_RPC_SubOpts
 	int subscribe_is_set;
 	char *topic;
 	size_t topic_size_;
-	char *topic_id;
-	size_t topic_id_size_;
+	int requests_partial;
+	int requests_partial_is_set;
+	int supports_sending_partial;
+	int supports_sending_partial_is_set;
 };
 
 struct _libp2p_gossipsub_Message
@@ -99,6 +101,7 @@ struct _libp2p_gossipsub_ControlPrune
 	size_t peers_count_;
 	size_t peers_max_;
 	uint64_t backoff;
+	int backoff_is_set;
 	char *topic_id;
 	size_t topic_id_size_;
 };
@@ -114,6 +117,7 @@ struct _libp2p_gossipsub_ControlIDontWant
 struct _libp2p_gossipsub_ControlExtensions
 {
 	int placeholder;
+	int placeholder_is_set;
 };
 
 struct _libp2p_gossipsub_PeerInfo
@@ -408,7 +412,6 @@ int libp2p_gossipsub_RPC_SubOpts_free(libp2p_gossipsub_RPC_SubOpts *obj)
 	if (!obj)
 		return NOISE_ERROR_INVALID_PARAM;
 	noise_protobuf_free_memory(obj->topic, obj->topic_size_);
-	noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
 	noise_protobuf_free_memory(obj, sizeof(libp2p_gossipsub_RPC_SubOpts));
 	return NOISE_ERROR_NONE;
 }
@@ -419,8 +422,10 @@ int libp2p_gossipsub_RPC_SubOpts_write(NoiseProtobuf *pbuf, int tag, const libp2
 	if (!pbuf || !obj)
 		return NOISE_ERROR_INVALID_PARAM;
 	noise_protobuf_write_end_element(pbuf, &end_posn);
-	if (obj->topic_id)
-		noise_protobuf_write_string(pbuf, 3, obj->topic_id, obj->topic_id_size_);
+	if (obj->supports_sending_partial_is_set)
+		noise_protobuf_write_bool(pbuf, 4, obj->supports_sending_partial);
+	if (obj->requests_partial_is_set)
+		noise_protobuf_write_bool(pbuf, 3, obj->requests_partial);
 	if (obj->topic)
 		noise_protobuf_write_string(pbuf, 2, obj->topic, obj->topic_size_);
 	if (obj->subscribe_is_set)
@@ -458,10 +463,13 @@ int libp2p_gossipsub_RPC_SubOpts_read(NoiseProtobuf *pbuf, int tag, libp2p_gossi
 		}
 		break;
 		case 3: {
-			noise_protobuf_free_memory((*obj)->topic_id, (*obj)->topic_id_size_);
-			(*obj)->topic_id = 0;
-			(*obj)->topic_id_size_ = 0;
-			noise_protobuf_read_alloc_string(pbuf, 3, &((*obj)->topic_id), 0, &((*obj)->topic_id_size_));
+			noise_protobuf_read_bool(pbuf, 3, &((*obj)->requests_partial));
+			(*obj)->requests_partial_is_set = 1;
+		}
+		break;
+		case 4: {
+			noise_protobuf_read_bool(pbuf, 4, &((*obj)->supports_sending_partial));
+			(*obj)->supports_sending_partial_is_set = 1;
 		}
 		break;
 		default: {
@@ -504,7 +512,7 @@ int libp2p_gossipsub_RPC_SubOpts_set_subscribe(libp2p_gossipsub_RPC_SubOpts *obj
 {
 	if (obj)
 	{
-		obj->subscribe = value ? 1 : 0;
+		obj->subscribe = value;
 		obj->subscribe_is_set = 1;
 		return NOISE_ERROR_NONE;
 	}
@@ -560,51 +568,66 @@ int libp2p_gossipsub_RPC_SubOpts_set_topic(libp2p_gossipsub_RPC_SubOpts *obj, co
 	return NOISE_ERROR_INVALID_PARAM;
 }
 
-int libp2p_gossipsub_RPC_SubOpts_clear_topic_id(libp2p_gossipsub_RPC_SubOpts *obj)
+int libp2p_gossipsub_RPC_SubOpts_clear_requests_partial(libp2p_gossipsub_RPC_SubOpts *obj)
 {
 	if (obj)
 	{
-		noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-		obj->topic_id = 0;
-		obj->topic_id_size_ = 0;
+		obj->requests_partial = 0;
+		obj->requests_partial_is_set = 0;
 		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;
 }
 
-int libp2p_gossipsub_RPC_SubOpts_has_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj)
+int libp2p_gossipsub_RPC_SubOpts_has_requests_partial(const libp2p_gossipsub_RPC_SubOpts *obj)
 {
-	return obj ? (obj->topic_id != 0) : 0;
+	return obj ? obj->requests_partial_is_set : 0;
 }
 
-const char *libp2p_gossipsub_RPC_SubOpts_get_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj)
+int libp2p_gossipsub_RPC_SubOpts_get_requests_partial(const libp2p_gossipsub_RPC_SubOpts *obj)
 {
-	return obj ? obj->topic_id : 0;
+	return obj ? obj->requests_partial : 0;
 }
 
-size_t libp2p_gossipsub_RPC_SubOpts_get_size_topic_id(const libp2p_gossipsub_RPC_SubOpts *obj)
-{
-	return obj ? obj->topic_id_size_ : 0;
-}
-
-int libp2p_gossipsub_RPC_SubOpts_set_topic_id(libp2p_gossipsub_RPC_SubOpts *obj, const char *value, size_t size)
+int libp2p_gossipsub_RPC_SubOpts_set_requests_partial(libp2p_gossipsub_RPC_SubOpts *obj, int value)
 {
 	if (obj)
 	{
-		noise_protobuf_free_memory(obj->topic_id, obj->topic_id_size_);
-		obj->topic_id = (char *)malloc(size + 1);
-		if (obj->topic_id)
-		{
-			memcpy(obj->topic_id, value, size);
-			obj->topic_id[size] = 0;
-			obj->topic_id_size_ = size;
-			return NOISE_ERROR_NONE;
-		}
-		else
-		{
-			obj->topic_id_size_ = 0;
-			return NOISE_ERROR_NO_MEMORY;
-		}
+		obj->requests_partial = value;
+		obj->requests_partial_is_set = 1;
+		return NOISE_ERROR_NONE;
+	}
+	return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_RPC_SubOpts_clear_supports_sending_partial(libp2p_gossipsub_RPC_SubOpts *obj)
+{
+	if (obj)
+	{
+		obj->supports_sending_partial = 0;
+		obj->supports_sending_partial_is_set = 0;
+		return NOISE_ERROR_NONE;
+	}
+	return NOISE_ERROR_INVALID_PARAM;
+}
+
+int libp2p_gossipsub_RPC_SubOpts_has_supports_sending_partial(const libp2p_gossipsub_RPC_SubOpts *obj)
+{
+	return obj ? obj->supports_sending_partial_is_set : 0;
+}
+
+int libp2p_gossipsub_RPC_SubOpts_get_supports_sending_partial(const libp2p_gossipsub_RPC_SubOpts *obj)
+{
+	return obj ? obj->supports_sending_partial : 0;
+}
+
+int libp2p_gossipsub_RPC_SubOpts_set_supports_sending_partial(libp2p_gossipsub_RPC_SubOpts *obj, int value)
+{
+	if (obj)
+	{
+		obj->supports_sending_partial = value;
+		obj->supports_sending_partial_is_set = 1;
+		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;
 }
@@ -2181,7 +2204,7 @@ int libp2p_gossipsub_ControlPrune_write(NoiseProtobuf *pbuf, int tag, const libp
 	noise_protobuf_write_end_element(pbuf, &end_posn);
 	if (obj->topic_id)
 		noise_protobuf_write_string(pbuf, 4, obj->topic_id, obj->topic_id_size_);
-	if (obj->backoff)
+	if (obj->backoff_is_set)
 		noise_protobuf_write_uint64(pbuf, 3, obj->backoff);
 	for (index = obj->peers_count_; index > 0; --index)
 		libp2p_gossipsub_PeerInfo_write(pbuf, 2, obj->peers[index - 1]);
@@ -2226,6 +2249,7 @@ int libp2p_gossipsub_ControlPrune_read(NoiseProtobuf *pbuf, int tag, libp2p_goss
 		break;
 		case 3: {
 			noise_protobuf_read_uint64(pbuf, 3, &((*obj)->backoff));
+			(*obj)->backoff_is_set = 1;
 		}
 		break;
 		case 4: {
@@ -2370,6 +2394,7 @@ int libp2p_gossipsub_ControlPrune_clear_backoff(libp2p_gossipsub_ControlPrune *o
 	if (obj)
 	{
 		obj->backoff = 0;
+		obj->backoff_is_set = 0;
 		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;
@@ -2377,7 +2402,7 @@ int libp2p_gossipsub_ControlPrune_clear_backoff(libp2p_gossipsub_ControlPrune *o
 
 int libp2p_gossipsub_ControlPrune_has_backoff(const libp2p_gossipsub_ControlPrune *obj)
 {
-	return obj ? (obj->backoff != 0) : 0;
+	return obj ? obj->backoff_is_set : 0;
 }
 
 uint64_t libp2p_gossipsub_ControlPrune_get_backoff(const libp2p_gossipsub_ControlPrune *obj)
@@ -2390,6 +2415,7 @@ int libp2p_gossipsub_ControlPrune_set_backoff(libp2p_gossipsub_ControlPrune *obj
 	if (obj)
 	{
 		obj->backoff = value;
+		obj->backoff_is_set = 1;
 		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;
@@ -2597,7 +2623,7 @@ int libp2p_gossipsub_ControlExtensions_write(NoiseProtobuf *pbuf, int tag,
 	if (!pbuf || !obj)
 		return NOISE_ERROR_INVALID_PARAM;
 	noise_protobuf_write_end_element(pbuf, &end_posn);
-	if (obj->placeholder)
+	if (obj->placeholder_is_set)
 		noise_protobuf_write_bool(pbuf, 1, obj->placeholder);
 	return noise_protobuf_write_start_element(pbuf, tag, end_posn);
 }
@@ -2621,6 +2647,7 @@ int libp2p_gossipsub_ControlExtensions_read(NoiseProtobuf *pbuf, int tag, libp2p
 		{
 		case 1: {
 			noise_protobuf_read_bool(pbuf, 1, &((*obj)->placeholder));
+			(*obj)->placeholder_is_set = 1;
 		}
 		break;
 		default: {
@@ -2643,6 +2670,7 @@ int libp2p_gossipsub_ControlExtensions_clear_placeholder(libp2p_gossipsub_Contro
 	if (obj)
 	{
 		obj->placeholder = 0;
+		obj->placeholder_is_set = 0;
 		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;
@@ -2650,7 +2678,7 @@ int libp2p_gossipsub_ControlExtensions_clear_placeholder(libp2p_gossipsub_Contro
 
 int libp2p_gossipsub_ControlExtensions_has_placeholder(const libp2p_gossipsub_ControlExtensions *obj)
 {
-	return obj ? (obj->placeholder != 0) : 0;
+	return obj ? obj->placeholder_is_set : 0;
 }
 
 int libp2p_gossipsub_ControlExtensions_get_placeholder(const libp2p_gossipsub_ControlExtensions *obj)
@@ -2663,6 +2691,7 @@ int libp2p_gossipsub_ControlExtensions_set_placeholder(libp2p_gossipsub_ControlE
 	if (obj)
 	{
 		obj->placeholder = value;
+		obj->placeholder_is_set = 1;
 		return NOISE_ERROR_NONE;
 	}
 	return NOISE_ERROR_INVALID_PARAM;

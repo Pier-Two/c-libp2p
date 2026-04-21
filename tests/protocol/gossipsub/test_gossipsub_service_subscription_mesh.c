@@ -10,6 +10,36 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
 	int failures = 0;
 
 	{
+		static const uint8_t spec_subscription_frame[] = {
+			0x0a, 0x36, 0x08, 0x01, 0x12, 0x2e, 0x2f, 0x6c, 0x65, 0x61, 0x6e, 0x63, 0x6f, 0x6e,
+			0x73, 0x65, 0x6e, 0x73, 0x75, 0x73, 0x2f, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+			0x38, 0x2f, 0x61, 0x67, 0x67, 0x72, 0x65, 0x67, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x2f,
+			0x73, 0x73, 0x7a, 0x5f, 0x73, 0x6e, 0x61, 0x70, 0x70, 0x79, 0x18, 0x00, 0x20, 0x00,
+		};
+		static const char *spec_topic = "/leanconsensus/12345678/aggregation/ssz_snappy";
+		libp2p_gossipsub_RPC *rpc = NULL;
+		libp2p_err_t dec_err = libp2p_gossipsub_rpc_decode_frame(spec_subscription_frame,
+									 sizeof(spec_subscription_frame), &rpc);
+		libp2p_gossipsub_RPC_SubOpts *sub =
+			(dec_err == LIBP2P_ERR_OK && rpc && libp2p_gossipsub_RPC_count_subscriptions(rpc) == 1)
+				? libp2p_gossipsub_RPC_get_at_subscriptions(rpc, 0)
+				: NULL;
+		int frame_ok = (dec_err == LIBP2P_ERR_OK && sub && libp2p_gossipsub_RPC_SubOpts_has_subscribe(sub) &&
+				libp2p_gossipsub_RPC_SubOpts_get_subscribe(sub) == 1 &&
+				libp2p_gossipsub_RPC_SubOpts_has_topic(sub) &&
+				strcmp(libp2p_gossipsub_RPC_SubOpts_get_topic(sub), spec_topic) == 0 &&
+				libp2p_gossipsub_RPC_SubOpts_has_requests_partial(sub) &&
+				libp2p_gossipsub_RPC_SubOpts_get_requests_partial(sub) == 0 &&
+				libp2p_gossipsub_RPC_SubOpts_has_supports_sending_partial(sub) &&
+				libp2p_gossipsub_RPC_SubOpts_get_supports_sending_partial(sub) == 0);
+		print_result("gossipsub_spec_subopts_partial_flags_decode", frame_ok);
+		if (!frame_ok)
+			failures++;
+		if (rpc)
+			libp2p_gossipsub_RPC_free(rpc);
+	}
+
+	{
 		const char *subscription_peer_str = "12D3KooWFnNMhkbi8d4Ryh5UCnmAeUXUQCA2PMAMFLyLLKkR6aom";
 		const char *subscription_topic = "test/topic";
 		peer_id_t *subscription_peer = NULL;
