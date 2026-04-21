@@ -18,14 +18,13 @@ int gossipsub_service_run_subscription_mesh_tests(gossipsub_service_test_env_t *
 		};
 		static const char *spec_topic = "/leanconsensus/12345678/aggregation/ssz_snappy";
 		libp2p_gossipsub_RPC *rpc = NULL;
-		libp2p_err_t dec_err =
-			libp2p_gossipsub_rpc_decode_frame(spec_subscription_frame, sizeof(spec_subscription_frame), &rpc);
+		libp2p_err_t dec_err = libp2p_gossipsub_rpc_decode_frame(spec_subscription_frame,
+									 sizeof(spec_subscription_frame), &rpc);
 		libp2p_gossipsub_RPC_SubOpts *sub =
 			(dec_err == LIBP2P_ERR_OK && rpc && libp2p_gossipsub_RPC_count_subscriptions(rpc) == 1)
 				? libp2p_gossipsub_RPC_get_at_subscriptions(rpc, 0)
 				: NULL;
-		int frame_ok = (dec_err == LIBP2P_ERR_OK && sub &&
-				libp2p_gossipsub_RPC_SubOpts_has_subscribe(sub) &&
+		int frame_ok = (dec_err == LIBP2P_ERR_OK && sub && libp2p_gossipsub_RPC_SubOpts_has_subscribe(sub) &&
 				libp2p_gossipsub_RPC_SubOpts_get_subscribe(sub) == 1 &&
 				libp2p_gossipsub_RPC_SubOpts_has_topic(sub) &&
 				strcmp(libp2p_gossipsub_RPC_SubOpts_get_topic(sub), spec_topic) == 0 &&

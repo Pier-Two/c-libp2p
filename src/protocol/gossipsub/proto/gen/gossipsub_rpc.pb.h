@@ -28,7 +28,8 @@ int libp2p_gossipsub_RPC_has_subscriptions(const libp2p_gossipsub_RPC *obj);
 size_t libp2p_gossipsub_RPC_count_subscriptions(const libp2p_gossipsub_RPC *obj);
 libp2p_gossipsub_RPC_SubOpts *libp2p_gossipsub_RPC_get_at_subscriptions(const libp2p_gossipsub_RPC *obj, size_t index);
 int libp2p_gossipsub_RPC_add_subscriptions(libp2p_gossipsub_RPC *obj, libp2p_gossipsub_RPC_SubOpts **value);
-int libp2p_gossipsub_RPC_insert_subscriptions(libp2p_gossipsub_RPC *obj, size_t index, libp2p_gossipsub_RPC_SubOpts *value);
+int libp2p_gossipsub_RPC_insert_subscriptions(libp2p_gossipsub_RPC *obj, size_t index,
+					      libp2p_gossipsub_RPC_SubOpts *value);
 int libp2p_gossipsub_RPC_clear_publish(libp2p_gossipsub_RPC *obj);
 int libp2p_gossipsub_RPC_has_publish(const libp2p_gossipsub_RPC *obj);
 size_t libp2p_gossipsub_RPC_count_publish(const libp2p_gossipsub_RPC *obj);
@@ -110,37 +111,54 @@ int libp2p_gossipsub_ControlMessage_read(NoiseProtobuf *pbuf, int tag, libp2p_go
 int libp2p_gossipsub_ControlMessage_clear_ihave(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_ihave(const libp2p_gossipsub_ControlMessage *obj);
 size_t libp2p_gossipsub_ControlMessage_count_ihave(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlIHave *libp2p_gossipsub_ControlMessage_get_at_ihave(const libp2p_gossipsub_ControlMessage *obj, size_t index);
-int libp2p_gossipsub_ControlMessage_add_ihave(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlIHave **value);
-int libp2p_gossipsub_ControlMessage_insert_ihave(libp2p_gossipsub_ControlMessage *obj, size_t index, libp2p_gossipsub_ControlIHave *value);
+libp2p_gossipsub_ControlIHave *libp2p_gossipsub_ControlMessage_get_at_ihave(const libp2p_gossipsub_ControlMessage *obj,
+									    size_t index);
+int libp2p_gossipsub_ControlMessage_add_ihave(libp2p_gossipsub_ControlMessage *obj,
+					      libp2p_gossipsub_ControlIHave **value);
+int libp2p_gossipsub_ControlMessage_insert_ihave(libp2p_gossipsub_ControlMessage *obj, size_t index,
+						 libp2p_gossipsub_ControlIHave *value);
 int libp2p_gossipsub_ControlMessage_clear_iwant(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_iwant(const libp2p_gossipsub_ControlMessage *obj);
 size_t libp2p_gossipsub_ControlMessage_count_iwant(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlIWant *libp2p_gossipsub_ControlMessage_get_at_iwant(const libp2p_gossipsub_ControlMessage *obj, size_t index);
-int libp2p_gossipsub_ControlMessage_add_iwant(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlIWant **value);
-int libp2p_gossipsub_ControlMessage_insert_iwant(libp2p_gossipsub_ControlMessage *obj, size_t index, libp2p_gossipsub_ControlIWant *value);
+libp2p_gossipsub_ControlIWant *libp2p_gossipsub_ControlMessage_get_at_iwant(const libp2p_gossipsub_ControlMessage *obj,
+									    size_t index);
+int libp2p_gossipsub_ControlMessage_add_iwant(libp2p_gossipsub_ControlMessage *obj,
+					      libp2p_gossipsub_ControlIWant **value);
+int libp2p_gossipsub_ControlMessage_insert_iwant(libp2p_gossipsub_ControlMessage *obj, size_t index,
+						 libp2p_gossipsub_ControlIWant *value);
 int libp2p_gossipsub_ControlMessage_clear_graft(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_graft(const libp2p_gossipsub_ControlMessage *obj);
 size_t libp2p_gossipsub_ControlMessage_count_graft(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlGraft *libp2p_gossipsub_ControlMessage_get_at_graft(const libp2p_gossipsub_ControlMessage *obj, size_t index);
-int libp2p_gossipsub_ControlMessage_add_graft(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlGraft **value);
-int libp2p_gossipsub_ControlMessage_insert_graft(libp2p_gossipsub_ControlMessage *obj, size_t index, libp2p_gossipsub_ControlGraft *value);
+libp2p_gossipsub_ControlGraft *libp2p_gossipsub_ControlMessage_get_at_graft(const libp2p_gossipsub_ControlMessage *obj,
+									    size_t index);
+int libp2p_gossipsub_ControlMessage_add_graft(libp2p_gossipsub_ControlMessage *obj,
+					      libp2p_gossipsub_ControlGraft **value);
+int libp2p_gossipsub_ControlMessage_insert_graft(libp2p_gossipsub_ControlMessage *obj, size_t index,
+						 libp2p_gossipsub_ControlGraft *value);
 int libp2p_gossipsub_ControlMessage_clear_prune(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_prune(const libp2p_gossipsub_ControlMessage *obj);
 size_t libp2p_gossipsub_ControlMessage_count_prune(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlPrune *libp2p_gossipsub_ControlMessage_get_at_prune(const libp2p_gossipsub_ControlMessage *obj, size_t index);
-int libp2p_gossipsub_ControlMessage_add_prune(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlPrune **value);
-int libp2p_gossipsub_ControlMessage_insert_prune(libp2p_gossipsub_ControlMessage *obj, size_t index, libp2p_gossipsub_ControlPrune *value);
+libp2p_gossipsub_ControlPrune *libp2p_gossipsub_ControlMessage_get_at_prune(const libp2p_gossipsub_ControlMessage *obj,
+									    size_t index);
+int libp2p_gossipsub_ControlMessage_add_prune(libp2p_gossipsub_ControlMessage *obj,
+					      libp2p_gossipsub_ControlPrune **value);
+int libp2p_gossipsub_ControlMessage_insert_prune(libp2p_gossipsub_ControlMessage *obj, size_t index,
+						 libp2p_gossipsub_ControlPrune *value);
 int libp2p_gossipsub_ControlMessage_clear_idontwant(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_idontwant(const libp2p_gossipsub_ControlMessage *obj);
 size_t libp2p_gossipsub_ControlMessage_count_idontwant(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlIDontWant *libp2p_gossipsub_ControlMessage_get_at_idontwant(const libp2p_gossipsub_ControlMessage *obj, size_t index);
-int libp2p_gossipsub_ControlMessage_add_idontwant(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlIDontWant **value);
-int libp2p_gossipsub_ControlMessage_insert_idontwant(libp2p_gossipsub_ControlMessage *obj, size_t index, libp2p_gossipsub_ControlIDontWant *value);
+libp2p_gossipsub_ControlIDontWant *
+libp2p_gossipsub_ControlMessage_get_at_idontwant(const libp2p_gossipsub_ControlMessage *obj, size_t index);
+int libp2p_gossipsub_ControlMessage_add_idontwant(libp2p_gossipsub_ControlMessage *obj,
+						  libp2p_gossipsub_ControlIDontWant **value);
+int libp2p_gossipsub_ControlMessage_insert_idontwant(libp2p_gossipsub_ControlMessage *obj, size_t index,
+						     libp2p_gossipsub_ControlIDontWant *value);
 int libp2p_gossipsub_ControlMessage_clear_extensions(libp2p_gossipsub_ControlMessage *obj);
 int libp2p_gossipsub_ControlMessage_has_extensions(const libp2p_gossipsub_ControlMessage *obj);
-libp2p_gossipsub_ControlExtensions *libp2p_gossipsub_ControlMessage_get_extensions(const libp2p_gossipsub_ControlMessage *obj);
-int libp2p_gossipsub_ControlMessage_get_new_extensions(libp2p_gossipsub_ControlMessage *obj, libp2p_gossipsub_ControlExtensions **value);
+libp2p_gossipsub_ControlExtensions *
+libp2p_gossipsub_ControlMessage_get_extensions(const libp2p_gossipsub_ControlMessage *obj);
+int libp2p_gossipsub_ControlMessage_get_new_extensions(libp2p_gossipsub_ControlMessage *obj,
+						       libp2p_gossipsub_ControlExtensions **value);
 
 int libp2p_gossipsub_ControlIHave_new(libp2p_gossipsub_ControlIHave **obj);
 int libp2p_gossipsub_ControlIHave_free(libp2p_gossipsub_ControlIHave *obj);
@@ -201,9 +219,11 @@ int libp2p_gossipsub_ControlPrune_set_topic(libp2p_gossipsub_ControlPrune *obj, 
 int libp2p_gossipsub_ControlPrune_clear_peers(libp2p_gossipsub_ControlPrune *obj);
 int libp2p_gossipsub_ControlPrune_has_peers(const libp2p_gossipsub_ControlPrune *obj);
 size_t libp2p_gossipsub_ControlPrune_count_peers(const libp2p_gossipsub_ControlPrune *obj);
-libp2p_gossipsub_PeerInfo *libp2p_gossipsub_ControlPrune_get_at_peers(const libp2p_gossipsub_ControlPrune *obj, size_t index);
+libp2p_gossipsub_PeerInfo *libp2p_gossipsub_ControlPrune_get_at_peers(const libp2p_gossipsub_ControlPrune *obj,
+								      size_t index);
 int libp2p_gossipsub_ControlPrune_add_peers(libp2p_gossipsub_ControlPrune *obj, libp2p_gossipsub_PeerInfo **value);
-int libp2p_gossipsub_ControlPrune_insert_peers(libp2p_gossipsub_ControlPrune *obj, size_t index, libp2p_gossipsub_PeerInfo *value);
+int libp2p_gossipsub_ControlPrune_insert_peers(libp2p_gossipsub_ControlPrune *obj, size_t index,
+					       libp2p_gossipsub_PeerInfo *value);
 int libp2p_gossipsub_ControlPrune_clear_backoff(libp2p_gossipsub_ControlPrune *obj);
 int libp2p_gossipsub_ControlPrune_has_backoff(const libp2p_gossipsub_ControlPrune *obj);
 uint64_t libp2p_gossipsub_ControlPrune_get_backoff(const libp2p_gossipsub_ControlPrune *obj);
@@ -221,13 +241,17 @@ int libp2p_gossipsub_ControlIDontWant_read(NoiseProtobuf *pbuf, int tag, libp2p_
 int libp2p_gossipsub_ControlIDontWant_clear_message_ids(libp2p_gossipsub_ControlIDontWant *obj);
 int libp2p_gossipsub_ControlIDontWant_has_message_ids(const libp2p_gossipsub_ControlIDontWant *obj);
 size_t libp2p_gossipsub_ControlIDontWant_count_message_ids(const libp2p_gossipsub_ControlIDontWant *obj);
-const void *libp2p_gossipsub_ControlIDontWant_get_at_message_ids(const libp2p_gossipsub_ControlIDontWant *obj, size_t index);
-size_t libp2p_gossipsub_ControlIDontWant_get_size_at_message_ids(const libp2p_gossipsub_ControlIDontWant *obj, size_t index);
-int libp2p_gossipsub_ControlIDontWant_add_message_ids(libp2p_gossipsub_ControlIDontWant *obj, const void *value, size_t size);
+const void *libp2p_gossipsub_ControlIDontWant_get_at_message_ids(const libp2p_gossipsub_ControlIDontWant *obj,
+								 size_t index);
+size_t libp2p_gossipsub_ControlIDontWant_get_size_at_message_ids(const libp2p_gossipsub_ControlIDontWant *obj,
+								 size_t index);
+int libp2p_gossipsub_ControlIDontWant_add_message_ids(libp2p_gossipsub_ControlIDontWant *obj, const void *value,
+						      size_t size);
 
 int libp2p_gossipsub_ControlExtensions_new(libp2p_gossipsub_ControlExtensions **obj);
 int libp2p_gossipsub_ControlExtensions_free(libp2p_gossipsub_ControlExtensions *obj);
-int libp2p_gossipsub_ControlExtensions_write(NoiseProtobuf *pbuf, int tag, const libp2p_gossipsub_ControlExtensions *obj);
+int libp2p_gossipsub_ControlExtensions_write(NoiseProtobuf *pbuf, int tag,
+					     const libp2p_gossipsub_ControlExtensions *obj);
 int libp2p_gossipsub_ControlExtensions_read(NoiseProtobuf *pbuf, int tag, libp2p_gossipsub_ControlExtensions **obj);
 int libp2p_gossipsub_ControlExtensions_clear_placeholder(libp2p_gossipsub_ControlExtensions *obj);
 int libp2p_gossipsub_ControlExtensions_has_placeholder(const libp2p_gossipsub_ControlExtensions *obj);
