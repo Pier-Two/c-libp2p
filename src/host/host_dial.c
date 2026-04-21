@@ -827,36 +827,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
 				LP_LOGD("HOST_DIAL", "multistream failed remote=%s ms=%d rc=%d timeout_ms=%d",
 					remote_multiaddr ? remote_multiaddr : "(unknown)", (int)ms, rc,
 					host->opts.multiselect_handshake_timeout_ms);
-				{
-					char dbg_props[512];
-					size_t dbg_off = 0;
-					dbg_props[0] = '\0';
-					for (size_t i = 0; proposals && proposals[i] && dbg_off + 4 < sizeof(dbg_props); ++i)
-					{
-						size_t len = strlen(proposals[i]);
-						if (dbg_off > 0 && dbg_off + 2 < sizeof(dbg_props))
-						{
-							dbg_props[dbg_off++] = ',';
-							dbg_props[dbg_off++] = ' ';
-						}
-						if (dbg_off + len >= sizeof(dbg_props))
-						{
-							size_t avail = sizeof(dbg_props) - dbg_off - 1;
-							memcpy(&dbg_props[dbg_off], proposals[i], avail);
-							dbg_off += avail;
-							if (dbg_off < sizeof(dbg_props))
-								dbg_props[dbg_off++] = '+';
-							break;
-						}
-						memcpy(&dbg_props[dbg_off], proposals[i], len);
-						dbg_off += len;
-					}
-					dbg_props[dbg_off < sizeof(dbg_props) ? dbg_off : sizeof(dbg_props) - 1] = '\0';
-					fprintf(stderr,
-						"[DBG host_dial quic] multistream failed remote=%s ms=%d rc=%d timeout_ms=%d proposals=[%s]\n",
-						remote_multiaddr ? remote_multiaddr : "(unknown)", (int)ms, rc,
-						host->opts.multiselect_handshake_timeout_ms, dbg_props);
-				}
 				libp2p_event_t evt = {0};
 				evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
 				evt.u.outgoing_conn_error.peer = NULL;
@@ -1113,37 +1083,6 @@ static int do_dial_and_select(libp2p_host_t *host, const char *remote_multiaddr,
 		/* Emit protocol negotiation error */
 		if (emit_ms_error)
 		{
-			{
-				char dbg_props[512];
-				size_t dbg_off = 0;
-				dbg_props[0] = '\0';
-				for (size_t i = 0; proposals && proposals[i] && dbg_off + 4 < sizeof(dbg_props); ++i)
-				{
-					size_t len = strlen(proposals[i]);
-					if (dbg_off > 0 && dbg_off + 2 < sizeof(dbg_props))
-					{
-						dbg_props[dbg_off++] = ',';
-						dbg_props[dbg_off++] = ' ';
-					}
-					if (dbg_off + len >= sizeof(dbg_props))
-					{
-						size_t avail = sizeof(dbg_props) - dbg_off - 1;
-						memcpy(&dbg_props[dbg_off], proposals[i], avail);
-						dbg_off += avail;
-						if (dbg_off < sizeof(dbg_props))
-							dbg_props[dbg_off++] = '+';
-						break;
-					}
-					memcpy(&dbg_props[dbg_off], proposals[i], len);
-					dbg_off += len;
-				}
-				dbg_props[dbg_off < sizeof(dbg_props) ? dbg_off : sizeof(dbg_props) - 1] = '\0';
-				fprintf(stderr,
-					"[DBG host_dial yamux/mplex] multistream failed remote=%s ms=%d rc=%d timeout_ms=%d proposals=[%s]\n",
-					remote_multiaddr ? remote_multiaddr : "(unknown)", (int)ms,
-					(int)libp2p_error_from_multiselect(ms),
-					host->opts.multiselect_handshake_timeout_ms, dbg_props);
-			}
 			libp2p_event_t evt = {0};
 			evt.kind = LIBP2P_EVT_OUTGOING_CONNECTION_ERROR;
 			evt.u.outgoing_conn_error.peer = NULL; /* peer exists but stream not built yet */

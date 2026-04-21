@@ -18,7 +18,6 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -77,24 +76,6 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs, gossipsub_peer_e
 	if (rc != LIBP2P_ERR_OK)
 	{
 		LP_LOGW(GOSSIPSUB_MODULE, "rpc decode failed entry=%p len=%zu rc=%d", (void *)entry, frame_len, rc);
-		{
-			char dbg_peer_buf[128];
-			const char *dbg_peer = gossipsub_peer_to_string(entry ? entry->peer : NULL, dbg_peer_buf,
-								       sizeof(dbg_peer_buf));
-			char dbg_hex[3 * 1024 + 1];
-			size_t dbg_off = 0;
-			const size_t dbg_n = frame_len < 1024 ? frame_len : 1024;
-			for (size_t i = 0; i < dbg_n && dbg_off + 3 < sizeof(dbg_hex); ++i)
-				dbg_off += (size_t)snprintf(&dbg_hex[dbg_off], sizeof(dbg_hex) - dbg_off,
-							    "%02x ", frame ? frame[i] : 0);
-			if (dbg_off > 0 && dbg_hex[dbg_off - 1] == ' ')
-				dbg_hex[dbg_off - 1] = '\0';
-			else
-				dbg_hex[dbg_off] = '\0';
-			fprintf(stderr,
-				"[DBG rpc_handle] peer=%s entry=%p frame_len=%zu rc=%d bytes(%zu)=[%s]\n",
-				dbg_peer, (void *)entry, frame_len, (int)rc, dbg_n, dbg_hex);
-		}
 		return rc;
 	}
 

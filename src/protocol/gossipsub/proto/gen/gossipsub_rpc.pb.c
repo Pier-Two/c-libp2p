@@ -1,5 +1,4 @@
 #include "gossipsub_rpc.pb.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -172,22 +171,13 @@ int libp2p_gossipsub_RPC_read(NoiseProtobuf *pbuf, int tag, libp2p_gossipsub_RPC
     err = libp2p_gossipsub_RPC_new(obj);
     if (err != NOISE_ERROR_NONE)
         return err;
-    fprintf(stderr, "[DBG RPC_read] enter tag=%d pbuf.size=%zu pbuf.posn=%zu pbuf.error=%d\n",
-            tag, pbuf->size, pbuf->posn, pbuf->error);
     noise_protobuf_read_start_element(pbuf, tag, &end_posn);
-    fprintf(stderr, "[DBG RPC_read] after start_element end_posn=%zu pbuf.posn=%zu pbuf.error=%d\n",
-            end_posn, pbuf->posn, pbuf->error);
     while (!noise_protobuf_read_at_end_element(pbuf, end_posn)) {
-        int peek_tag = noise_protobuf_peek_tag(pbuf);
-        fprintf(stderr, "[DBG RPC_read] loop peek_tag=%d pbuf.posn=%zu end_posn=%zu pbuf.error=%d\n",
-                peek_tag, pbuf->posn, end_posn, pbuf->error);
-        switch (peek_tag) {
+        switch (noise_protobuf_peek_tag(pbuf)) {
             case 1: {
                 libp2p_gossipsub_RPC_SubOpts *value = 0;
                 int err;
                 libp2p_gossipsub_RPC_SubOpts_read(pbuf, 1, &value);
-                fprintf(stderr, "[DBG RPC_read] after SubOpts_read pbuf.posn=%zu pbuf.error=%d value=%p\n",
-                        pbuf->posn, pbuf->error, (void *)value);
                 err = noise_protobuf_add_to_array((void **)&((*obj)->subscriptions), &((*obj)->subscriptions_count_), &((*obj)->subscriptions_max_), &value, sizeof(value));
                 if (err != NOISE_ERROR_NONE && pbuf->error != NOISE_ERROR_NONE)
                    pbuf->error = err;
@@ -196,8 +186,6 @@ int libp2p_gossipsub_RPC_read(NoiseProtobuf *pbuf, int tag, libp2p_gossipsub_RPC
                 libp2p_gossipsub_Message *value = 0;
                 int err;
                 libp2p_gossipsub_Message_read(pbuf, 2, &value);
-                fprintf(stderr, "[DBG RPC_read] after Message_read pbuf.posn=%zu pbuf.error=%d\n",
-                        pbuf->posn, pbuf->error);
                 err = noise_protobuf_add_to_array((void **)&((*obj)->publish), &((*obj)->publish_count_), &((*obj)->publish_max_), &value, sizeof(value));
                 if (err != NOISE_ERROR_NONE && pbuf->error != NOISE_ERROR_NONE)
                    pbuf->error = err;
@@ -206,21 +194,13 @@ int libp2p_gossipsub_RPC_read(NoiseProtobuf *pbuf, int tag, libp2p_gossipsub_RPC
                 libp2p_gossipsub_ControlMessage_free((*obj)->control);
                 (*obj)->control = 0;
                 libp2p_gossipsub_ControlMessage_read(pbuf, 3, &((*obj)->control));
-                fprintf(stderr, "[DBG RPC_read] after ControlMessage_read pbuf.posn=%zu pbuf.error=%d\n",
-                        pbuf->posn, pbuf->error);
             } break;
             default: {
-                fprintf(stderr, "[DBG RPC_read] UNKNOWN tag=%d, skipping, pbuf.posn=%zu pbuf.error=%d\n",
-                        peek_tag, pbuf->posn, pbuf->error);
                 noise_protobuf_read_skip(pbuf);
-                fprintf(stderr, "[DBG RPC_read] after skip pbuf.posn=%zu pbuf.error=%d\n",
-                        pbuf->posn, pbuf->error);
             } break;
         }
     }
     err = noise_protobuf_read_end_element(pbuf, end_posn);
-    fprintf(stderr, "[DBG RPC_read] end_element err=%d pbuf.posn=%zu pbuf.error=%d\n",
-            err, pbuf->posn, pbuf->error);
     if (err != NOISE_ERROR_NONE) {
         libp2p_gossipsub_RPC_free(*obj);
         *obj = 0;
@@ -432,54 +412,33 @@ int libp2p_gossipsub_RPC_SubOpts_read(NoiseProtobuf *pbuf, int tag, libp2p_gossi
     err = libp2p_gossipsub_RPC_SubOpts_new(obj);
     if (err != NOISE_ERROR_NONE)
         return err;
-    fprintf(stderr, "[DBG SubOpts_read] enter tag=%d pbuf.size=%zu pbuf.posn=%zu pbuf.error=%d\n",
-            tag, pbuf->size, pbuf->posn, pbuf->error);
     noise_protobuf_read_start_element(pbuf, tag, &end_posn);
-    fprintf(stderr, "[DBG SubOpts_read] after start_element end_posn=%zu pbuf.posn=%zu pbuf.error=%d\n",
-            end_posn, pbuf->posn, pbuf->error);
     while (!noise_protobuf_read_at_end_element(pbuf, end_posn)) {
-        int peek_tag = noise_protobuf_peek_tag(pbuf);
-        fprintf(stderr, "[DBG SubOpts_read] loop peek_tag=%d pbuf.posn=%zu end_posn=%zu pbuf.error=%d\n",
-                peek_tag, pbuf->posn, end_posn, pbuf->error);
-        switch (peek_tag) {
+        switch (noise_protobuf_peek_tag(pbuf)) {
             case 1: {
                 noise_protobuf_read_bool(pbuf, 1, &((*obj)->subscribe));
                 (*obj)->subscribe_is_set = 1;
-                fprintf(stderr, "[DBG SubOpts_read] after read_bool subscribe=%d pbuf.posn=%zu pbuf.error=%d\n",
-                        (*obj)->subscribe, pbuf->posn, pbuf->error);
             } break;
             case 2: {
                 noise_protobuf_free_memory((*obj)->topic, (*obj)->topic_size_);
                 (*obj)->topic = 0;
                 (*obj)->topic_size_ = 0;
                 noise_protobuf_read_alloc_string(pbuf, 2, &((*obj)->topic), 0, &((*obj)->topic_size_));
-                fprintf(stderr, "[DBG SubOpts_read] after read_alloc_string(topic) size=%zu pbuf.posn=%zu pbuf.error=%d\n",
-                        (*obj)->topic_size_, pbuf->posn, pbuf->error);
             } break;
             case 3: {
                 noise_protobuf_read_bool(pbuf, 3, &((*obj)->requests_partial));
                 (*obj)->requests_partial_is_set = 1;
-                fprintf(stderr, "[DBG SubOpts_read] after read_bool(requests_partial) value=%d pbuf.posn=%zu pbuf.error=%d\n",
-                        (*obj)->requests_partial, pbuf->posn, pbuf->error);
             } break;
             case 4: {
                 noise_protobuf_read_bool(pbuf, 4, &((*obj)->supports_sending_partial));
                 (*obj)->supports_sending_partial_is_set = 1;
-                fprintf(stderr, "[DBG SubOpts_read] after read_bool(supports_sending_partial) value=%d pbuf.posn=%zu pbuf.error=%d\n",
-                        (*obj)->supports_sending_partial, pbuf->posn, pbuf->error);
             } break;
             default: {
-                fprintf(stderr, "[DBG SubOpts_read] UNKNOWN tag=%d, skipping, pbuf.posn=%zu pbuf.error=%d\n",
-                        peek_tag, pbuf->posn, pbuf->error);
                 noise_protobuf_read_skip(pbuf);
-                fprintf(stderr, "[DBG SubOpts_read] after skip pbuf.posn=%zu pbuf.error=%d\n",
-                        pbuf->posn, pbuf->error);
             } break;
         }
     }
     err = noise_protobuf_read_end_element(pbuf, end_posn);
-    fprintf(stderr, "[DBG SubOpts_read] end_element err=%d pbuf.posn=%zu pbuf.error=%d\n",
-            err, pbuf->posn, pbuf->error);
     if (err != NOISE_ERROR_NONE) {
         libp2p_gossipsub_RPC_SubOpts_free(*obj);
         *obj = 0;
