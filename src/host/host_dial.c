@@ -1801,12 +1801,11 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
 	size_t peer_len = 0;
 	const uint8_t *peer_bytes = NULL;
 	(void)peer_id_multihash_view(peer, &peer_bytes, &peer_len);
-	pthread_t th;
 	libp2p__worker_inc(host);
-	LP_LOGI("STREAM_ASYNC", "[async_entry] creating thread for peer (size=%zu) proto=%s", peer_len, protocol_id);
-	if (pthread_create(&th, NULL, open_stream_async_thread, ctx) != 0)
+	LP_LOGI("STREAM_ASYNC", "[async_entry] enqueue worker for peer (size=%zu) proto=%s", peer_len, protocol_id);
+	if (libp2p__submit_work(host, open_stream_async_thread, ctx) != LIBP2P_ERR_OK)
 	{
-		LP_LOGE("STREAM_ASYNC", "[async_entry] pthread_create FAILED");
+		LP_LOGE("STREAM_ASYNC", "[async_entry] worker enqueue FAILED");
 		peer_id_free(ctx->peer);
 		ctx->peer = NULL;
 		free(ctx->protocol_id);
@@ -1814,8 +1813,7 @@ int libp2p_host_open_stream_async(libp2p_host_t *host, const peer_id_t *peer, co
 		free(ctx);
 		return LIBP2P_ERR_INTERNAL;
 	}
-	pthread_detach(th);
-	LP_LOGI("STREAM_ASYNC", "[async_entry] thread created and detached");
+	LP_LOGI("STREAM_ASYNC", "[async_entry] worker enqueued");
 	return 0;
 }
 

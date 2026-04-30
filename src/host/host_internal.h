@@ -81,6 +81,15 @@ typedef struct event_node
 	struct event_node *next;
 } event_node_t;
 
+typedef void *(*libp2p_work_fn)(void *user_data);
+
+typedef struct work_node
+{
+	libp2p_work_fn fn;
+	void *user_data;
+	struct work_node *next;
+} work_node_t;
+
 /* Separate queue for async subscriber dispatch */
 typedef struct dispatch_node
 {
@@ -154,6 +163,17 @@ struct libp2p_host
 	/* Worker lifecycle synchronization: signal when worker_count reaches 0 */
 	pthread_cond_t worker_cv;
 
+	/* Bounded worker pool for short async jobs that used to spawn detached pthreads. */
+	pthread_t *work_threads;
+	size_t work_thread_count;
+	size_t work_queue_len;
+	size_t work_queue_max;
+	work_node_t *work_head;
+	work_node_t *work_tail;
+	pthread_cond_t work_cv;
+	int work_pool_started;
+	int work_pool_stopping;
+
 	/* Async event dispatch to subscribers */
 	pthread_t disp_thread;
 	int disp_thread_started;
@@ -223,6 +243,7 @@ libp2p_transport_t *libp2p__host_select_transport(const struct libp2p_host *host
 /* Worker lifecycle helpers */
 void libp2p__worker_inc(struct libp2p_host *host);
 void libp2p__worker_dec(struct libp2p_host *host);
+int libp2p__submit_work(struct libp2p_host *host, libp2p_work_fn fn, void *user_data);
 
 /* Async dispatcher lifecycle */
 int libp2p__event_dispatcher_start(struct libp2p_host *host);

@@ -441,11 +441,8 @@ static void push_publish_cb(const libp2p_event_t *evt, void *ud)
 	}
 	pc->host = host;
 	pc->attempt = next_attempt;
-	pthread_t th;
 	libp2p__worker_inc(host);
-	if (pthread_create(&th, NULL, __libp2p__publisher_async, pc) == 0)
-		pthread_detach(th);
-	else
+	if (libp2p__submit_work(host, __libp2p__publisher_async, pc) != LIBP2P_ERR_OK)
 	{
 		free(pc);
 		libp2p__worker_dec(host);
@@ -481,11 +478,8 @@ void libp2p__schedule_identify_push(libp2p_host_t *host)
 	}
 	pc->host = host;
 	pc->attempt = next_attempt;
-	pthread_t th;
 	libp2p__worker_inc(host);
-	if (pthread_create(&th, NULL, __libp2p__publisher_async, pc) == 0)
-		pthread_detach(th);
-	else
+	if (libp2p__submit_work(host, __libp2p__publisher_async, pc) != LIBP2P_ERR_OK)
 	{
 		free(pc);
 		libp2p__worker_dec(host);

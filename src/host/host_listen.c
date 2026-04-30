@@ -688,12 +688,9 @@ static void *inbound_session_thread(void *arg)
 			c->yctx = yctx;
 			if (peer_id_clone(remote_peer, &c->peer) == PEER_ID_OK)
 			{
-				pthread_t th;
 				if (host)
 					libp2p__worker_inc(host);
-				if (pthread_create(&th, NULL, aid_thread, c) == 0)
-					pthread_detach(th);
-				else
+				if (libp2p__submit_work(host, aid_thread, c) != LIBP2P_ERR_OK)
 				{
 					if (host)
 						libp2p__worker_dec(host);
@@ -1110,23 +1107,18 @@ static void inbound_yamux_on_io(int _fd, short events, void *ud)
 		sub_work_t *work = (sub_work_t *)calloc(1, sizeof(*work));
 		if (!work)
 			continue;
-		work->ctx = c;
-		work->sid = sid;
-		work->heap = 1;
-		pthread_t th;
-		if (c && c->host)
-			libp2p__worker_inc(c->host);
-		if (pthread_create(&th, NULL, inbound_substream_worker, work) == 0)
-		{
-			pthread_detach(th);
-		}
-		else
-		{
+			work->ctx = c;
+			work->sid = sid;
+			work->heap = 1;
 			if (c && c->host)
-				libp2p__worker_dec(c->host);
-			free(work);
+				libp2p__worker_inc(c->host);
+			if (libp2p__submit_work(c ? c->host : NULL, inbound_substream_worker, work) != LIBP2P_ERR_OK)
+			{
+				if (c && c->host)
+					libp2p__worker_dec(c->host);
+				free(work);
+			}
 		}
-	}
 
 	/* Service push-mode streams (deliver on_data/on_eof/on_error) */
 	cbctx_service_push(c);

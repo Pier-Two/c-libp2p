@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "host_internal.h"
 #include "libp2p/component_registry.h"
@@ -22,6 +23,10 @@
 #include "multiformats/multiaddr/multiaddr.h"
 #include "transport/connection.h"
 
+#define LIBP2P_WORK_POOL_FALLBACK 4u
+#define LIBP2P_WORK_POOL_MAX 64u
+#define LIBP2P_WORK_QUEUE_PER_THREAD 64u
+
 /* Identify minimal service is provided in protocol_identify module;
  * host does not auto-start it to avoid link cycles. */
 
@@ -37,6 +42,162 @@ static void free_const_string_array(const char *const **array_ptr, size_t *count
 	*array_ptr = NULL;
 	if (count)
 		*count = 0;
+}
+
+static size_t libp2p__work_pool_thread_count(void)
+{
+	long processors = -1;
+#ifdef _SC_NPROCESSORS_ONLN
+	processors = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+	size_t workers = LIBP2P_WORK_POOL_FALLBACK;
+	if (processors > 0)
+		workers = (size_t)processors * 2u;
+	if (workers < LIBP2P_WORK_POOL_FALLBACK)
+		workers = LIBP2P_WORK_POOL_FALLBACK;
+	if (workers > LIBP2P_WORK_POOL_MAX)
+		workers = LIBP2P_WORK_POOL_MAX;
+	return workers == 0u ? 1u : workers;
+}
+
+static void *libp2p__work_pool_thread(void *arg)
+{
+	libp2p_host_t *host = (libp2p_host_t *)arg;
+	if (!host)
+		return NULL;
+
+	pthread_mutex_lock(&host->mtx);
+	for (;;)
+	{
+		while (!host->work_pool_stopping && host->work_head == NULL)
+			pthread_cond_wait(&host->work_cv, &host->mtx);
+		if (host->work_pool_stopping && host->work_head == NULL)
+			break;
+
+		work_node_t *node = host->work_head;
+		if (node)
+		{
+			host->work_head = node->next;
+			if (!host->work_head)
+				host->work_tail = NULL;
+			if (host->work_queue_len > 0)
+				host->work_queue_len--;
+		}
+		pthread_mutex_unlock(&host->mtx);
+
+		if (node)
+		{
+			if (node->fn)
+				(void)node->fn(node->user_data);
+			free(node);
+		}
+
+		pthread_mutex_lock(&host->mtx);
+	}
+	pthread_mutex_unlock(&host->mtx);
+	return NULL;
+}
+
+static int libp2p__work_pool_start(libp2p_host_t *host)
+{
+	if (!host)
+		return LIBP2P_ERR_NULL_PTR;
+	if (pthread_cond_init(&host->work_cv, NULL) != 0)
+		return LIBP2P_ERR_INTERNAL;
+	host->work_thread_count = libp2p__work_pool_thread_count();
+	host->work_queue_max = host->work_thread_count * LIBP2P_WORK_QUEUE_PER_THREAD;
+	host->work_threads = (pthread_t *)calloc(host->work_thread_count, sizeof(*host->work_threads));
+	if (!host->work_threads)
+	{
+		pthread_cond_destroy(&host->work_cv);
+		return LIBP2P_ERR_INTERNAL;
+	}
+
+	size_t started = 0;
+	for (; started < host->work_thread_count; ++started)
+	{
+		if (pthread_create(&host->work_threads[started], NULL, libp2p__work_pool_thread, host) != 0)
+			break;
+	}
+	if (started != host->work_thread_count)
+	{
+		pthread_mutex_lock(&host->mtx);
+		host->work_pool_stopping = 1;
+		pthread_cond_broadcast(&host->work_cv);
+		pthread_mutex_unlock(&host->mtx);
+		for (size_t i = 0; i < started; ++i)
+			pthread_join(host->work_threads[i], NULL);
+		free(host->work_threads);
+		host->work_threads = NULL;
+		host->work_thread_count = 0;
+		host->work_queue_max = 0;
+		pthread_cond_destroy(&host->work_cv);
+		return LIBP2P_ERR_INTERNAL;
+	}
+
+	host->work_pool_started = 1;
+	return 0;
+}
+
+static void libp2p__work_pool_stop(libp2p_host_t *host)
+{
+	if (!host || !host->work_pool_started)
+		return;
+
+	pthread_mutex_lock(&host->mtx);
+	host->work_pool_stopping = 1;
+	pthread_cond_broadcast(&host->work_cv);
+	pthread_mutex_unlock(&host->mtx);
+
+	for (size_t i = 0; i < host->work_thread_count; ++i)
+		pthread_join(host->work_threads[i], NULL);
+
+	work_node_t *node = host->work_head;
+	while (node)
+	{
+		work_node_t *next = node->next;
+		free(node);
+		node = next;
+	}
+	host->work_head = NULL;
+	host->work_tail = NULL;
+	host->work_queue_len = 0;
+	free(host->work_threads);
+	host->work_threads = NULL;
+	host->work_thread_count = 0;
+	host->work_queue_max = 0;
+	host->work_pool_started = 0;
+	pthread_cond_destroy(&host->work_cv);
+}
+
+int libp2p__submit_work(libp2p_host_t *host, libp2p_work_fn fn, void *user_data)
+{
+	if (!host || !fn)
+		return LIBP2P_ERR_NULL_PTR;
+
+	work_node_t *node = (work_node_t *)calloc(1, sizeof(*node));
+	if (!node)
+		return LIBP2P_ERR_INTERNAL;
+	node->fn = fn;
+	node->user_data = user_data;
+
+	pthread_mutex_lock(&host->mtx);
+	if (!host->work_pool_started || host->work_pool_stopping || host->tearing_down ||
+	    host->work_queue_len >= host->work_queue_max)
+	{
+		pthread_mutex_unlock(&host->mtx);
+		free(node);
+		return LIBP2P_ERR_AGAIN;
+	}
+	if (host->work_tail)
+		host->work_tail->next = node;
+	else
+		host->work_head = node;
+	host->work_tail = node;
+	host->work_queue_len++;
+	pthread_cond_signal(&host->work_cv);
+	pthread_mutex_unlock(&host->mtx);
+	return LIBP2P_ERR_OK;
 }
 
 static int duplicate_const_string_array(const char *const *src, size_t count, const char *const **dst_out)
@@ -208,9 +369,19 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
 	atomic_init(&h->worker_count, 0);
 	h->metrics = NULL;
 
+	if (libp2p__work_pool_start(h) != 0)
+	{
+		pthread_cond_destroy(&h->worker_cv);
+		pthread_cond_destroy(&h->evt_cv);
+		pthread_mutex_destroy(&h->mtx);
+		free(h);
+		return LIBP2P_ERR_INTERNAL;
+	}
+
 	/* Start async event dispatcher */
 	if (libp2p__event_dispatcher_start(h) != 0)
 	{
+		libp2p__work_pool_stop(h);
 		pthread_cond_destroy(&h->worker_cv);
 		pthread_cond_destroy(&h->evt_cv);
 		pthread_mutex_destroy(&h->mtx);
@@ -222,6 +393,7 @@ int libp2p_host_new(const libp2p_host_options_t *opts, libp2p_host_t **out)
 	if (libp2p__cbexec_start(h) != 0)
 	{
 		libp2p__event_dispatcher_stop(h);
+		libp2p__work_pool_stop(h);
 		pthread_cond_destroy(&h->worker_cv);
 		pthread_cond_destroy(&h->evt_cv);
 		pthread_mutex_destroy(&h->mtx);
@@ -445,6 +617,7 @@ components_fail:
 	}
 	libp2p__cbexec_stop(h);
 	libp2p__event_dispatcher_stop(h);
+	libp2p__work_pool_stop(h);
 	pthread_cond_destroy(&h->worker_cv);
 	pthread_cond_destroy(&h->evt_cv);
 	pthread_mutex_destroy(&h->mtx);
@@ -473,6 +646,7 @@ void libp2p_host_free(libp2p_host_t *host)
 		pthread_cond_wait(&host->worker_cv, &host->mtx);
 	}
 	pthread_mutex_unlock(&host->mtx);
+	libp2p__work_pool_stop(host);
 	/* Stop async event dispatcher before freeing subscriptions/queues */
 	libp2p__event_dispatcher_stop(host);
 	/* Stop callback executor before tearing down */

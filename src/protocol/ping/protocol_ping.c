@@ -468,12 +468,8 @@ static void ping_on_open(libp2p_stream_t *s, void *ud)
 	/* account for detached worker lifetimes so host_free waits safely */
 	if (host)
 		libp2p__worker_inc(host);
-	pthread_t th;
-	if (pthread_create(&th, NULL, ping_srv_thread, ctx) == 0)
-	{
-		pthread_detach(th);
+	if (libp2p__submit_work(host, ping_srv_thread, ctx) == LIBP2P_ERR_OK)
 		return;
-	}
 	if (host)
 		libp2p__worker_dec(host);
 	if (s)

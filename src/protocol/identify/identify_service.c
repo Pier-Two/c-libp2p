@@ -459,18 +459,16 @@ static void identify_push_on_open(libp2p_stream_t *s, void *ud)
 	if (ctx->host)
 		libp2p__worker_inc(ctx->host);
 	libp2p_stream_set_read_interest(s, true);
-	pthread_t th;
-	if (pthread_create(&th, NULL, identify_push_thread, ctx) == 0)
+	if (libp2p__submit_work(ctx->host, identify_push_thread, ctx) == LIBP2P_ERR_OK)
 	{
-		pthread_detach(th);
-		LIBP2P_TRACE("identify_push", "thread started stream=%p", (void *)s);
+		LIBP2P_TRACE("identify_push", "worker enqueued stream=%p", (void *)s);
 	}
 	else
 	{
 		if (ctx->host)
 			libp2p__worker_dec(ctx->host);
 		free(ctx);
-		LIBP2P_TRACE("identify_push", "thread spawn failed stream=%p", (void *)s);
+		LIBP2P_TRACE("identify_push", "worker enqueue failed stream=%p", (void *)s);
 		if (s)
 		{
 			libp2p_stream_close(s);

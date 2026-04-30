@@ -1031,17 +1031,12 @@ libp2p_err_t gossipsub_validation_schedule(libp2p_gossipsub_t *gs, gossipsub_top
 		propagate_on_accept ? "publish" : "inbound", topic_label, msg->data_len);
 	if (gs->host)
 	{
-		pthread_t th;
 		libp2p__worker_inc(gs->host);
-		if (pthread_create(&th, NULL, gossipsub_validation_begin_thread, ctx) == 0)
-		{
-			pthread_detach(th);
-		}
-		else
+		if (libp2p__submit_work(gs->host, gossipsub_validation_begin_thread, ctx) != LIBP2P_ERR_OK)
 		{
 			libp2p__worker_dec(gs->host);
 			LP_LOGW(GOSSIPSUB_MODULE,
-				"failed to create validation worker thread for topic=%s; dropping message",
+				"failed to enqueue validation worker for topic=%s; dropping message",
 				topic_label);
 			gossipsub_validation_ctx_release(ctx);
 			return LIBP2P_ERR_AGAIN;
