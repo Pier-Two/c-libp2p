@@ -40,7 +40,6 @@ int libp2p_gossipsub_RPC_clear_control(libp2p_gossipsub_RPC *obj);
 int libp2p_gossipsub_RPC_has_control(const libp2p_gossipsub_RPC *obj);
 libp2p_gossipsub_ControlMessage *libp2p_gossipsub_RPC_get_control(const libp2p_gossipsub_RPC *obj);
 int libp2p_gossipsub_RPC_get_new_control(libp2p_gossipsub_RPC *obj, libp2p_gossipsub_ControlMessage **value);
-int libp2p_gossipsub_RPC_take_control(libp2p_gossipsub_RPC *obj, libp2p_gossipsub_ControlMessage *value);
 
 int libp2p_gossipsub_RPC_SubOpts_new(libp2p_gossipsub_RPC_SubOpts **obj);
 int libp2p_gossipsub_RPC_SubOpts_free(libp2p_gossipsub_RPC_SubOpts *obj);

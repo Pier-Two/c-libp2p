@@ -429,6 +429,11 @@ void libp2p_gossipsub_rpc_decoder_reset(libp2p_gossipsub_rpc_decoder_t *dec)
 		libp2p_gossipsub_RPC_free(dec->stream_rpc);
 		dec->stream_rpc = NULL;
 	}
+	if (dec->stream_control_rpc)
+	{
+		libp2p_gossipsub_RPC_free(dec->stream_control_rpc);
+		dec->stream_control_rpc = NULL;
+	}
 }
 
 void libp2p_gossipsub_rpc_decoder_free(libp2p_gossipsub_rpc_decoder_t *dec)
@@ -634,9 +639,35 @@ static void gossipsub_decoder_free_message(void *obj)
 	libp2p_gossipsub_Message_free((libp2p_gossipsub_Message *)obj);
 }
 
-static void gossipsub_decoder_free_control(void *obj)
+static libp2p_err_t gossipsub_decoder_parse_control_rpc(libp2p_gossipsub_rpc_decoder_t *dec)
 {
-	libp2p_gossipsub_ControlMessage_free((libp2p_gossipsub_ControlMessage *)obj);
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+
+	uint8_t len_buf[10];
+	size_t len_buf_len = 0;
+	if (unsigned_varint_encode(dec->field_len, len_buf, sizeof(len_buf), &len_buf_len) != UNSIGNED_VARINT_OK)
+		return LIBP2P_ERR_INTERNAL;
+
+	size_t control_frame_len = 1 + len_buf_len + dec->field_len;
+	uint8_t *control_frame = (uint8_t *)malloc(control_frame_len > 0 ? control_frame_len : 1u);
+	if (!control_frame)
+		return LIBP2P_ERR_INTERNAL;
+	control_frame[0] = (uint8_t)((3u << 3) | 2u);
+	memcpy(control_frame + 1, len_buf, len_buf_len);
+	if (dec->field_len > 0)
+		memcpy(control_frame + 1 + len_buf_len, dec->field_buf, dec->field_len);
+
+	libp2p_gossipsub_RPC *control_rpc = NULL;
+	libp2p_err_t rc = libp2p_gossipsub_rpc_decode_frame(control_frame, control_frame_len, &control_rpc);
+	free(control_frame);
+	if (rc != LIBP2P_ERR_OK)
+		return rc;
+
+	if (dec->stream_control_rpc)
+		libp2p_gossipsub_RPC_free(dec->stream_control_rpc);
+	dec->stream_control_rpc = control_rpc;
+	return LIBP2P_ERR_OK;
 }
 
 static libp2p_err_t gossipsub_decoder_parse_stream_field(libp2p_gossipsub_rpc_decoder_t *dec)
@@ -645,6 +676,8 @@ static libp2p_err_t gossipsub_decoder_parse_stream_field(libp2p_gossipsub_rpc_de
 		return LIBP2P_ERR_NULL_PTR;
 	if (dec->field_number != 1 && dec->field_number != 2 && dec->field_number != 3)
 		return LIBP2P_ERR_OK;
+	if (dec->field_number == 3)
+		return gossipsub_decoder_parse_control_rpc(dec);
 
 	uint8_t empty = 0;
 	uint8_t *input = dec->field_len > 0 ? dec->field_buf : &empty;
@@ -703,26 +736,7 @@ static libp2p_err_t gossipsub_decoder_parse_stream_field(libp2p_gossipsub_rpc_de
 		}
 		return LIBP2P_ERR_OK;
 	}
-
-	libp2p_gossipsub_ControlMessage *control = NULL;
-	noise_rc = libp2p_gossipsub_ControlMessage_read(&pb, 0, &control);
-	if (noise_rc != NOISE_ERROR_NONE || !control)
-	{
-		noise_protobuf_finish_input(&pb);
-		if (control)
-			libp2p_gossipsub_ControlMessage_free(control);
-		return convert_noise_err(noise_rc);
-	}
-	libp2p_err_t finish_rc = gossipsub_decoder_finish_noise_input(&pb, control, gossipsub_decoder_free_control);
-	if (finish_rc != LIBP2P_ERR_OK)
-		return finish_rc;
-	noise_rc = libp2p_gossipsub_RPC_take_control(dec->stream_rpc, control);
-	if (noise_rc != NOISE_ERROR_NONE)
-	{
-		libp2p_gossipsub_ControlMessage_free(control);
-		return convert_noise_err(noise_rc);
-	}
-	return LIBP2P_ERR_OK;
+	return LIBP2P_ERR_INTERNAL;
 }
 
 static libp2p_err_t gossipsub_decoder_emit_rpc(libp2p_gossipsub_rpc_decoder_t *dec,
@@ -732,13 +746,17 @@ static libp2p_err_t gossipsub_decoder_emit_rpc(libp2p_gossipsub_rpc_decoder_t *d
 		return LIBP2P_ERR_NULL_PTR;
 
 	libp2p_gossipsub_RPC *rpc = dec->stream_rpc;
+	libp2p_gossipsub_RPC *control_rpc = dec->stream_control_rpc;
 	dec->stream_rpc = NULL;
+	dec->stream_control_rpc = NULL;
 	size_t frame_len = dec->frame_len;
 	libp2p_err_t rc = LIBP2P_ERR_OK;
 	if (cb)
-		rc = cb(rpc, frame_len, user_data);
+		rc = cb(rpc, control_rpc, frame_len, user_data);
 	if (rpc)
 		libp2p_gossipsub_RPC_free(rpc);
+	if (control_rpc)
+		libp2p_gossipsub_RPC_free(control_rpc);
 	libp2p_gossipsub_rpc_decoder_reset(dec);
 	return rc;
 }

@@ -19,6 +19,7 @@ typedef libp2p_err_t (*libp2p_gossipsub_rpc_decoder_cb)(const uint8_t *frame,
                                                         void *user_data);
 
 typedef libp2p_err_t (*libp2p_gossipsub_rpc_decoder_rpc_cb)(libp2p_gossipsub_RPC *rpc,
+                                                            libp2p_gossipsub_RPC *control_rpc,
                                                             size_t frame_len,
                                                             void *user_data);
 
@@ -43,6 +44,7 @@ typedef struct libp2p_gossipsub_rpc_decoder
     size_t field_cap;
     int stream_state;
     libp2p_gossipsub_RPC *stream_rpc;
+    libp2p_gossipsub_RPC *stream_control_rpc;
 } libp2p_gossipsub_rpc_decoder_t;
 
 /**

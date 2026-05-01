@@ -66,7 +66,8 @@ static void gossipsub_opportunistic_timer_cb(void *user_data)
 }
 
 libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry,
-					  libp2p_gossipsub_RPC *rpc, const uint8_t *frame, size_t frame_len)
+					  libp2p_gossipsub_RPC *rpc, libp2p_gossipsub_RPC *control_rpc,
+					  const uint8_t *frame, size_t frame_len)
 {
 	if (!gs || !entry || !rpc)
 		return LIBP2P_ERR_NULL_PTR;
@@ -81,14 +82,30 @@ libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer
 		return rc;
 	}
 
+	gossipsub_rpc_parsed_t control_parsed;
+	gossipsub_rpc_parsed_init(&control_parsed);
+	gossipsub_rpc_parsed_t *control_view = control_rpc ? &control_parsed : &parsed;
+	if (control_rpc)
+	{
+		rc = gossipsub_rpc_parse(control_rpc, &control_parsed);
+		if (rc != LIBP2P_ERR_OK)
+		{
+			LP_LOGW(GOSSIPSUB_MODULE, "rpc control parse failed entry=%p len=%zu rc=%d", (void *)entry,
+				frame_len, rc);
+			gossipsub_rpc_parsed_clear(&control_parsed);
+			gossipsub_rpc_parsed_clear(&parsed);
+			return rc;
+		}
+	}
+
 	if (libp2p_log_is_enabled(LIBP2P_LOG_TRACE))
 	{
 		size_t publish_count =
 			libp2p_gossipsub_RPC_has_publish(rpc) ? libp2p_gossipsub_RPC_count_publish(rpc) : 0;
 		LP_LOGT(GOSSIPSUB_MODULE,
 			"rpc frame entry=%p len=%zu publish=%zu ihave=%zu iwant=%zu graft=%zu prune=%zu", (void *)entry,
-			frame_len, publish_count, parsed.ihave_len, parsed.iwant_len, parsed.graft_len,
-			parsed.prune_len);
+			frame_len, publish_count, control_view->ihave_len, control_view->iwant_len,
+			control_view->graft_len, control_view->prune_len);
 	}
 	if (libp2p_log_is_enabled(LIBP2P_LOG_DEBUG))
 	{
@@ -104,18 +121,18 @@ libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer
 					sub->topic_id ? sub->topic_id : "(null)");
 			}
 		}
-		for (size_t i = 0; i < parsed.graft_len; ++i)
+		for (size_t i = 0; i < control_view->graft_len; ++i)
 		{
-			gossipsub_rpc_control_graft_t *g = &parsed.grafts[i];
+			gossipsub_rpc_control_graft_t *g = &control_view->grafts[i];
 			if (g && g->topic)
 			{
 				LP_LOGD(GOSSIPSUB_MODULE, "rpc trace peer=%s graft topic=%s topic_id=%s", peer_repr,
 					g->topic, g->topic_id ? g->topic_id : "(null)");
 			}
 		}
-		for (size_t i = 0; i < parsed.prune_len; ++i)
+		for (size_t i = 0; i < control_view->prune_len; ++i)
 		{
-			gossipsub_rpc_control_prune_t *p = &parsed.prunes[i];
+			gossipsub_rpc_control_prune_t *p = &control_view->prunes[i];
 			if (p && p->topic)
 			{
 				LP_LOGD(GOSSIPSUB_MODULE,
@@ -131,6 +148,7 @@ libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer
 	{
 		LP_LOGW(GOSSIPSUB_MODULE, "rpc subscription handling failed entry=%p len=%zu rc=%d subs=%zu",
 			(void *)entry, frame_len, rc, parsed.subscriptions_len);
+		gossipsub_rpc_parsed_clear(&control_parsed);
 		gossipsub_rpc_parsed_clear(&parsed);
 		return rc;
 	}
@@ -205,33 +223,39 @@ libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer
 		}
 	}
 
-	libp2p_err_t ctrl_rc = gossipsub_propagation_handle_control_ihave(gs, entry, parsed.ihaves, parsed.ihave_len);
+	libp2p_err_t ctrl_rc =
+		gossipsub_propagation_handle_control_ihave(gs, entry, control_view->ihaves, control_view->ihave_len);
 	if (ctrl_rc != LIBP2P_ERR_OK && final_rc == LIBP2P_ERR_OK)
 		final_rc = ctrl_rc;
 
-	ctrl_rc = gossipsub_propagation_handle_control_iwant(gs, entry, parsed.iwants, parsed.iwant_len);
+	ctrl_rc =
+		gossipsub_propagation_handle_control_iwant(gs, entry, control_view->iwants, control_view->iwant_len);
 	if (ctrl_rc != LIBP2P_ERR_OK && final_rc == LIBP2P_ERR_OK)
 		final_rc = ctrl_rc;
 
-	ctrl_rc = gossipsub_propagation_handle_control_graft(gs, entry, parsed.grafts, parsed.graft_len);
+	ctrl_rc =
+		gossipsub_propagation_handle_control_graft(gs, entry, control_view->grafts, control_view->graft_len);
 	if (ctrl_rc != LIBP2P_ERR_OK && final_rc == LIBP2P_ERR_OK)
 		final_rc = ctrl_rc;
 
-	ctrl_rc = gossipsub_propagation_handle_control_prune(gs, entry, parsed.prunes, parsed.prune_len);
+	ctrl_rc =
+		gossipsub_propagation_handle_control_prune(gs, entry, control_view->prunes, control_view->prune_len);
 	if (ctrl_rc != LIBP2P_ERR_OK && final_rc == LIBP2P_ERR_OK)
 		final_rc = ctrl_rc;
 
 	if (final_rc != LIBP2P_ERR_OK)
 	{
-		size_t ihave_len = parsed.ihave_len;
-		size_t iwant_len = parsed.iwant_len;
-		size_t graft_len = parsed.graft_len;
-		size_t prune_len = parsed.prune_len;
+		size_t ihave_len = control_view->ihave_len;
+		size_t iwant_len = control_view->iwant_len;
+		size_t graft_len = control_view->graft_len;
+		size_t prune_len = control_view->prune_len;
+		gossipsub_rpc_parsed_clear(&control_parsed);
 		gossipsub_rpc_parsed_clear(&parsed);
 		LP_LOGW(GOSSIPSUB_MODULE, "rpc handling error entry=%p rc=%d ihave=%zu iwant=%zu graft=%zu prune=%zu",
 			(void *)entry, final_rc, ihave_len, iwant_len, graft_len, prune_len);
 		return final_rc;
 	}
+	gossipsub_rpc_parsed_clear(&control_parsed);
 	gossipsub_rpc_parsed_clear(&parsed);
 	return final_rc;
 }
@@ -250,7 +274,7 @@ libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs, gossipsub_peer_e
 		return rc;
 	}
 
-	rc = gossipsub_handle_decoded_rpc(gs, entry, rpc, frame, frame_len);
+	rc = gossipsub_handle_decoded_rpc(gs, entry, rpc, NULL, frame, frame_len);
 	libp2p_gossipsub_RPC_free(rpc);
 	return rc;
 }

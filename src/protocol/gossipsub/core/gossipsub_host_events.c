@@ -36,14 +36,16 @@ typedef struct gossipsub_decoder_cb_ctx
 } gossipsub_decoder_cb_ctx_t;
 
 extern libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry,
-						 libp2p_gossipsub_RPC *rpc, const uint8_t *frame, size_t frame_len);
+						 libp2p_gossipsub_RPC *rpc, libp2p_gossipsub_RPC *control_rpc,
+						 const uint8_t *frame, size_t frame_len);
 
-static libp2p_err_t gossipsub_decoder_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
+static libp2p_err_t gossipsub_decoder_rpc_cb(libp2p_gossipsub_RPC *rpc, libp2p_gossipsub_RPC *control_rpc,
+					     size_t frame_len, void *user_data)
 {
 	gossipsub_decoder_cb_ctx_t *ctx = (gossipsub_decoder_cb_ctx_t *)user_data;
 	if (!ctx || !ctx->gs || !ctx->peer)
 		return LIBP2P_ERR_NULL_PTR;
-	return gossipsub_handle_decoded_rpc(ctx->gs, ctx->peer, rpc, NULL, frame_len);
+	return gossipsub_handle_decoded_rpc(ctx->gs, ctx->peer, rpc, control_rpc, NULL, frame_len);
 }
 
 static const char *const k_gossipsub_protocols[] = {"/meshsub/1.1.0", "/meshsub/1.2.0", "/meshsub/1.0.0"};

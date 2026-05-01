@@ -188,9 +188,11 @@ static libp2p_err_t decoder_capture_cb(const uint8_t *frame, size_t frame_len, v
 	return LIBP2P_ERR_OK;
 }
 
-static libp2p_err_t decoder_capture_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
+static libp2p_err_t decoder_capture_rpc_cb(libp2p_gossipsub_RPC *rpc, libp2p_gossipsub_RPC *control_rpc,
+					   size_t frame_len, void *user_data)
 {
 	decoder_test_ctx_t *ctx = (decoder_test_ctx_t *)user_data;
+	(void)control_rpc;
 	(void)frame_len;
 	if (!ctx || !rpc)
 		return LIBP2P_ERR_NULL_PTR;
@@ -248,16 +250,18 @@ typedef struct
 	int frames_seen;
 } decoder_control_ctx_t;
 
-static libp2p_err_t decoder_control_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
+static libp2p_err_t decoder_control_rpc_cb(libp2p_gossipsub_RPC *rpc, libp2p_gossipsub_RPC *control_rpc,
+					   size_t frame_len, void *user_data)
 {
 	decoder_control_ctx_t *ctx = (decoder_control_ctx_t *)user_data;
+	(void)rpc;
 	(void)frame_len;
-	if (!ctx || !rpc)
+	if (!ctx || !control_rpc)
 		return LIBP2P_ERR_NULL_PTR;
 	ctx->frames_seen++;
 
-	int ok = libp2p_gossipsub_RPC_has_control(rpc);
-	libp2p_gossipsub_ControlMessage *control = ok ? libp2p_gossipsub_RPC_get_control(rpc) : NULL;
+	int ok = libp2p_gossipsub_RPC_has_control(control_rpc);
+	libp2p_gossipsub_ControlMessage *control = ok ? libp2p_gossipsub_RPC_get_control(control_rpc) : NULL;
 	ok = ok && control && libp2p_gossipsub_ControlMessage_count_idontwant(control) == 1;
 	libp2p_gossipsub_ControlIDontWant *idontwant =
 		ok ? libp2p_gossipsub_ControlMessage_get_at_idontwant(control, 0) : NULL;

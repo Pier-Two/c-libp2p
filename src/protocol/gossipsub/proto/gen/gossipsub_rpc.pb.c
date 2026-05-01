@@ -397,15 +397,6 @@ int libp2p_gossipsub_RPC_get_new_control(libp2p_gossipsub_RPC *obj, libp2p_gossi
 	return NOISE_ERROR_NONE;
 }
 
-int libp2p_gossipsub_RPC_take_control(libp2p_gossipsub_RPC *obj, libp2p_gossipsub_ControlMessage *value)
-{
-	if (!obj)
-		return NOISE_ERROR_INVALID_PARAM;
-	libp2p_gossipsub_ControlMessage_free(obj->control);
-	obj->control = value;
-	return NOISE_ERROR_NONE;
-}
-
 int libp2p_gossipsub_RPC_SubOpts_new(libp2p_gossipsub_RPC_SubOpts **obj)
 {
 	if (!obj)
