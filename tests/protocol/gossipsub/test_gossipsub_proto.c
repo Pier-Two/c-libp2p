@@ -188,6 +188,92 @@ static libp2p_err_t decoder_capture_cb(const uint8_t *frame, size_t frame_len, v
 	return LIBP2P_ERR_OK;
 }
 
+static libp2p_err_t decoder_capture_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
+{
+	decoder_test_ctx_t *ctx = (decoder_test_ctx_t *)user_data;
+	(void)frame_len;
+	if (!ctx || !rpc)
+		return LIBP2P_ERR_NULL_PTR;
+	ctx->frames_seen++;
+
+	int ok = 1;
+	if (libp2p_gossipsub_RPC_count_publish(rpc) != 1)
+		ok = 0;
+	libp2p_gossipsub_Message *decoded = ok ? libp2p_gossipsub_RPC_get_at_publish(rpc, 0) : NULL;
+	if (!decoded)
+		ok = 0;
+
+	if (ok)
+	{
+		size_t topic_len = strlen(ctx->topic);
+		ok = libp2p_gossipsub_Message_has_topic(decoded) &&
+		     libp2p_gossipsub_Message_get_size_topic(decoded) == topic_len &&
+		     memcmp(libp2p_gossipsub_Message_get_topic(decoded), ctx->topic, topic_len) == 0;
+	}
+
+	if (ok && ctx->data_len)
+	{
+		ok = libp2p_gossipsub_Message_has_data(decoded) &&
+		     libp2p_gossipsub_Message_get_size_data(decoded) == ctx->data_len &&
+		     memcmp(libp2p_gossipsub_Message_get_data(decoded), ctx->data, ctx->data_len) == 0;
+	}
+
+	if (ok && ctx->seqno_len)
+	{
+		ok = libp2p_gossipsub_Message_has_seqno(decoded) &&
+		     libp2p_gossipsub_Message_get_size_seqno(decoded) == ctx->seqno_len &&
+		     memcmp(libp2p_gossipsub_Message_get_seqno(decoded), ctx->seqno, ctx->seqno_len) == 0;
+	}
+
+	if (ok && ctx->from_len)
+	{
+		ok = libp2p_gossipsub_Message_has_from(decoded) &&
+		     libp2p_gossipsub_Message_get_size_from(decoded) == ctx->from_len &&
+		     memcmp(libp2p_gossipsub_Message_get_from(decoded), ctx->from, ctx->from_len) == 0;
+	}
+
+	if (!ok)
+	{
+		ctx->ok = 0;
+		return LIBP2P_ERR_INTERNAL;
+	}
+	return LIBP2P_ERR_OK;
+}
+
+typedef struct
+{
+	const uint8_t *msg_id;
+	size_t msg_id_len;
+	int ok;
+	int frames_seen;
+} decoder_control_ctx_t;
+
+static libp2p_err_t decoder_control_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
+{
+	decoder_control_ctx_t *ctx = (decoder_control_ctx_t *)user_data;
+	(void)frame_len;
+	if (!ctx || !rpc)
+		return LIBP2P_ERR_NULL_PTR;
+	ctx->frames_seen++;
+
+	int ok = libp2p_gossipsub_RPC_has_control(rpc);
+	libp2p_gossipsub_ControlMessage *control = ok ? libp2p_gossipsub_RPC_get_control(rpc) : NULL;
+	ok = ok && control && libp2p_gossipsub_ControlMessage_count_idontwant(control) == 1;
+	libp2p_gossipsub_ControlIDontWant *idontwant =
+		ok ? libp2p_gossipsub_ControlMessage_get_at_idontwant(control, 0) : NULL;
+	ok = ok && idontwant && libp2p_gossipsub_ControlIDontWant_count_message_ids(idontwant) == 1;
+	ok = ok && libp2p_gossipsub_ControlIDontWant_get_size_at_message_ids(idontwant, 0) == ctx->msg_id_len;
+	ok = ok && memcmp(libp2p_gossipsub_ControlIDontWant_get_at_message_ids(idontwant, 0), ctx->msg_id,
+			  ctx->msg_id_len) == 0;
+
+	if (!ok)
+	{
+		ctx->ok = 0;
+		return LIBP2P_ERR_INTERNAL;
+	}
+	return LIBP2P_ERR_OK;
+}
+
 typedef struct
 {
 	int frames_seen;
@@ -410,6 +496,101 @@ static int test_decoder_handles_chunked_frames(void)
 	return ctx.ok && ctx.frames_seen == 2 && pos == total;
 }
 
+static int test_stream_decoder_handles_chunked_frames_without_frame_buffer(void)
+{
+	const char *topic = "stream/topic";
+	const uint8_t data[] = {0x51, 0x52, 0x53, 0x54};
+	const uint8_t seqno[] = {0x21, 0x22, 0x23};
+	const uint8_t from_bytes[] = {0x00, 0x03, 0xaa, 0xbb, 0xcc};
+	peer_id_t *from = NULL;
+	if (peer_id_new_from_multihash(from_bytes, sizeof(from_bytes), &from) != PEER_ID_OK)
+		return 0;
+
+	libp2p_gossipsub_message_t msg = {.topic = {.struct_size = sizeof(msg.topic), .topic = topic},
+					  .data = data,
+					  .data_len = sizeof(data),
+					  .from = from,
+					  .seqno = seqno,
+					  .seqno_len = sizeof(seqno),
+					  .raw_message = NULL,
+					  .raw_message_len = 0};
+
+	uint8_t *encoded = NULL;
+	size_t encoded_len = 0;
+	if (libp2p_gossipsub_rpc_encode_publish(&msg, &encoded, &encoded_len) != LIBP2P_ERR_OK)
+	{
+		peer_id_free(from);
+		return 0;
+	}
+
+	uint8_t header[10];
+	size_t header_len = 0;
+	if (unsigned_varint_encode(encoded_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
+	{
+		free(encoded);
+		peer_id_free(from);
+		return 0;
+	}
+
+	const size_t frame_len = header_len + encoded_len;
+	uint8_t *wire = (uint8_t *)malloc(frame_len * 2);
+	if (!wire)
+	{
+		free(encoded);
+		peer_id_free(from);
+		return 0;
+	}
+
+	for (size_t i = 0; i < 2; ++i)
+	{
+		size_t offset = i * frame_len;
+		memcpy(wire + offset, header, header_len);
+		memcpy(wire + offset + header_len, encoded, encoded_len);
+	}
+
+	libp2p_gossipsub_rpc_decoder_t decoder;
+	libp2p_gossipsub_rpc_decoder_init(&decoder);
+
+	decoder_test_ctx_t ctx = {.topic = topic,
+				  .data = data,
+				  .data_len = sizeof(data),
+				  .seqno = seqno,
+				  .seqno_len = sizeof(seqno),
+				  .from = from_bytes,
+				  .from_len = sizeof(from_bytes),
+				  .ok = 1,
+				  .frames_seen = 0};
+
+	size_t slices[] = {1, 1, 3, 2, 5, 8, frame_len * 2};
+	size_t pos = 0;
+	size_t total = frame_len * 2;
+	size_t slices_count = sizeof(slices) / sizeof(slices[0]);
+	for (size_t i = 0; i < slices_count && pos < total; ++i)
+	{
+		size_t take = slices[i];
+		if (take > total - pos)
+			take = total - pos;
+		if (take == 0)
+			break;
+		libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed_decoded(&decoder, wire + pos, take,
+									     decoder_capture_rpc_cb, &ctx);
+		if (rc != LIBP2P_ERR_OK)
+		{
+			ctx.ok = 0;
+			break;
+		}
+		pos += take;
+	}
+
+	int no_retained_frame = decoder.frame_buf == NULL && decoder.frame_cap == 0;
+	libp2p_gossipsub_rpc_decoder_free(&decoder);
+	free(encoded);
+	free(wire);
+	peer_id_free(from);
+
+	return ctx.ok && ctx.frames_seen == 2 && pos == total && no_retained_frame;
+}
+
 static int test_control_idontwant_roundtrip(void)
 {
 	libp2p_gossipsub_RPC *rpc = NULL;
@@ -419,6 +600,7 @@ static int test_control_idontwant_roundtrip(void)
 	int ok = 0;
 	uint8_t *scratch = NULL;
 	uint8_t *encoded = NULL;
+	uint8_t *wire = NULL;
 	size_t encoded_len = 0;
 	libp2p_gossipsub_RPC *decoded = NULL;
 
@@ -485,6 +667,28 @@ static int test_control_idontwant_roundtrip(void)
 	if (memcmp(libp2p_gossipsub_ControlIDontWant_get_at_message_ids(decoded_idw, 0), msg_id, sizeof(msg_id)) != 0)
 		goto cleanup;
 
+	uint8_t header[10];
+	size_t header_len = 0;
+	if (unsigned_varint_encode(encoded_len, header, sizeof(header), &header_len) != UNSIGNED_VARINT_OK)
+		goto cleanup;
+	wire = (uint8_t *)malloc(header_len + encoded_len);
+	if (!wire)
+		goto cleanup;
+	memcpy(wire, header, header_len);
+	memcpy(wire + header_len, encoded, encoded_len);
+
+	libp2p_gossipsub_rpc_decoder_t decoder;
+	libp2p_gossipsub_rpc_decoder_init(&decoder);
+	decoder_control_ctx_t stream_ctx = {.msg_id = msg_id, .msg_id_len = sizeof(msg_id), .ok = 1, .frames_seen = 0};
+	libp2p_err_t stream_rc =
+		libp2p_gossipsub_rpc_decoder_feed_decoded(&decoder, wire, header_len + encoded_len,
+							   decoder_control_rpc_cb, &stream_ctx);
+	int stream_ok = stream_rc == LIBP2P_ERR_OK && stream_ctx.ok && stream_ctx.frames_seen == 1 &&
+			decoder.frame_buf == NULL && decoder.frame_cap == 0;
+	libp2p_gossipsub_rpc_decoder_free(&decoder);
+	if (!stream_ok)
+		goto cleanup;
+
 	libp2p_gossipsub_ControlExtensions *decoded_ext = libp2p_gossipsub_ControlMessage_get_extensions(decoded_ctrl);
 	if (!decoded_ext)
 		goto cleanup;
@@ -501,6 +705,8 @@ cleanup:
 		libp2p_gossipsub_RPC_free(rpc);
 	if (encoded)
 		free(encoded);
+	if (wire)
+		free(wire);
 	if (scratch)
 		free(scratch);
 	return ok;
@@ -526,6 +732,11 @@ int main(void)
 
 	ok = test_decoder_handles_chunked_frames();
 	print_result("gossipsub_proto_decoder_chunked_frames", ok);
+	if (!ok)
+		failures++;
+
+	ok = test_stream_decoder_handles_chunked_frames_without_frame_buffer();
+	print_result("gossipsub_proto_stream_decoder_chunked_no_frame_buffer", ok);
 	if (!ok)
 		failures++;
 

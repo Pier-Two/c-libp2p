@@ -18,6 +18,10 @@ typedef libp2p_err_t (*libp2p_gossipsub_rpc_decoder_cb)(const uint8_t *frame,
                                                         size_t frame_len,
                                                         void *user_data);
 
+typedef libp2p_err_t (*libp2p_gossipsub_rpc_decoder_rpc_cb)(libp2p_gossipsub_RPC *rpc,
+                                                            size_t frame_len,
+                                                            void *user_data);
+
 typedef struct libp2p_gossipsub_rpc_decoder
 {
     uint8_t header[10];
@@ -28,6 +32,17 @@ typedef struct libp2p_gossipsub_rpc_decoder
     size_t frame_cap;
     size_t max_frame_len;
     uint8_t *frame_buf;
+    uint8_t field_header[10];
+    size_t field_header_used;
+    uint32_t field_number;
+    uint8_t field_wire_type;
+    size_t field_len;
+    size_t field_used;
+    size_t skip_remaining;
+    uint8_t *field_buf;
+    size_t field_cap;
+    int stream_state;
+    libp2p_gossipsub_RPC *stream_rpc;
 } libp2p_gossipsub_rpc_decoder_t;
 
 /**
@@ -77,6 +92,11 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
                                                size_t len,
                                                libp2p_gossipsub_rpc_decoder_cb cb,
                                                void *user_data);
+libp2p_err_t libp2p_gossipsub_rpc_decoder_feed_decoded(libp2p_gossipsub_rpc_decoder_t *dec,
+                                                       const uint8_t *data,
+                                                       size_t len,
+                                                       libp2p_gossipsub_rpc_decoder_rpc_cb cb,
+                                                       void *user_data);
 
 #ifdef __cplusplus
 }

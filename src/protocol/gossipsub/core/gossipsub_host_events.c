@@ -35,15 +35,15 @@ typedef struct gossipsub_decoder_cb_ctx
 	gossipsub_peer_entry_t *peer;
 } gossipsub_decoder_cb_ctx_t;
 
-extern libp2p_err_t gossipsub_handle_rpc_frame(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry,
-					       const uint8_t *frame, size_t frame_len);
+extern libp2p_err_t gossipsub_handle_decoded_rpc(libp2p_gossipsub_t *gs, gossipsub_peer_entry_t *entry,
+						 libp2p_gossipsub_RPC *rpc, const uint8_t *frame, size_t frame_len);
 
-static libp2p_err_t gossipsub_decoder_cb(const uint8_t *frame, size_t frame_len, void *user_data)
+static libp2p_err_t gossipsub_decoder_rpc_cb(libp2p_gossipsub_RPC *rpc, size_t frame_len, void *user_data)
 {
 	gossipsub_decoder_cb_ctx_t *ctx = (gossipsub_decoder_cb_ctx_t *)user_data;
 	if (!ctx || !ctx->gs || !ctx->peer)
 		return LIBP2P_ERR_NULL_PTR;
-	return gossipsub_handle_rpc_frame(ctx->gs, ctx->peer, frame, frame_len);
+	return gossipsub_handle_decoded_rpc(ctx->gs, ctx->peer, rpc, NULL, frame_len);
 }
 
 static const char *const k_gossipsub_protocols[] = {"/meshsub/1.1.0", "/meshsub/1.2.0", "/meshsub/1.0.0"};
@@ -202,7 +202,8 @@ void gossipsub_on_stream_data(struct libp2p_stream *s, const uint8_t *data, size
 			len, preview, len > 64 ? "..." : "");
 	}
 
-	libp2p_err_t rc = libp2p_gossipsub_rpc_decoder_feed(&entry->decoder, data, len, gossipsub_decoder_cb, &ctx);
+	libp2p_err_t rc =
+		libp2p_gossipsub_rpc_decoder_feed_decoded(&entry->decoder, data, len, gossipsub_decoder_rpc_cb, &ctx);
 	if (rc != LIBP2P_ERR_OK)
 	{
 		LP_LOGW(GOSSIPSUB_MODULE, "rpc decode error from peer (rc=%d)", rc);

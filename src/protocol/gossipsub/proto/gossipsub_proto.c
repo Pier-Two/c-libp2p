@@ -23,6 +23,15 @@
 /* No fixed size cap in the gossipsub specs; leave unlimited by default. */
 #define GOSSIPSUB_RPC_DEFAULT_MAX SIZE_MAX
 
+enum
+{
+	GOSSIPSUB_STREAM_KEY = 0,
+	GOSSIPSUB_STREAM_LEN,
+	GOSSIPSUB_STREAM_VALUE,
+	GOSSIPSUB_STREAM_SKIP_VARINT,
+	GOSSIPSUB_STREAM_SKIP_BYTES
+};
+
 static inline int varint_is_minimal(uint64_t v, size_t len)
 {
 	if (len == 0 || len > 10)
@@ -402,19 +411,37 @@ void libp2p_gossipsub_rpc_decoder_reset(libp2p_gossipsub_rpc_decoder_t *dec)
 	dec->have_length = 0;
 	dec->frame_len = 0;
 	dec->frame_used = 0;
+	dec->field_header_used = 0;
+	dec->field_number = 0;
+	dec->field_wire_type = 0;
+	dec->field_len = 0;
+	dec->field_used = 0;
+	dec->skip_remaining = 0;
+	dec->stream_state = GOSSIPSUB_STREAM_KEY;
+	if (dec->field_buf)
+	{
+		free(dec->field_buf);
+		dec->field_buf = NULL;
+	}
+	dec->field_cap = 0;
+	if (dec->stream_rpc)
+	{
+		libp2p_gossipsub_RPC_free(dec->stream_rpc);
+		dec->stream_rpc = NULL;
+	}
 }
 
 void libp2p_gossipsub_rpc_decoder_free(libp2p_gossipsub_rpc_decoder_t *dec)
 {
 	if (!dec)
 		return;
+	libp2p_gossipsub_rpc_decoder_reset(dec);
 	if (dec->frame_buf)
 	{
 		free(dec->frame_buf);
 		dec->frame_buf = NULL;
 	}
 	dec->frame_cap = 0;
-	libp2p_gossipsub_rpc_decoder_reset(dec);
 }
 
 void libp2p_gossipsub_rpc_decoder_set_max_frame(libp2p_gossipsub_rpc_decoder_t *dec, size_t max_frame_len)
@@ -542,6 +569,450 @@ libp2p_err_t libp2p_gossipsub_rpc_decoder_feed(libp2p_gossipsub_rpc_decoder_t *d
 		if (dec->frame_used == dec->frame_len)
 		{
 			libp2p_err_t emit_rc = gossipsub_decoder_emit(dec, cb, user_data);
+			if (emit_rc != LIBP2P_ERR_OK)
+				return emit_rc;
+		}
+	}
+
+	return LIBP2P_ERR_OK;
+}
+
+static libp2p_err_t gossipsub_decoder_prepare_stream_frame(libp2p_gossipsub_rpc_decoder_t *dec)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+	if (dec->stream_rpc)
+		libp2p_gossipsub_RPC_free(dec->stream_rpc);
+	dec->stream_rpc = NULL;
+	if (libp2p_gossipsub_RPC_new(&dec->stream_rpc) != NOISE_ERROR_NONE || !dec->stream_rpc)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	dec->field_header_used = 0;
+	dec->field_number = 0;
+	dec->field_wire_type = 0;
+	dec->field_len = 0;
+	dec->field_used = 0;
+	dec->skip_remaining = 0;
+	dec->stream_state = GOSSIPSUB_STREAM_KEY;
+	return LIBP2P_ERR_OK;
+}
+
+static void gossipsub_decoder_release_field_buf(libp2p_gossipsub_rpc_decoder_t *dec)
+{
+	if (!dec)
+		return;
+	if (dec->field_buf)
+	{
+		free(dec->field_buf);
+		dec->field_buf = NULL;
+	}
+	dec->field_cap = 0;
+	dec->field_len = 0;
+	dec->field_used = 0;
+	dec->field_number = 0;
+	dec->field_wire_type = 0;
+	dec->field_header_used = 0;
+}
+
+static libp2p_err_t gossipsub_decoder_finish_noise_input(NoiseProtobuf *pb, void *obj,
+							 void (*free_fn)(void *))
+{
+	int noise_rc = noise_protobuf_finish_input(pb);
+	if (noise_rc == NOISE_ERROR_NONE)
+		return LIBP2P_ERR_OK;
+	if (obj && free_fn)
+		free_fn(obj);
+	return convert_noise_err(noise_rc);
+}
+
+static void gossipsub_decoder_free_subopt(void *obj)
+{
+	libp2p_gossipsub_RPC_SubOpts_free((libp2p_gossipsub_RPC_SubOpts *)obj);
+}
+
+static void gossipsub_decoder_free_message(void *obj)
+{
+	libp2p_gossipsub_Message_free((libp2p_gossipsub_Message *)obj);
+}
+
+static void gossipsub_decoder_free_control(void *obj)
+{
+	libp2p_gossipsub_ControlMessage_free((libp2p_gossipsub_ControlMessage *)obj);
+}
+
+static libp2p_err_t gossipsub_decoder_parse_stream_field(libp2p_gossipsub_rpc_decoder_t *dec)
+{
+	if (!dec || !dec->stream_rpc)
+		return LIBP2P_ERR_NULL_PTR;
+	if (dec->field_number != 1 && dec->field_number != 2 && dec->field_number != 3)
+		return LIBP2P_ERR_OK;
+
+	uint8_t empty = 0;
+	uint8_t *input = dec->field_len > 0 ? dec->field_buf : &empty;
+	if (dec->field_len > 0 && !input)
+		return LIBP2P_ERR_NULL_PTR;
+
+	NoiseProtobuf pb;
+	int noise_rc = noise_protobuf_prepare_input(&pb, input, dec->field_len);
+	if (noise_rc != NOISE_ERROR_NONE)
+		return convert_noise_err(noise_rc);
+
+	if (dec->field_number == 1)
+	{
+		libp2p_gossipsub_RPC_SubOpts *sub = NULL;
+		noise_rc = libp2p_gossipsub_RPC_SubOpts_read(&pb, 0, &sub);
+		if (noise_rc != NOISE_ERROR_NONE || !sub)
+		{
+			noise_protobuf_finish_input(&pb);
+			if (sub)
+				libp2p_gossipsub_RPC_SubOpts_free(sub);
+			return convert_noise_err(noise_rc);
+		}
+		libp2p_err_t finish_rc = gossipsub_decoder_finish_noise_input(&pb, sub, gossipsub_decoder_free_subopt);
+		if (finish_rc != LIBP2P_ERR_OK)
+			return finish_rc;
+		noise_rc = libp2p_gossipsub_RPC_insert_subscriptions(
+			dec->stream_rpc, libp2p_gossipsub_RPC_count_subscriptions(dec->stream_rpc), sub);
+		if (noise_rc != NOISE_ERROR_NONE)
+		{
+			libp2p_gossipsub_RPC_SubOpts_free(sub);
+			return convert_noise_err(noise_rc);
+		}
+		return LIBP2P_ERR_OK;
+	}
+
+	if (dec->field_number == 2)
+	{
+		libp2p_gossipsub_Message *msg = NULL;
+		noise_rc = libp2p_gossipsub_Message_read(&pb, 0, &msg);
+		if (noise_rc != NOISE_ERROR_NONE || !msg)
+		{
+			noise_protobuf_finish_input(&pb);
+			if (msg)
+				libp2p_gossipsub_Message_free(msg);
+			return convert_noise_err(noise_rc);
+		}
+		libp2p_err_t finish_rc = gossipsub_decoder_finish_noise_input(&pb, msg, gossipsub_decoder_free_message);
+		if (finish_rc != LIBP2P_ERR_OK)
+			return finish_rc;
+		noise_rc = libp2p_gossipsub_RPC_insert_publish(
+			dec->stream_rpc, libp2p_gossipsub_RPC_count_publish(dec->stream_rpc), msg);
+		if (noise_rc != NOISE_ERROR_NONE)
+		{
+			libp2p_gossipsub_Message_free(msg);
+			return convert_noise_err(noise_rc);
+		}
+		return LIBP2P_ERR_OK;
+	}
+
+	libp2p_gossipsub_ControlMessage *control = NULL;
+	noise_rc = libp2p_gossipsub_ControlMessage_read(&pb, 0, &control);
+	if (noise_rc != NOISE_ERROR_NONE || !control)
+	{
+		noise_protobuf_finish_input(&pb);
+		if (control)
+			libp2p_gossipsub_ControlMessage_free(control);
+		return convert_noise_err(noise_rc);
+	}
+	libp2p_err_t finish_rc = gossipsub_decoder_finish_noise_input(&pb, control, gossipsub_decoder_free_control);
+	if (finish_rc != LIBP2P_ERR_OK)
+		return finish_rc;
+	noise_rc = libp2p_gossipsub_RPC_take_control(dec->stream_rpc, control);
+	if (noise_rc != NOISE_ERROR_NONE)
+	{
+		libp2p_gossipsub_ControlMessage_free(control);
+		return convert_noise_err(noise_rc);
+	}
+	return LIBP2P_ERR_OK;
+}
+
+static libp2p_err_t gossipsub_decoder_emit_rpc(libp2p_gossipsub_rpc_decoder_t *dec,
+					       libp2p_gossipsub_rpc_decoder_rpc_cb cb, void *user_data)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+
+	libp2p_gossipsub_RPC *rpc = dec->stream_rpc;
+	dec->stream_rpc = NULL;
+	size_t frame_len = dec->frame_len;
+	libp2p_err_t rc = LIBP2P_ERR_OK;
+	if (cb)
+		rc = cb(rpc, frame_len, user_data);
+	if (rpc)
+		libp2p_gossipsub_RPC_free(rpc);
+	libp2p_gossipsub_rpc_decoder_reset(dec);
+	return rc;
+}
+
+static libp2p_err_t gossipsub_decoder_complete_stream_frame(libp2p_gossipsub_rpc_decoder_t *dec,
+							    libp2p_gossipsub_rpc_decoder_rpc_cb cb,
+							    void *user_data)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+	if (dec->stream_state != GOSSIPSUB_STREAM_KEY || dec->field_header_used != 0 || dec->skip_remaining != 0 ||
+	    dec->field_buf != NULL)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	return gossipsub_decoder_emit_rpc(dec, cb, user_data);
+}
+
+static libp2p_err_t gossipsub_decoder_stream_finish_field(libp2p_gossipsub_rpc_decoder_t *dec)
+{
+	libp2p_err_t rc = gossipsub_decoder_parse_stream_field(dec);
+	gossipsub_decoder_release_field_buf(dec);
+	if (rc != LIBP2P_ERR_OK)
+		return gossipsub_decoder_fail(dec, rc);
+	dec->stream_state = GOSSIPSUB_STREAM_KEY;
+	return LIBP2P_ERR_OK;
+}
+
+static libp2p_err_t gossipsub_decoder_stream_set_skip(libp2p_gossipsub_rpc_decoder_t *dec, size_t bytes)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+	if (bytes > dec->frame_len - dec->frame_used)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	dec->skip_remaining = bytes;
+	dec->stream_state = bytes > 0 ? GOSSIPSUB_STREAM_SKIP_BYTES : GOSSIPSUB_STREAM_KEY;
+	return LIBP2P_ERR_OK;
+}
+
+static libp2p_err_t gossipsub_decoder_stream_key_complete(libp2p_gossipsub_rpc_decoder_t *dec, uint64_t key,
+							  size_t consumed)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+	if (!varint_is_minimal(key, consumed))
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+
+	uint64_t field_number = key >> 3;
+	uint8_t wire_type = (uint8_t)(key & 0x7u);
+	if (field_number == 0 || field_number > UINT32_MAX)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+
+	dec->field_header_used = 0;
+	dec->field_number = (uint32_t)field_number;
+	dec->field_wire_type = wire_type;
+
+	if (field_number == 1 || field_number == 2 || field_number == 3)
+	{
+		if (wire_type != 2)
+			return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+		dec->stream_state = GOSSIPSUB_STREAM_LEN;
+		return LIBP2P_ERR_OK;
+	}
+
+	switch (wire_type)
+	{
+	case 0:
+		dec->stream_state = GOSSIPSUB_STREAM_SKIP_VARINT;
+		return LIBP2P_ERR_OK;
+	case 1:
+		return gossipsub_decoder_stream_set_skip(dec, 8);
+	case 2:
+		dec->stream_state = GOSSIPSUB_STREAM_LEN;
+		return LIBP2P_ERR_OK;
+	case 5:
+		return gossipsub_decoder_stream_set_skip(dec, 4);
+	default:
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	}
+}
+
+static libp2p_err_t gossipsub_decoder_stream_len_complete(libp2p_gossipsub_rpc_decoder_t *dec, uint64_t length,
+							  size_t consumed)
+{
+	if (!dec)
+		return LIBP2P_ERR_NULL_PTR;
+	if (!varint_is_minimal(length, consumed))
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	if (length > SIZE_MAX || length > dec->frame_len - dec->frame_used)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_MSG_TOO_LARGE);
+
+	dec->field_header_used = 0;
+	dec->field_len = (size_t)length;
+	dec->field_used = 0;
+
+	if (dec->field_number != 1 && dec->field_number != 2 && dec->field_number != 3)
+		return gossipsub_decoder_stream_set_skip(dec, dec->field_len);
+
+	if (dec->field_len == 0)
+		return gossipsub_decoder_stream_finish_field(dec);
+
+	dec->field_buf = (uint8_t *)malloc(dec->field_len);
+	if (!dec->field_buf)
+		return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+	dec->field_cap = dec->field_len;
+	dec->stream_state = GOSSIPSUB_STREAM_VALUE;
+	return LIBP2P_ERR_OK;
+}
+
+libp2p_err_t libp2p_gossipsub_rpc_decoder_feed_decoded(libp2p_gossipsub_rpc_decoder_t *dec, const uint8_t *data,
+						       size_t len, libp2p_gossipsub_rpc_decoder_rpc_cb cb,
+						       void *user_data)
+{
+	if (!dec || (len > 0 && !data))
+		return LIBP2P_ERR_NULL_PTR;
+
+	size_t idx = 0;
+	while (idx < len)
+	{
+		if (!dec->have_length)
+		{
+			if (dec->header_used >= sizeof(dec->header))
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+
+			dec->header[dec->header_used++] = data[idx++];
+			uint64_t frame_len64 = 0;
+			size_t consumed = 0;
+			unsigned_varint_err_t var_rc =
+				unsigned_varint_decode(dec->header, dec->header_used, &frame_len64, &consumed);
+			if (var_rc == UNSIGNED_VARINT_ERR_TOO_LONG)
+			{
+				if (dec->header_used < sizeof(dec->header))
+					continue;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			}
+			if (var_rc != UNSIGNED_VARINT_OK)
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			if (!varint_is_minimal(frame_len64, consumed))
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			if (frame_len64 > dec->max_frame_len || frame_len64 > SIZE_MAX)
+			{
+				LP_LOGW(GOSSIPSUB_PROTO_MODULE,
+					"stream decoder frame too large (len=%" PRIu64 " max=%zu header_used=%zu)",
+					frame_len64, dec->max_frame_len, dec->header_used);
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_MSG_TOO_LARGE);
+			}
+
+			dec->frame_len = (size_t)frame_len64;
+			dec->frame_used = 0;
+			dec->have_length = 1;
+			dec->header_used = 0;
+
+			libp2p_err_t prep_rc = gossipsub_decoder_prepare_stream_frame(dec);
+			if (prep_rc != LIBP2P_ERR_OK)
+				return prep_rc;
+			if (dec->frame_len == 0)
+			{
+				libp2p_err_t emit_rc = gossipsub_decoder_emit_rpc(dec, cb, user_data);
+				if (emit_rc != LIBP2P_ERR_OK)
+					return emit_rc;
+			}
+			continue;
+		}
+
+		if (dec->frame_used == dec->frame_len)
+		{
+			libp2p_err_t emit_rc = gossipsub_decoder_complete_stream_frame(dec, cb, user_data);
+			if (emit_rc != LIBP2P_ERR_OK)
+				return emit_rc;
+			continue;
+		}
+
+		switch (dec->stream_state)
+		{
+		case GOSSIPSUB_STREAM_KEY: {
+			if (dec->field_header_used >= sizeof(dec->field_header))
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			dec->field_header[dec->field_header_used++] = data[idx++];
+			dec->frame_used++;
+			uint64_t key = 0;
+			size_t consumed = 0;
+			unsigned_varint_err_t var_rc =
+				unsigned_varint_decode(dec->field_header, dec->field_header_used, &key, &consumed);
+			if (var_rc == UNSIGNED_VARINT_ERR_TOO_LONG)
+			{
+				if (dec->field_header_used < sizeof(dec->field_header))
+					continue;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			}
+			if (var_rc != UNSIGNED_VARINT_OK)
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			libp2p_err_t key_rc = gossipsub_decoder_stream_key_complete(dec, key, consumed);
+			if (key_rc != LIBP2P_ERR_OK)
+				return key_rc;
+			break;
+		}
+		case GOSSIPSUB_STREAM_LEN: {
+			if (dec->field_header_used >= sizeof(dec->field_header))
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			dec->field_header[dec->field_header_used++] = data[idx++];
+			dec->frame_used++;
+			uint64_t length = 0;
+			size_t consumed = 0;
+			unsigned_varint_err_t var_rc =
+				unsigned_varint_decode(dec->field_header, dec->field_header_used, &length, &consumed);
+			if (var_rc == UNSIGNED_VARINT_ERR_TOO_LONG)
+			{
+				if (dec->field_header_used < sizeof(dec->field_header))
+					continue;
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			}
+			if (var_rc != UNSIGNED_VARINT_OK)
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			libp2p_err_t len_rc = gossipsub_decoder_stream_len_complete(dec, length, consumed);
+			if (len_rc != LIBP2P_ERR_OK)
+				return len_rc;
+			break;
+		}
+		case GOSSIPSUB_STREAM_VALUE: {
+			size_t want = dec->field_len - dec->field_used;
+			size_t frame_left = dec->frame_len - dec->frame_used;
+			size_t chunk = len - idx;
+			if (chunk > want)
+				chunk = want;
+			if (chunk > frame_left)
+				chunk = frame_left;
+			if (chunk == 0)
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			memcpy(dec->field_buf + dec->field_used, data + idx, chunk);
+			dec->field_used += chunk;
+			dec->frame_used += chunk;
+			idx += chunk;
+			if (dec->field_used == dec->field_len)
+			{
+				libp2p_err_t field_rc = gossipsub_decoder_stream_finish_field(dec);
+				if (field_rc != LIBP2P_ERR_OK)
+					return field_rc;
+			}
+			break;
+		}
+		case GOSSIPSUB_STREAM_SKIP_VARINT: {
+			uint8_t byte = data[idx++];
+			dec->frame_used++;
+			dec->field_header_used++;
+			if (dec->field_header_used > sizeof(dec->field_header))
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			if ((byte & 0x80u) == 0)
+			{
+				dec->field_header_used = 0;
+				dec->stream_state = GOSSIPSUB_STREAM_KEY;
+			}
+			break;
+		}
+		case GOSSIPSUB_STREAM_SKIP_BYTES: {
+			size_t chunk = len - idx;
+			size_t frame_left = dec->frame_len - dec->frame_used;
+			if (chunk > dec->skip_remaining)
+				chunk = dec->skip_remaining;
+			if (chunk > frame_left)
+				chunk = frame_left;
+			if (chunk == 0)
+				return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+			idx += chunk;
+			dec->frame_used += chunk;
+			dec->skip_remaining -= chunk;
+			if (dec->skip_remaining == 0)
+				dec->stream_state = GOSSIPSUB_STREAM_KEY;
+			break;
+		}
+		default:
+			return gossipsub_decoder_fail(dec, LIBP2P_ERR_INTERNAL);
+		}
+
+		if (dec->have_length && dec->frame_used == dec->frame_len)
+		{
+			libp2p_err_t emit_rc = gossipsub_decoder_complete_stream_frame(dec, cb, user_data);
 			if (emit_rc != LIBP2P_ERR_OK)
 				return emit_rc;
 		}
