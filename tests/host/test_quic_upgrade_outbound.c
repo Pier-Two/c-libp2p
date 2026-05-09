@@ -234,7 +234,6 @@ int main(void)
 	if (uc->remote_peer)
 	{
 		peer_id_free(uc->remote_peer);
-		free(uc->remote_peer);
 		uc->remote_peer = NULL;
 	}
 	libp2p_conn_free(uc->conn);

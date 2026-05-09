@@ -200,7 +200,9 @@ static int verify_signed_key(uint64_t key_type, const uint8_t *key_data, size_t 
 			return LIBP2P_ERR_INTERNAL;
 		}
 
-		int ver_ok = secp256k1_ecdsa_verify(ctx, &sig_obj, hash.bytes, &pk);
+		secp256k1_ecdsa_signature normalized;
+		secp256k1_ecdsa_signature_normalize(ctx, &normalized, &sig_obj);
+		int ver_ok = secp256k1_ecdsa_verify(ctx, &normalized, hash.bytes, &pk);
 		secp256k1_context_destroy(ctx);
 		if (!ver_ok)
 			LP_LOGW("quic-tls", "verify_signed_key secp256k1 signature verification failed");

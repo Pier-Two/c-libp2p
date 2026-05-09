@@ -387,7 +387,9 @@ static int verify_handshake_payload(NoiseHandshakeState *hs, const uint8_t *payl
 			return -1;
 		}
 
-		int verify_ok = secp256k1_ecdsa_verify(sctx, &s, hash.bytes, &pk);
+		secp256k1_ecdsa_signature normalized;
+		secp256k1_ecdsa_signature_normalize(sctx, &normalized, &s);
+		int verify_ok = secp256k1_ecdsa_verify(sctx, &normalized, hash.bytes, &pk);
 		secp256k1_context_destroy(sctx);
 
 		if (!verify_ok)

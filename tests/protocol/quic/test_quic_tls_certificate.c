@@ -4,7 +4,13 @@
 #include "peer_id/peer_id.h"
 #include "peer_id/peer_id_proto.h"
 
+#include "../../../external/secp256k1/include/secp256k1.h"
+
 #include <inttypes.h>
+#include <openssl/asn1t.h>
+#include <openssl/objects.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +18,25 @@
 #define TEST_LABEL_WIDTH 70
 
 static int failures = 0;
+
+typedef struct test_tls_signed_key
+{
+	ASN1_OCTET_STRING *public_key;
+	ASN1_OCTET_STRING *signature;
+} TEST_TLS_SIGNED_KEY;
+
+ASN1_SEQUENCE(TEST_TLS_SIGNED_KEY) =
+	{
+		ASN1_SIMPLE(TEST_TLS_SIGNED_KEY, public_key, ASN1_OCTET_STRING),
+		ASN1_SIMPLE(TEST_TLS_SIGNED_KEY, signature, ASN1_OCTET_STRING),
+} ASN1_SEQUENCE_END(TEST_TLS_SIGNED_KEY)
+
+		IMPLEMENT_ASN1_FUNCTIONS(TEST_TLS_SIGNED_KEY)
+
+static const uint8_t SECP256K1_ORDER[32] = {
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+	0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+};
 
 static void print_result(const char *label, int ok, const char *details)
 {
@@ -85,6 +110,168 @@ static void secure_zero(void *ptr, size_t len)
 	volatile unsigned char *p = (volatile unsigned char *)ptr;
 	while (len--)
 		*p++ = 0;
+}
+
+static void secp256k1_scalar_sub_order(uint8_t out[32], const uint8_t in[32])
+{
+	unsigned int borrow = 0;
+	for (int i = 31; i >= 0; --i)
+	{
+		unsigned int rhs = (unsigned int)in[i] + borrow;
+		if ((unsigned int)SECP256K1_ORDER[i] < rhs)
+		{
+			out[i] = (uint8_t)((unsigned int)SECP256K1_ORDER[i] + 256u - rhs);
+			borrow = 1;
+		}
+		else
+		{
+			out[i] = (uint8_t)((unsigned int)SECP256K1_ORDER[i] - rhs);
+			borrow = 0;
+		}
+	}
+}
+
+static int make_high_s_der_signature(const uint8_t *der, size_t der_len, uint8_t **out_der, size_t *out_der_len)
+{
+	if (!der || !out_der || !out_der_len)
+		return -1;
+	*out_der = NULL;
+	*out_der_len = 0;
+
+	secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
+	if (!ctx)
+		return -1;
+
+	secp256k1_ecdsa_signature sig;
+	uint8_t compact[64];
+	uint8_t high_s[32];
+	secp256k1_ecdsa_signature high_sig;
+	uint8_t high_der[72];
+	size_t high_der_len = sizeof(high_der);
+
+	int ok = secp256k1_ecdsa_signature_parse_der(ctx, &sig, der, der_len) &&
+		 secp256k1_ecdsa_signature_serialize_compact(ctx, compact, &sig);
+	if (ok)
+	{
+		secp256k1_scalar_sub_order(high_s, compact + 32);
+		memcpy(compact + 32, high_s, sizeof(high_s));
+		ok = secp256k1_ecdsa_signature_parse_compact(ctx, &high_sig, compact) &&
+		     secp256k1_ecdsa_signature_serialize_der(ctx, high_der, &high_der_len, &high_sig);
+	}
+	secp256k1_context_destroy(ctx);
+
+	if (!ok)
+		return -1;
+	uint8_t *copy = (uint8_t *)malloc(high_der_len);
+	if (!copy)
+		return -1;
+	memcpy(copy, high_der, high_der_len);
+	*out_der = copy;
+	*out_der_len = high_der_len;
+	return 0;
+}
+
+static int rewrite_cert_with_high_s_extension(const libp2p_quic_tls_certificate_t *cert, uint8_t **out_der, size_t *out_len)
+{
+	if (!cert || !out_der || !out_len)
+		return -1;
+	*out_der = NULL;
+	*out_len = 0;
+
+	const unsigned char *cert_p = cert->cert_der;
+	const unsigned char *key_p = cert->key_der;
+	X509 *x509 = d2i_X509(NULL, &cert_p, (long)cert->cert_len);
+	EVP_PKEY *key = d2i_AutoPrivateKey(NULL, &key_p, (long)cert->key_len);
+	ASN1_OBJECT *oid = OBJ_txt2obj("1.3.6.1.4.1.53594.1.1", 1);
+	TEST_TLS_SIGNED_KEY *signed_key = NULL;
+	X509_EXTENSION *old_ext = NULL;
+	X509_EXTENSION *new_ext = NULL;
+	ASN1_OCTET_STRING *new_ext_value = NULL;
+	unsigned char *signed_key_der = NULL;
+	uint8_t *high_sig = NULL;
+	size_t high_sig_len = 0;
+	int rc = -1;
+
+	if (!x509 || !key || !oid)
+		goto cleanup;
+
+	int loc = X509_get_ext_by_OBJ(x509, oid, -1);
+	if (loc < 0)
+		goto cleanup;
+	X509_EXTENSION *ext = X509_get_ext(x509, loc);
+	ASN1_OCTET_STRING *ext_data = X509_EXTENSION_get_data(ext);
+	const unsigned char *ext_p = ASN1_STRING_get0_data(ext_data);
+	long ext_len = ASN1_STRING_length(ext_data);
+	signed_key = d2i_TEST_TLS_SIGNED_KEY(NULL, &ext_p, ext_len);
+	if (!signed_key || ext_p != ASN1_STRING_get0_data(ext_data) + ext_len)
+		goto cleanup;
+
+	const uint8_t *sig = ASN1_STRING_get0_data(signed_key->signature);
+	size_t sig_len = (size_t)ASN1_STRING_length(signed_key->signature);
+	if (make_high_s_der_signature(sig, sig_len, &high_sig, &high_sig_len) != 0)
+		goto cleanup;
+	if (!ASN1_OCTET_STRING_set(signed_key->signature, high_sig, (int)high_sig_len))
+		goto cleanup;
+
+	int signed_key_len = i2d_TEST_TLS_SIGNED_KEY(signed_key, NULL);
+	if (signed_key_len <= 0)
+		goto cleanup;
+	signed_key_der = OPENSSL_malloc((size_t)signed_key_len);
+	if (!signed_key_der)
+		goto cleanup;
+	unsigned char *signed_key_p = signed_key_der;
+	if (i2d_TEST_TLS_SIGNED_KEY(signed_key, &signed_key_p) != signed_key_len)
+		goto cleanup;
+
+	new_ext_value = ASN1_OCTET_STRING_new();
+	if (!new_ext_value || !ASN1_OCTET_STRING_set(new_ext_value, signed_key_der, signed_key_len))
+		goto cleanup;
+	new_ext = X509_EXTENSION_create_by_OBJ(NULL, oid, 1, new_ext_value);
+	if (!new_ext)
+		goto cleanup;
+
+	old_ext = X509_delete_ext(x509, loc);
+	if (!old_ext || X509_add_ext(x509, new_ext, loc) != 1)
+		goto cleanup;
+	if (X509_sign(x509, key, EVP_sha256()) <= 0)
+		goto cleanup;
+
+	int der_len = i2d_X509(x509, NULL);
+	if (der_len <= 0)
+		goto cleanup;
+	uint8_t *der = (uint8_t *)malloc((size_t)der_len);
+	if (!der)
+		goto cleanup;
+	unsigned char *der_p = der;
+	if (i2d_X509(x509, &der_p) != der_len)
+	{
+		free(der);
+		goto cleanup;
+	}
+	*out_der = der;
+	*out_len = (size_t)der_len;
+	rc = 0;
+
+cleanup:
+	if (signed_key)
+		TEST_TLS_SIGNED_KEY_free(signed_key);
+	if (old_ext)
+		X509_EXTENSION_free(old_ext);
+	if (new_ext)
+		X509_EXTENSION_free(new_ext);
+	if (new_ext_value)
+		ASN1_OCTET_STRING_free(new_ext_value);
+	if (signed_key_der)
+		OPENSSL_free(signed_key_der);
+	if (high_sig)
+		free(high_sig);
+	if (oid)
+		ASN1_OBJECT_free(oid);
+	if (key)
+		EVP_PKEY_free(key);
+	if (x509)
+		X509_free(x509);
+	return rc;
 }
 
 static int run_case(const char *name, const char *priv_hex, uint64_t expected_type)
@@ -213,14 +400,114 @@ static int run_case(const char *name, const char *priv_hex, uint64_t expected_ty
 	return 0;
 }
 
+static int run_secp256k1_high_s_case(const char *priv_hex)
+{
+	const char *name = "secp256k1 high-s";
+	char label[128];
+	uint8_t *priv_pb = NULL;
+	size_t priv_pb_len = 0;
+	uint8_t *id_key = NULL;
+	uint8_t *high_s_cert = NULL;
+	size_t high_s_cert_len = 0;
+	libp2p_quic_tls_certificate_t cert = {0};
+	libp2p_quic_tls_identity_t ident = {0};
+	int rc = -1;
+
+	snprintf(label, sizeof(label), "%s: decode private key", name);
+	if (hex_to_bytes(priv_hex, &priv_pb, &priv_pb_len) != 0)
+	{
+		print_result(label, 0, "hex decode failed");
+		failures++;
+		return -1;
+	}
+	print_result(label, 1, "");
+
+	uint64_t key_type = 0;
+	const uint8_t *key_data = NULL;
+	size_t key_data_len = 0;
+	if (parse_private_key_proto(priv_pb, priv_pb_len, &key_type, &key_data, &key_data_len) < 0 ||
+	    key_type != PEER_ID_KEY_SECP256K1)
+	{
+		print_result("secp256k1 high-s: parse protobuf", 0, "parse failure or key type mismatch");
+		failures++;
+		goto cleanup;
+	}
+	print_result("secp256k1 high-s: parse protobuf", 1, "");
+
+	id_key = (uint8_t *)malloc(key_data_len);
+	if (!id_key)
+	{
+		print_result("secp256k1 high-s: alloc identity key", 0, "malloc failed");
+		failures++;
+		goto cleanup;
+	}
+	memcpy(id_key, key_data, key_data_len);
+
+	libp2p_quic_tls_cert_options_t opts = libp2p_quic_tls_cert_options_default();
+	opts.identity_key_type = key_type;
+	opts.identity_key = id_key;
+	opts.identity_key_len = key_data_len;
+	opts.not_after_lifetime = 600;
+
+	if (libp2p_quic_tls_generate_certificate(&opts, &cert) != LIBP2P_ERR_OK)
+	{
+		print_result("secp256k1 high-s: certificate generation", 0, "certificate generation failed");
+		failures++;
+		goto cleanup;
+	}
+	print_result("secp256k1 high-s: certificate generation", 1, "");
+
+	if (rewrite_cert_with_high_s_extension(&cert, &high_s_cert, &high_s_cert_len) != 0)
+	{
+		print_result("secp256k1 high-s: rewrite certificate", 0, "high-s rewrite failed");
+		failures++;
+		goto cleanup;
+	}
+	print_result("secp256k1 high-s: rewrite certificate", 1, "");
+
+	if (libp2p_quic_tls_identity_from_certificate(high_s_cert, high_s_cert_len, &ident) != LIBP2P_ERR_OK)
+	{
+		print_result("secp256k1 high-s: identity parse", 0, "high-s signature rejected");
+		failures++;
+		goto cleanup;
+	}
+	print_result("secp256k1 high-s: identity parse", 1, "");
+
+	int ok = ident.key_type == PEER_ID_KEY_SECP256K1;
+	print_result("secp256k1 high-s: key type match", ok, ok ? "" : "key type mismatch");
+	if (!ok)
+	{
+		failures++;
+		goto cleanup;
+	}
+
+	rc = 0;
+
+cleanup:
+	if (ident.peer)
+		libp2p_quic_tls_identity_clear(&ident);
+	if (high_s_cert)
+		free(high_s_cert);
+	libp2p_quic_tls_certificate_clear(&cert);
+	if (id_key)
+	{
+		secure_zero(id_key, key_data_len);
+		free(id_key);
+	}
+	if (priv_pb)
+		free(priv_pb);
+	return rc;
+}
+
 int main(void)
 {
+	const char *secp256k1_priv_hex = "0802122053DADF1D5A164D6B4ACDB15E24AA4C5B1D3461BDBD42ABEDB0A4404D56CED8FB";
 	run_case("ED25519",
 		 "080112407e0830617c4a7de83925dfb2694556b12936c477a0e1feb2e148ec9da60fee7d1ed1e8fae2c4a144b8be8fd4b47bf"
 		 "3d3b34b871c3cacf6010f0e42d474fce27e",
 		 PEER_ID_KEY_ED25519);
-	run_case("secp256k1", "0802122053DADF1D5A164D6B4ACDB15E24AA4C5B1D3461BDBD42ABEDB0A4404D56CED8FB",
-		 PEER_ID_KEY_SECP256K1);
+	run_case("secp256k1", secp256k1_priv_hex, PEER_ID_KEY_SECP256K1);
+	run_secp256k1_high_s_case(secp256k1_priv_hex);
 	run_case("ECDSA",
 		 "08031279307702010104203E5B1FE9712E6C314942A750BD67485DE3C1EFE85B1BFB520AE8F9AE3DFA4A4CA00A06082A8648C"
 		 "E3D030107A14403420004DE3D300FA36AE0E8F5D530899D83ABAB44ABF3161F162A4BC901D8E6ECDA020E8B6D5F8DA30525E7"
