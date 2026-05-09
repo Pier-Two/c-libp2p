@@ -48,7 +48,7 @@ static libp2p_err_t gossipsub_decoder_rpc_cb(libp2p_gossipsub_RPC *rpc, libp2p_g
 	return gossipsub_handle_decoded_rpc(ctx->gs, ctx->peer, rpc, control_rpc, NULL, frame_len);
 }
 
-static const char *const k_gossipsub_protocols[] = {"/meshsub/1.1.0", "/meshsub/1.2.0", "/meshsub/1.0.0"};
+static const char *const k_gossipsub_protocols[] = {"/meshsub/1.2.0", "/meshsub/1.1.0", "/meshsub/1.0.0"};
 
 static void gossipsub_write_peer_string(const peer_id_t *peer, char *buffer, size_t length)
 {

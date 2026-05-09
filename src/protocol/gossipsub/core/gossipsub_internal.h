@@ -12,7 +12,7 @@
 #include "libp2p/stream.h"
 #include "peer_id/peer_id.h"
 
-#define GOSSIPSUB_PRIMARY_PROTOCOL "/meshsub/1.1.0"
+#define GOSSIPSUB_PRIMARY_PROTOCOL "/meshsub/1.2.0"
 
 #include "../proto/gossipsub_proto.h"
 #include "gossipsub_cache.h"
